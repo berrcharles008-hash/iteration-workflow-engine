@@ -9,6 +9,10 @@ review-gateway.py — 外部审查模型路由网关
   4. 成功 → 返回审查结果 + 使用的模型名
   5. 全部失败 → 返回 {"ok": false}，Skill 层降级用默认 Agent
 
+熔断策略：
+  - HTTP/网络/认证异常 → 打开熔断（模型真正不可用）
+  - HTTP 200 但返回空内容 → 仅跳过，不断路（模型可用只是这次没产出）
+
 用法:
   python review-gateway.py --prompt-file <审查prompt文件路径> [--skill-dir <Skill根目录>]
 
@@ -37,6 +41,16 @@ import urllib.request
 import urllib.error
 import ssl
 from datetime import datetime, timezone
+
+
+# ============================================================
+# 自定义异常
+# ============================================================
+
+class EmptyContentError(Exception):
+    """HTTP 200 但 content/reasoning 均为空 — 仅跳过，不触发熔断"""
+    pass
+
 
 # Windows GBK 控制台兼容：强制 stdout/stderr 使用 UTF-8
 if sys.platform == 'win32':
@@ -152,7 +166,10 @@ def call_model(base_url, api_key, model, prompt, timeout=120):
         result = json.loads(resp.read().decode('utf-8'))
         msg = result.get("choices", [{}])[0].get("message", {})
         # 兼容 sensenova/DeepSeek 系列：部分模型把内容放在 reasoning 而非 content
-        return msg.get("content") or msg.get("reasoning") or ""
+        text = msg.get("content") or msg.get("reasoning") or ""
+        if not text:
+            raise EmptyContentError("model returned empty content (both content and reasoning are empty)")
+        return text
 
 
 # ============================================================
@@ -245,6 +262,9 @@ def main():
             }, ensure_ascii=False))
             return
 
+        except EmptyContentError:
+            # HTTP 200 但空内容 → 仅跳过，不断路（模型本身可用）
+            tried.append({"name": name, "status": "empty_content", "skipped": True})
         except Exception as e:
             err_msg = f"{type(e).__name__}: {str(e)[:300]}"
             open_circuit(circuit, name, err_msg, ttl_minutes=default_ttl)
