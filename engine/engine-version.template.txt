@@ -1,0 +1,11 @@
+# engine-version.template.txt
+# 记录当前引用的引擎 commit hash，便于排查版本问题
+#
+# 使用方式：
+# 1. 执行 git subtree pull 后，记录新 commit hash
+# 2. 复制此文件为项目侧 project/engine-version.txt（或 project/engine-version.txt）
+# 3. 填入实际值
+
+engine_commit: "<engine_commit_hash>"
+引入日期: "<YYYY-MM-DD>"
+说明: "<版本说明>"

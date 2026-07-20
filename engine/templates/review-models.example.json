@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "description": "外部审查模型配置模板。复制此文件为 review-models.json 后填写真实 API Key。",
+  "default_ttl_minutes": 5,
+  "models": [
+    {
+      "name": "sensenova-v4-flash",
+      "description": "示例：通过环境变量引用 API Key（推荐方式）",
+      "model": "deepseek-v4-flash",
+      "priority": 1,
+      "base_url": "https://token.sensenova.cn/v1",
+      "review_types": ["all"],
+      "api_key_env": "SENSENOVA_67_FLASH_LITE_1"
+    },
+    {
+      "name": "sensenova-6.7-flash-lite",
+      "description": "示例：另一个模型配置，使用独立环境变量",
+      "model": "sensenova-6.7-flash-lite",
+      "priority": 2,
+      "base_url": "https://token.sensenova.cn/v1",
+      "review_types": ["all"],
+      "api_key_env": "SENSENOVA_67_FLASH_LITE_2"
+    }
+  ],
+  "_instructions": {
+    "add_model": "在 models 数组中追加新对象，必填: name/model/priority，可选: api_key_env/api_key/base_url/review_types",
+    "api_key_vs_env": {
+      "api_key_env": "环境变量名（推荐）。如 \"SENSENOVA_API_KEY\"，运行时从系统环境变量读取。不进 Git，安全。",
+      "api_key": "直接写 Key（不推荐）。如 \"sk-abc123\"。优先级低于 api_key_env。会进 Git，有泄露风险，仅适合临时测试。",
+      "fallback": "网关脚本先读 api_key_env，读不到才用 api_key。两者都提供时以 api_key_env 为准。"
+    },
+    "multi_vendor_example": {
+      "_comment": "多供应商/同供应商多Key 配置示例。每个模型条目的 api_key_env 独立，可指向不同环境变量。",
+      "example": [
+        {
+          "name": "sensenova-v4-work",
+          "api_key_env": "SENSENOVA_KEY_WORK",
+          "model": "deepseek-v4-flash",
+          "priority": 1
+        },
+        {
+          "name": "sensenova-v4-personal",
+          "api_key_env": "SENSENOVA_KEY_PERSONAL",
+          "model": "deepseek-v4-flash",
+          "priority": 2
+        },
+        {
+          "name": "deepseek-direct",
+          "api_key_env": "DEEPSEEK_API_KEY",
+          "model": "deepseek-chat",
+          "priority": 3
+        }
+      ],
+      "env_setup": "对应 setx 命令: SENSENOVA_KEY_WORK=sk-xxx / SENSENOVA_KEY_PERSONAL=sk-yyy / DEEPSEEK_API_KEY=sk-zzz"
+    },
+    "priority": "数字越小越优先。熔断后自动跳过，试下一个。",
+    "review_types": "[\"all\"] 表示可用于所有审查类型。可限定为 [\"tech-review\", \"task-review\"] 等。",
+    "circuit_state": "熔断状态自动写入 runtime/review-circuit.json，TTL 过期后自动恢复。"
+  }
+}
