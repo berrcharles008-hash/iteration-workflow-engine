@@ -55,8 +55,10 @@
 Step 1: 扫描技术方案，列出所有任务
 Step 2: 标注每个任务：操作类型（新建/追加/替换）、文件是否已知内容
 Step 3: 按 4 个维度计算最优派发方案
-Step 4: 输出「任务依赖图」+「并行分组」（可选，供用户确认）
-Step 5: team_create → 按分组批量 task 派发
+Step 4: 输出「任务依赖图」+「并行分组」→ 强制用户确认
+Step 5: team_create → 按分组批量 task 派发（Team Agent 仅生成代码，不写文件）
+Step 6: 主 Agent 收集所有 Agent 输出 → 生成统一变更预览
+Step 7: 用户一次确认 → 主 Agent 批量写入所有文件
 ```
 
 ---
@@ -136,4 +138,4 @@ task 参数：
   max_turns: {新建=3, 追加=5~8, 探索=2}
 ```
 
-> 注意：`mode` 不使用 `bypassPermissions` 或 `acceptEdits`，文件写入需要用户确认。
+> 注意：`mode` 不使用 `bypassPermissions` 或 `acceptEdits`。Team Agent 仅输出代码不写入文件，写入由主 Agent 在批量确认后统一执行（见 §三 Step 6-7）。

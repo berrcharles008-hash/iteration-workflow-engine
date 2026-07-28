@@ -110,9 +110,31 @@
 | 步骤ID | 步骤名称 | 强制 | 触发条件 |
 |--------|---------|:--:|---------|
 | step-1-deploy-stage1 | 发布到开发测试服务器 | ✅ | 始终 |
+| step-1.2-backup-capture | 捕获客户服务器备份基线 | ✅ | `deploy-config.yaml` 中 `stage2_manual.enabled==true` |
+| step-1.5-deploy-stage2 | 生成客户部署清单 + 指导执行 | ✅ | `step-1.status=="completed"` 且 `stage2_manual.enabled==true` |
 | step-2-spec-update | Spec活文档更新 | ✅ | 始终 |
 | step-3-archive | 迭代状态归档（推进到07） | ✅ | 始终 |
 | step-4-archive-check | 归档检查：检查 `10-临时/` 是否清空，未清空则分类移出 | ✅ | 始终 |
+
+> **依赖链**：step-1 → (enabled? → step-1.2 → step-1.5) → step-2 → step-3 → step-4
+> 
+> **step-1.2-backup-capture 执行要求**：
+> 1. 从 step-1 的构建输出目录捕获文件清单 + 内容快照
+> 2. 生成 `06-发布上线/backup_manifest.yaml`：`{文件路径: {sha256, size, mtime}}`
+> 3. 打包备份到 `{backup_dir}/{ITERATION_ID}_{timestamp}/`
+> 4. 回滚方案据此生成具体恢复命令（非占位符）
+> 
+> **step-1.5-deploy-stage2 执行要求**：
+> - 前置条件：`step-1.status=="completed"` AND `stage2_manual.enabled==true`
+> - 若 step-1 失败 → step-1.5 自动 `blocked`，原因："测试部署未通过"
+> - 若 enabled==false → step-1.5 为 `not_applicable`
+> - **变更文件清单提取顺序**（三级 fallback）：
+>   1. 优先从 `04-开发实现/04-任务清单.md` 提取任务产出文件路径
+>   2. 若无任务清单，从 `git diff --name-only` 提取（限于迭代分支）
+>   3. 两者均无 → 提示用户手动提供变更文件列表
+> - 结合 step-1.2 的备份清单 + 变更文件清单，填充 `06-发布上线/06-发布上线记录.md` 的"阶段2：客户服务器部署"章节
+> - 回滚方案基于 step-1.2 的 `backup_manifest.yaml` 自动生成具体恢复命令
+> - 提示用户按清单执行，每步反馈结果，Agent 写入上线记录
 
 ---
 
@@ -150,3 +172,4 @@
 | 2026-07-12 | 1.1 | 新增 step-1x-pre-review（02可选）/ step-3x-cross-review（03强制🟡🔴）/ step-1-5x-cross-review（04强制🟡🔴），支持独立Agent交叉审查协议。详细行为定义见 `engine/cross-review-protocol.md` |
 | 2026-07-18 | 1.2 | 02 阶段 step-1x-review 升级：🔴 复杂级强制（外部模型优先），🟡 可选。`step-1x-cross-review` 更名为 `step-1x-review` 以反映外部模型路由优先级 |
 | 2026-07-19 | 1.3 | 补充步骤编号约定文档；合并项目侧补充步骤到各阶段表格 |
+| 2026-07-23 | 1.4 | F05: 06 阶段新增 step-1.2-backup-capture + step-1.5-deploy-stage2，客户部署清单结构化 |

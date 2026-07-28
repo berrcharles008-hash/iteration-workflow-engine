@@ -8,10 +8,11 @@
 
 ### 1.1 评估因素（通用分类 + 项目定制）
 
-> 以下为**通用默认因素**，适用于大多数项目。项目可在 `project.manifest.yaml` 的 `complexity_factors` 段覆盖或扩展。
+> 以下为**技术栈中立的默认因素**，不做 C#/Oracle/前端等特定技术栈假设。
+> 项目可在 `project.manifest.yaml` 的 `complexity_factors` 段覆盖或扩展。
 
 ```yaml
-# 通用因素（默认）
+# 通用因素（技术栈中立默认）
 factors:
   - id: "new_db_table"
     weight: 2
@@ -43,23 +44,26 @@ factors:
       - condition: "仅改调用"
         score: 0
     description: "是否需要修改已有分层架构"
-  - id: "stored_proc_modify"
+  - id: "database_logic_change"
     weight: 1
-    description: "修改已有存储过程/数据库函数"
-  - id: "stored_proc_new_small"
-    weight: 1
-    description: "新增存储过程/数据库函数 <50 行"
-  - id: "stored_proc_new_large"
-    weight: 2
-    description: "新增存储过程/数据库函数 ≥50 行"
+    description: "是否涉及数据库逻辑变更（存储过程/函数/视图等，新增/修改均计 1 分）"
   - id: "ddl_change"
     weight: 1
     description: "DDL 变更（ALTER TABLE 等）"
+  - id: "cross_module_impact"
+    weight: 1
+    description: "变更是否跨越多个模块/服务/项目（需协调多团队或多代码库）"
 ```
 
-> **项目定制**：在 `project.manifest.yaml` 中可定义 `complexity_factors` 段覆盖默认因素。
-> 例如纯前端项目可删除 `stored_proc_*` 和 `ddl_change` 因素，新增 `new_route`、`new_component` 等因素。
-> 若未定义 `complexity_factors`，则使用上述默认因素。
+> **技术栈适配说明**：
+> - 上述默认因素中 `new_db_table`、`database_logic_change`、`ddl_change` 为数据库相关因素。
+> - 纯前端项目建议在 `project.manifest.yaml` 中覆盖，删除 DB 因素并增加 `new_component`、`new_route` 等前端特有因素。
+> - 微服务项目建议增加 `new_service`、`api_breaking_change` 等因素。
+> - 若未定义 `complexity_factors`，则使用上述默认因素。
+
+> **变更记录（2026-07-23 S3.1）**：
+> - 将 3 个 `stored_proc_*` 因素（modify/new_small/new_large，合计 3-4 分）合并为 1 个 `database_logic_change`（1 分），消除对数据库密集型项目的隐性偏向。
+> - 新增 `cross_module_impact` 因素（1 分），覆盖跨模块/跨服务变更的复杂度。
 
 ### 1.2 评分映射
 
@@ -157,13 +161,13 @@ thresholds:
 ⏳ 进行中 / ✅ 已完成（{日期}）
 ```
 
-#### 阶段二（02-需求评审）：极简模式（4 问合并到 01，不产出独立 02 文档）
+#### 阶段二（02-需求评审）：极简模式（4 问确认，产出独立 `02-需求评审.md`，~200字）
 
-简单需求不单独产出 02 文档，4 问评估直接记录在 01-需求记录.md 末尾。阶段逻辑仍执行（需求范围确认、是否需 03 方案的 4 问判断）。
+简单需求产出独立 02 文档（极简 ~200字），内容含四问快速确认 + 评审结论。阶段逻辑仍执行（需求范围确认、是否需 03 方案的 4 问判断）。
 
-#### 阶段三（03-技术方案）：极简模式（方案要点合并到 04，不产出独立 03 文档）
+#### 阶段三（03-技术方案）：极简模式（产出独立 `03-技术方案.md`，~300字）
 
-不单独写方案文档。在开发任务清单的备注列标注改动范围、接口签名等技术要点。阶段逻辑仍执行（代码探索、关键符号验证、命名冲突预检）。
+产出独立方案文档（极简 ~300字），聚焦改动范围表 + 接口签名，不含完整代码示例。阶段逻辑仍执行（代码探索、关键符号验证、命名冲突预检）。
 
 #### 阶段四（04-开发实现）：主 Agent 直写，不用 Team
 
@@ -189,15 +193,15 @@ thresholds:
 
 #### 阶段五（05-测试验证）：精简版
 
-不写完整测试报告，只在 `01-需求记录.md` 状态行确认。
+产出独立 `05-测试验证报告.md`（极简），确认构建通过和基本功能正常。
 
 #### 阶段六（06-发布上线）：精简版
 
-不写独立上线记录。
+产出独立 `06-发布上线记录.md`（极简），记录部署时间和关键变更。
 
 #### 阶段七（07-迭代回顾）：精简版
 
-追加到 `01-需求记录.md` 末尾，300字以内。
+产出独立 `07-迭代回顾.md`（精简三段式，300字以内）。
 
 ---
 

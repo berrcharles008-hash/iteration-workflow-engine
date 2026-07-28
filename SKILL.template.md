@@ -61,7 +61,7 @@ version: "2.0.0"
 |------|------|------|
 | Step A | 读取项目配置，输出运行时变量表 | `engine/startup-protocol.md` Step A |
 | Step B | 检查 `runtime/` 恢复迭代状态，执行迭代门禁 | `engine/startup-protocol.md` Step B |
-| Step C | 复杂度评估（新迭代时） | `engine/complexity-scaling.md` |
+| Step C | 复杂度评估（新迭代时） | `engine/complexity-scoring.md` |
 | Step D | 进入对应阶段执行 | `engine/workflow-engine.md` |
 | Step E | 对话结束前：写入每日工作日志（若 engine-local/ 存在） | `engine-local/startup-protocol-step-e.md` |
 

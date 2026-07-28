@@ -48,6 +48,7 @@ sj-iteration-workflow-engine/
 │   ├── state-protocol.md            ← 状态文件读写规范
 │   ├── complexity-scoring.md        ← 复杂度自适应评估
 │   ├── phase-steps.md               ← 各阶段步骤清单
+│   ├── phase-01.md ~ phase-07.md    ← 各阶段详细定义
 │   ├── cross-review-protocol.md     ← 独立 Agent 交叉审查
 │   ├── multi-story-workflow.md      ← 多 Story 并行模式
 │   ├── naming-conflict-check.md     ← 命名冲突预检
@@ -56,6 +57,8 @@ sj-iteration-workflow-engine/
 │   ├── template-injection.md        ← 变量注入协议
 │   ├── consistency-checklist.md     ← 文件一致性检查清单
 │   ├── lessons-learned.md           ← 事故案例库 + 复盘机制
+│   ├── evolution-safety.md          ← 自修改安全协议（快照/回滚）
+│   ├── gate-decision-table.md       ← 门禁决策表
 │   ├── startup-protocol-step-e.md   ← 每日工作日志协议
 │   ├── engine-version.template.txt  ← 版本号模板
 │   └── templates/                   ← 阶段文档模板
@@ -72,14 +75,17 @@ sj-iteration-workflow-engine/
 │       ├── phase-07-迭代回顾-lite.md
 │       ├── bug-requirement-template.md
 │       ├── project-lessons-learned.example.md
-│       └── review-models.example.json
+│       ├── review-models.example.json
+│       └── cold-start-gate-nucleus.md ← 冷启动门禁微核模板 (P-045)
 ├── design/                          ← 设计文档（分层架构、方案分析等）
 ├── scripts/                         ← 工具脚本
 │   ├── review-models-configurator.py
-│   └── review-gateway.py
+│   ├── review-gateway.py
+│   ├── setup-gate.py                ← 微核注入脚本 (P-045)
+│   └── run-gate-tests.mjs           ← 门禁回归测试
+├── quickstart.md                    ← 5分钟快速入门
 ├── SKILL.md                         ← Claude Code 入口
-├── SKILL.template.md                ← 新项目初始化模板
-└── sync-to-codebuddy.sh             ← 项目内同步脚本（.claude ↔ .codebuddy）
+└── SKILL.template.md                ← 新项目初始化模板
 ```
 
 ### 核心机制
@@ -179,6 +185,7 @@ sj-iteration-workflow-engine/
 │   ├── state-protocol.md            ← State file R/W specification
 │   ├── complexity-scoring.md        ← Adaptive complexity scoring
 │   ├── phase-steps.md               ← Phase step checklist (SSOT)
+│   ├── phase-01.md ~ phase-07.md    ← Phase detailed definitions
 │   ├── cross-review-protocol.md     ← Cross-review protocol
 │   ├── multi-story-workflow.md      ← Multi-story parallel mode
 │   ├── naming-conflict-check.md     ← Naming conflict pre-check
@@ -187,16 +194,20 @@ sj-iteration-workflow-engine/
 │   ├── template-injection.md        ← Variable injection protocol
 │   ├── consistency-checklist.md     ← Consistency check list
 │   ├── lessons-learned.md           ← Incident case library
+│   ├── evolution-safety.md          ← Self-modification safety
+│   ├── gate-decision-table.md       ← Gate decision table
 │   ├── startup-protocol-step-e.md   ← Daily work log protocol
 │   ├── engine-version.template.txt  ← Version template
 │   └── templates/                   ← Phase document templates
 ├── design/                          ← Design documents (layering, analysis, etc.)
 ├── scripts/                         ← Tool scripts
 │   ├── review-models-configurator.py
-│   └── review-gateway.py
+│   ├── review-gateway.py
+│   ├── setup-gate.py                ← Nucleus injection (P-045)
+│   └── run-gate-tests.mjs           ← Gate regression test
+├── quickstart.md                    ← 5-minute quick start
 ├── SKILL.md                         ← Claude Code SKILL entry
-├── SKILL.template.md                ← Project init template
-└── sync-to-codebuddy.sh             ← Project sync script (.claude ↔ .codebuddy)
+└── SKILL.template.md                ← Project init template
 ```
 
 ### Core Mechanisms

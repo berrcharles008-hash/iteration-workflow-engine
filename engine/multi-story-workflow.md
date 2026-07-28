@@ -53,4 +53,35 @@ Team "sprint-xxx" →
   Agent-A: 开发 Story-A（T1-T4）  ─┐
   Agent-B: 开发 Story-B（T5-T8）  ─┼─ 并行执行，互不冲突
   Agent-C: 开发 Story-C（T9-...） ─┘
+
+---
+
+## Schema 映射（概念 → 可执行）⭐ 2026-07-23 落地
+
+> 本文件原仅为概念/图示设计。F06 将其与 `state-protocol.md` 的 `stories[]` schema 对接，使多 Story 并行成为可落地的状态管理能力。
+
+### 1. stories[] 与多 Story 的对应
+
+- Sprint 级阶段（01/02/03/05/06/07）沿用 top-level `phase_steps`，不拆分
+- 仅 04 阶段将开发执行拆为 `stories[]`：每个 Story 一个对象，含 `dev_steps`（代码新建/替换类步骤）+ `tasks_*`
+- 04 完成判定（见 state-protocol.md §二）：Sprint 级步骤结清 AND 所有 `stories[].status ∈ {completed, abandoned}`
+
+### 2. 任务清单文档章节约定
+
+`docs/iterations/{ID}/开发任务清单.md` 按 `## STORY-A / ## STORY-B / ...` 分节，与 `stories[]` 一一对应（原则 #4 任务清单唯一真相源的分 Story 落地）。
+
+### 3. SQL 步骤归属（默认 Sprint 级 + 可选下放）
+
+- **默认**：走 Sprint 级 `step-0-sql-gen` / `step-0-sql-review` / `step-0-sql-exec`（99% 场景为单库统一变更，统筹更安全）
+- **可选下放**：若各 Story 独立涉及不同表/不同 DB 变更，可将 `step-0-sql-*` 下放到各 Story 的 `dev_steps`，同时 Sprint 级 `phase_steps` 中对应步骤标记为 `not_applicable`
+
+### 4. 子 Agent 写入模式（父 Agent 串行化合并写）
+
+- **本次实现**：父 Agent（主 Agent）独占 `state.yaml` 写入权。子 Agent（Agent-A/B/C）只执行代码并回报进度，由父 Agent 合并写入对应 `stories[]`
+- 复用 F03 并发协议（per-iteration `mkdir` 锁 + 乐观锁 version），无跨文件一致性问题
+- **不采用** per-Story 独立 state 文件方案（会引入「XX 阶段完成但 YY 文件缺失」的跨文件一致性校验，工程量远大于收益）
+
+### 5. 恢复输出（压缩格式）
+
+见 `state-protocol.md` §四.3：Sprint 概要 + 逐 Story 摘要行（如 `✅ STORY-A 3/4 任务完成`），追问某 Story 时再展开 `dev_steps` 明细。
 ```
