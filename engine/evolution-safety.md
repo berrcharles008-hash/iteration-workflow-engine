@@ -11,7 +11,7 @@
 
 | 文件 | 路径（相对于 Skill 根目录） | 角色 |
 |------|------|------|
-| gate-check.mjs | `.codebuddy/hooks/gate-check.mjs` | L3 物理拦截层 |
+| gate-check.mjs | `hooks/gate-check.mjs`（`.claude/hooks/` 或 `.codebuddy/hooks/` 取决于 AI 工具，由环境变量自动检测） | L3 物理拦截层 |
 | gate-protocol.md | `engine/gate-protocol.md` | 门禁规则唯一真相源 |
 | state-protocol.md | `engine/state-protocol.md` | 状态文件读写规则 |
 | SKILL.md | `SKILL.md` | Skill 入口 + 路由表 + 门禁摘要 |
@@ -36,9 +36,10 @@ Agent 在任何迭代中修改上述核心文件时，**修改前**必须先执�
 
 **示例**：
 ```bash
-# 修改 gate-check.mjs 前
+# 修改 gate-check.mjs 前（备份两处，auto-detect 自动选择运行方对应的路径）
 mkdir -p runtime/snapshots/
-cp .codebuddy/hooks/gate-check.mjs runtime/snapshots/2026-07-23-gate-check.mjs.bak
+cp .claude/hooks/gate-check.mjs runtime/snapshots/2026-07-23-gate-check.mjs.claude.bak
+cp .codebuddy/hooks/gate-check.mjs runtime/snapshots/2026-07-23-gate-check.mjs.codebuddy.bak
 ```
 
 ### 2.2 快照命名规范
@@ -48,7 +49,8 @@ cp .codebuddy/hooks/gate-check.mjs runtime/snapshots/2026-07-23-gate-check.mjs.b
 ```
 
 路径中的 `/` 和 `\` 替换为 `-`：
-- `.codebuddy/hooks/gate-check.mjs` → `gate-check.mjs.bak`
+- `.claude/hooks/gate-check.mjs` → `gate-check.mjs.claude.bak`
+- `.codebuddy/hooks/gate-check.mjs` → `gate-check.mjs.codebuddy.bak`
 - `engine/gate-protocol.md` → `gate-protocol.md.bak`
 
 ### 2.3 快照保留策略
@@ -86,8 +88,9 @@ cp .codebuddy/hooks/gate-check.mjs runtime/snapshots/2026-07-23-gate-check.mjs.b
 ### 4.1 从快照恢复
 
 ```bash
-# 1. 恢复文件
-cp runtime/snapshots/2026-07-23-gate-check.mjs.bak .codebuddy/hooks/gate-check.mjs
+# 1. 恢复文件（根据运行方选择对应的快照）
+cp runtime/snapshots/2026-07-23-gate-check.mjs.claude.bak .claude/hooks/gate-check.mjs
+cp runtime/snapshots/2026-07-23-gate-check.mjs.codebuddy.bak .codebuddy/hooks/gate-check.mjs
 
 # 2. 清理 state.yaml 中该次变更的步骤标记
 #    编辑 runtime/{ITERATION_ID}.state.yaml

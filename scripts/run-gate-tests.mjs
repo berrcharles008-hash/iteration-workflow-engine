@@ -16,8 +16,15 @@ import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = join(__dirname, '..', '..', '..', '..');
-const HOOK = join(PROJECT_DIR, '.codebuddy', 'hooks', 'gate-check.mjs');
-const RUNTIME_DIR = join(PROJECT_DIR, '.codebuddy', 'skills', 'iteration-workflow', 'runtime');
+
+// ── 工具检测：根据环境变量识别运行方 ──────────────────
+const IS_CODEBUDDY = !!process.env.CODEBUDDY_PROJECT_DIR;
+const HOOK = IS_CODEBUDDY
+  ? join(PROJECT_DIR, '.codebuddy', 'hooks', 'gate-check.mjs')
+  : join(PROJECT_DIR, '.claude', 'hooks', 'gate-check.mjs');
+const RUNTIME_DIR = IS_CODEBUDDY
+  ? join(PROJECT_DIR, '.codebuddy', 'skills', 'iteration-workflow', 'runtime')
+  : join(PROJECT_DIR, '.claude', 'skills', 'iteration-workflow', 'runtime');
 const ACTIVE_FILE = join(RUNTIME_DIR, 'ACTIVE');
 
 // ── 测试用例定义（直接从 gate-test-cases.toml 核心映射） ──
@@ -85,7 +92,7 @@ const TESTS = [
   {
     id: 'S7', name: '写 runtime/ → 常放行',
     phase: '', active: false,
-    tool: 'write_to_file', file: '.codebuddy/skills/iteration-workflow/runtime/test_file',
+    tool: 'write_to_file', file: 'runtime/test_file',
     expectExit: 0, expectBlock: false
   },
   // S8: 01-03阶段写 Skill 自身文件 → 放行

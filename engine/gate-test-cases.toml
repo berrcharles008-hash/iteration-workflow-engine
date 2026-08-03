@@ -25,7 +25,9 @@
 # 全局执行上下文
 [meta]
 skill_path = ".claude/skills/iteration-workflow/"
-hook_script = ".codebuddy/hooks/gate-check.mjs"
+# hook_script 由 run-gate-tests.mjs 根据环境变量自动检测：
+#   CODEBUDDY_PROJECT_DIR → .codebuddy/hooks/gate-check.mjs
+#   否则 → .claude/hooks/gate-check.mjs
 project_dir = "e:/SJYL/三佳工程/master-pre/0002预检分诊管理系统/temp-branch"
 test_iteration_id = "2026-07-23-020-S1门禁自动化回归测试矩阵"
 execution_date = "2026-07-23"

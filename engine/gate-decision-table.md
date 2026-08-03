@@ -27,14 +27,17 @@
 ```bash
 # Windows PowerShell（设置运行时目录 + 模拟项目目录）
 $env:GATE_TEST_RUNTIME_DIR = "path/to/runtime"
+# 设置运行方环境变量：
+#   CODEBUDDY_PROJECT_DIR → 使用 .codebuddy/hooks/gate-check.mjs
+#   不设置 → 使用 .claude/hooks/gate-check.mjs
 $env:CODEBUDDY_PROJECT_DIR = "path/to/project"
 
 # S0：空输入
-echo '' | node .codebuddy/hooks/gate-check.mjs; $LASTEXITCODE
+echo '' | node hooks/gate-check.mjs; $LASTEXITCODE
 
 # S1-S7：写入工具
 '{"tool_name":"write_to_file","tool_input":{"filePath":"/path/to/target.ts"}}' `
-  | node .codebuddy/hooks/gate-check.mjs; $LASTEXITCODE
+  | node hooks/gate-check.mjs; $LASTEXITCODE
 ```
 
 ---
