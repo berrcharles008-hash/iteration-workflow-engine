@@ -1,4 +1,4 @@
-# iteration-workflow 分层复用架构设计
+﻿# iteration-workflow 分层复用架构设计
 
 > 目标：将通用流程引擎与项目特定配置分离，使得同一个 skill 能跨项目复用，各项目仅需维护自己的"配置文件"。
 
@@ -21,7 +21,7 @@
 
 ```
 .codebuddy/skills/iteration-workflow/
-├── SKILL.md                              ← 主文件（6阶段流程 + 硬编码的三佳路径）
+├── SKILL.md                              ← 主文件（6阶段流程 + 硬编码的示例路径）
 └── references/
     ├── complexity-adaptive-strategy.md   ← 复杂度评估算法
     ├── phase-01-需求文档模板.md           ← 通用模板
@@ -38,15 +38,15 @@
 
 ### 1.2 通用 vs 项目特定的分布现状
 
-| 文件 | 通用 | 三佳特定 | 问题 |
+| 文件 | 通用 | 示例特定 | 问题 |
 |------|:----:|:-------:|------|
-| SKILL.md | ~60% | ~40% | 6阶段框架通用，但 Step 4.5/4.6/Stage6 硬编码了三佳项目路径 |
+| SKILL.md | ~60% | ~40% | 6阶段框架通用，但 Step 4.5/4.6/Stage6 硬编码了示例项目路径 |
 | complexity-adaptive-strategy.md | 100% | 0% | ✅ 完全通用 |
 | phase-01~06 文档模板（6个） | 100% | 0% | ✅ 完全通用 |
-| phase-04-agent-prompts模板.md | ~70% | ~30% | 五段结构通用，示例代码是三佳的 |
+| phase-04-agent-prompts模板.md | ~70% | ~30% | 五段结构通用，示例代码是示例的 |
 | phase-04-代码审查规则.md | ~10% | ~90% | ❌ 规则深度绑定 Dos.ORM + SJMgrBase + Ajax + Vue2+ElementUI |
 | phase-05-自动测试与执行.md | ~70% | ~30% | 用例生成算法通用，但执行器假设 .vue+NPM 前端 |
-| phase-06-deploy-reference.md | 0% | 100% | ❌ FTP/内网IP/MSBuild 全是三佳环境 |
+| phase-06-deploy-reference.md | 0% | 100% | ❌ FTP/内网IP/MSBuild 全是示例环境 |
 
 ---
 
@@ -105,8 +105,8 @@
 **从 SKILL.md 中移除的内容**（下沉到层2）：
 - Step 4.5 中 `Inf/SJ.BLL.ET.xxxx.Inf.csproj` 等具体路径 → `project-structure.yaml`
 - Step 4.6 中 `back-end/.../SJ.ET...Web.sln` 等具体路径 → `project-structure.yaml`  
-- Stage 6 中 `front-end/pre_examination_triage_upgrade/` → `deploy-config.yaml`
-- Stage 6 中 `192.168.195.71` FTP 信息 → `deploy-config.yaml`
+- Stage 6 中 `front-end/my-app_upgrade/` → `deploy-config.yaml`
+- Stage 6 中 `<INTERNAL_IP>` FTP 信息 → `deploy-config.yaml`
 
 ### 3.2 complexity-scoring.md — 复杂度评估
 
@@ -151,7 +151,7 @@
 - 搜索命令模板
 - 检查规则（同名→改名，相似签名→改名）
 
-**需要泛化**：当前 `search_content` 示例用了三佳的文件名，改为使用模板变量。
+**需要泛化**：当前 `search_content` 示例用了示例的文件名，改为使用模板变量。
 
 ### 3.6 templates/ — 文档模板
 
@@ -184,9 +184,9 @@
 ```yaml
 # 项目基础信息
 project:
-  name: "三佳预检分诊管理系统"
-  short_name: "PreExaminationTriage"
-  workspace_root: "e:/SJYL/三佳工程/master-pre/0002预检分诊管理系统/temp-branch"
+  name: "示例示例应用管理系统"
+  short_name: "MyApp"
+  workspace_root: "e:/workspace/示例工程/master-pre/0002示例应用管理系统/temp-branch"
 
 # 技术栈声明
 tech_stack:
@@ -208,12 +208,12 @@ tech_stack:
 
 # 目录结构约定
 paths:
-  frontend_root: "front-end/pre_examination_triage_upgrade"
-  frontend_src: "front-end/pre_examination_triage_upgrade/src"
-  frontend_dist: "front-end/pre_examination_triage_upgrade/dist"
-  backend_root: "back-end/PreExaminationTriage"
-  backend_solution: "back-end/PreExaminationTriage/SJ.ET.PreExaminationTriage.Web.sln"
-  backend_build_output: "back-end/PreExaminationTriage/Web.Demo/bin/Release"
+  frontend_root: "front-end/my-app_upgrade"
+  frontend_src: "front-end/my-app_upgrade/src"
+  frontend_dist: "front-end/my-app_upgrade/dist"
+  backend_root: "back-end/MyApp"
+  backend_solution: "back-end/MyApp/SJ.ET.MyApp.Web.sln"
+  backend_build_output: "back-end/MyApp/Web.Demo/bin/Release"
   docs_iterations: "docs/iterations"
   specs_dir: ".codebuddy/specs"
 
@@ -272,16 +272,16 @@ compilation_units:
   registration_entry: '<Compile Include="{relative_path}" />'  # 新文件的注册模板
   mappings:                                           # 文件目录 → 编译单元
     - source_dir: "Inf"
-      unit_file: "Inf/SJ.BLL.ET.PreExaminationTriage.Inf.csproj"
+      unit_file: "Inf/SJ.BLL.ET.MyApp.Inf.csproj"
     - source_dir: "BLL"
-      unit_file: "BLL/SJ.BLL.ET.PreExaminationTriage.csproj"
+      unit_file: "BLL/SJ.BLL.ET.MyApp.csproj"
     - source_dir: "Web"
-      unit_file: "Web/SJ.Web.ET.PreExaminationTriage.Web.csproj"
+      unit_file: "Web/SJ.Web.ET.MyApp.Web.csproj"
 
 # 依赖注入/服务注册（可选 — 其他项目可能需要）
 di_registration:
   type: "none"                                       # none | attribute | manual | spring_bean
-  # 三佳项目使用特性 [Module]/[ContainerRegType] 自动注册，无需手动步骤
+  # 示例项目使用特性 [Module]/[ContainerRegType] 自动注册，无需手动步骤
 ```
 
 ### 4.2 code-review-rules.yaml
@@ -425,7 +425,7 @@ environments:
       - id: "upload_frontend"
         description: "上传前端到 FTP"
         type: "ftp"
-        host: "192.168.195.71"
+        host: "<INTERNAL_IP>"
         port: 21
         user: "anonymous"
         password: ""
@@ -435,7 +435,7 @@ environments:
       - id: "upload_backend"
         description: "上传后端 DLL 到 FTP"
         type: "ftp"
-        host: "192.168.195.71"
+        host: "<INTERNAL_IP>"
         port: 21
         user: "anonymous"
         password: ""
@@ -672,14 +672,14 @@ Agent 应始终使用注入后的值，而非引擎中的占位符。
 
 ```
 .codebuddy/skills/iteration-workflow/
-├── SKILL.md                              ← 含三佳路径
+├── SKILL.md                              ← 含示例路径
 └── references/
     ├── complexity-adaptive-strategy.md    ← ✅ 通用
     ├── phase-0X-*模板.md (6个)            ← ✅ 通用
-    ├── phase-04-agent-prompts模板.md      ← 含三佳示例
+    ├── phase-04-agent-prompts模板.md      ← 含示例示例
     ├── phase-04-代码审查规则.md           ← ❌ 全硬编码
     ├── phase-05-自动测试与执行.md         ← 含 .vue/NPM 假设
-    └── phase-06-deploy-reference.md       ← ❌ FTP/内网/三佳
+    └── phase-06-deploy-reference.md       ← ❌ FTP/内网/示例
 ```
 
 ### After（目标）
@@ -748,7 +748,7 @@ Agent 应始终使用注入后的值，而非引擎中的占位符。
 | 泛化 phase-05-自动测试与执行.md | 小 | 移除 .vue/NPM 硬假设，改为模板变量 |
 | 编写 agent-prompt-examples.md | 小 | 从现有代码中复制示例 |
 | 编写 README.md（接入指南） | 小 | 本文档即 README 初稿 |
-| 测试：在三佳项目中运行一次 | 中 | 验证层1+层2加载正确 |
+| 测试：在示例项目中运行一次 | 中 | 验证层1+层2加载正确 |
 | 测试：用另一个项目（如Java+Vue3）接入 | 大 | 验证跨技术栈复用能力 |
 
 ---
@@ -779,7 +779,7 @@ GitHub Copilot 的 `.github/copilot-instructions.md` 支持按文件类型配置
 
 1. **确认方案**：确认分离策略和文件结构
 2. **创建 engine/ 目录**：编写 engine 下的通用文件（工作量最大）
-3. **创建 project/ 目录**：为三佳项目编写层2配置文件
+3. **创建 project/ 目录**：为示例项目编写层2配置文件
 4. **改造 SKILL.md**：改为薄入口 + 变量注入
-5. **就地测试**：在三佳项目上运行一个迭代，验证改造后行为不变
+5. **就地测试**：在示例项目上运行一个迭代，验证改造后行为不变
 6. **跨项目测试**：在一个不同技术栈的项目上接入，验证复用性

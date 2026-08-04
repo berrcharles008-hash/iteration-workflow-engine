@@ -1,4 +1,4 @@
-# 方案 D：Git Subtree 实施方案
+﻿# 方案 D：Git Subtree 实施方案
 
 > 日期：2026-07-09（修订）
 > 目标：将共性引擎放入独立 Git 仓库，各项目通过 `git subtree` 拉入，项目只保留差异化文件。实施后 Skill 功能不受影响。
@@ -20,7 +20,7 @@
 
 ```bash
 # 在项目根目录执行
-cd E:\SJYL\三佳工程\master-pre\0002预检分诊管理系统\temp-branch
+cd E:\workspace\示例工程\master-pre\0002示例应用管理系统\temp-branch
 
 # 备份整个 iteration-workflow Skill
 xcopy /E /I .codebuddy\skills\iteration-workflow .codebuddy\skills\iteration-workflow.bak
@@ -134,7 +134,7 @@ git push
 
 ```bash
 # 在项目根目录执行
-cd E:\SJYL\三佳工程\master-pre\0002预检分诊管理系统\temp-branch
+cd E:\workspace\示例工程\master-pre\0002示例应用管理系统\temp-branch
 
 # 备份当前 engine 目录（以防万一）
 cd .codebuddy\skills\iteration-workflow

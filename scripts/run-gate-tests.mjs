@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 /**
  * 门禁回归测试执行器
  * 
@@ -34,21 +34,21 @@ const TESTS = [
   {
     id: 'S0', name: '04阶段写业务代码 → 放行',
     phase: '04', active: true,
-    tool: 'write_to_file', file: 'front-end/pre_examination_triage_upgrade/src/test.js',
+    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/test.js',
     expectExit: 0, expectBlock: false
   },
   // S1: 无活跃迭代 → 阻止
   {
     id: 'S1', name: '无活跃迭代写业务代码 → 阻止',
     phase: '', active: false,
-    tool: 'write_to_file', file: 'front-end/pre_examination_triage_upgrade/src/test.js',
+    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/test.js',
     expectExit: 2, expectBlock: true
   },
   // S2: 01阶段 + 写业务代码 → 阻止
   {
     id: 'S2', name: '01阶段写业务代码 → 阻止',
     phase: '01', active: true,
-    tool: 'write_to_file', file: 'front-end/pre_examination_triage_upgrade/src/test.js',
+    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/test.js',
     expectExit: 2, expectBlock: true
   },
   // S2b: 01阶段 + 写豁免目录 → 放行
@@ -62,7 +62,7 @@ const TESTS = [
   {
     id: 'S3', name: '05阶段写业务代码 → 阻止',
     phase: '05', active: true,
-    tool: 'replace_in_file', file: 'front-end/pre_examination_triage_upgrade/src/test.vue',
+    tool: 'replace_in_file', file: 'front-end/my-app-upgrade/src/test.vue',
     expectExit: 2, expectBlock: true
   },
   // S4: 空 stdin → 当前行为 exit 0（fail-open，修复后期望 exit 2）
@@ -85,7 +85,7 @@ const TESTS = [
   {
     id: 'S6', name: 'GATE_BYPASS=1 → 放行',
     phase: '', active: false, gateBypass: true,
-    tool: 'write_to_file', file: 'front-end/pre_examination_triage_upgrade/src/test.js',
+    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/test.js',
     expectExit: 0, expectBlock: false
   },
   // S7: 写 runtime/ → 常放行
