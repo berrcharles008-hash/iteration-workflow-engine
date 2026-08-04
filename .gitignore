@@ -1,4 +1,112 @@
-SKILL.md
-sync-to-codebuddy.sh
-project/
-runtime/
+# ====================
+# Python
+# ====================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# ====================
+# Node.js
+# ====================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm
+.yarn-integrity
+
+# ====================
+# IDE / Editor
+# ====================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# ====================
+# Operating System
+# ====================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ====================
+# Logs
+# ====================
+*.log
+logs/
+
+# ====================
+# Runtime / Local state (engine-specific)
+# ====================
+# Runtime state files are project-specific and should not be committed
+runtime/*.state.yaml
+runtime/*.state.archived.yaml
+runtime/ACTIVE
+runtime/*.log
+
+# Project-local lessons learned (not shared)
+project/lessons-learned.md
+
+# External review model config (contains API keys)
+project/review-models.json
+
+# ====================
+# Test artifacts
+# ====================
+.coverage
+htmlcov/
+.tox/
+.nox/
+.cache
+pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# ====================
+# Misc
+# ====================
+*.bak
+*.tmp
+*.temp
+.env
+.env.local

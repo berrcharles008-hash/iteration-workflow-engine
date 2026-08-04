@@ -1,0 +1,35 @@
+# Project Manifest Template
+# ========================
+# Copy this file to `project.manifest.yaml` and fill in your project's details.
+# This file is consumed by the iteration-workflow engine at startup (Step A).
+
+version: 1
+
+# Project identification
+project_name: ""           # e.g., "MyApp"
+project_description: ""    # one-line description
+
+# Tech stack (used for complexity scoring and build verification)
+tech_stack:
+  language: ""             # e.g., "csharp", "typescript", "python"
+  framework: ""            # e.g., "dotnet-framework-4.0", "vue-2.6", "django"
+  database: ""             # e.g., "oracle", "mysql", "postgresql"
+
+# Paths (relative to project root)
+paths:
+  root: "."                # project root directory
+  backend: ""              # backend source root (e.g., "back-end/MyApp")
+  frontend: ""             # frontend source root (e.g., "front-end/my-app")
+  docs: "docs/iterations"  # iteration documents output directory
+  sql: "sql"               # SQL scripts output directory
+
+# Build verification (optional, leave empty to skip)
+build:
+  backend_command: ""      # e.g., "msbuild Solution.sln /p:Configuration=Debug /t:Build /v:minimal"
+  frontend_command: ""     # e.g., "npm run build"
+
+# Iteration workflow configuration
+workflow:
+  default_complexity: "🟢"  # 🟢 simple / 🟡 medium / 🔴 complex
+  enable_team_agent: true   # use Team Agent mode for 🟡🔴 in phase 04
+  enable_cross_review: true # use independent Agent cross-review for 🟡🔴
