@@ -416,7 +416,7 @@ lessons-learned.md P-021 记录了一次成功的自我修复迭代，验证了�
 | F01 | P0 | 门禁黑名单模式 → 触发词绕过（已发生事故） | 可靠性 | #1 |
 | F02 | P0 | 长对话行为漂移 → 门禁遗忘 | 可靠性 | #4 |
 | F01.5 | P0 | 工具调用层硬约束：PreToolUse hook 在 write_file/replace_in_file/delete_file 前物理拦截 | 可靠性 | —（新增） |
-| 注 | — | **三层纵深防御已形成。** F01（SKILL.md触发面）+ F02（CLAUDE.md多入口）+ F01.5（PreToolUse hook物理拦截）= 架构级白名单。hook 位于 Agent 触碰不到的层面，Skill未加载/上下文压缩/行为漂移均无法绕过。 | | |
+| 注 | — | **三层纵深防御已形成，但底层物理拦截层仅在 Claude Code CLI 生效。** F01（SKILL.md触发面）+ F02（CLAUDE.md多入口）+ F01.5（PreToolUse hook物理拦截）= 架构级白名单。hook 位于 Agent 触碰不到的层面，Skill未加载/上下文压缩/行为漂移均无法绕过。**⚠️ 但 CodeBuddy IDE 不支持 PreToolUse Hook（P-041 实测验证），在 CodeBuddy IDE 中物理拦截层不生效，门禁仅靠 Prompt 层（微核 + gate-protocol.md）。** | | |
 | F03 | P1 | state.yaml 并发写入 → 数据损坏（v2 已修复 TOCTOU + 双目录问题） | 安全性 | #2 |
 | F04 | P1 | ACTIVE 指针单点故障 → 非确定性 fallback | 可靠性 | — |
 | F05 | P1 | 06 阶段客户部署缺失 → 上线不可操作 | 完整性 | #5 |
@@ -437,8 +437,8 @@ lessons-learned.md P-021 记录了一次成功的自我修复迭代，验证了�
 |:--:|------|------|:---:|:---:|
 | F01 | 触发面修复：description 追加兜底 + "其他"路由明确化 → 缩小绕过窗口 | SKILL.md（第7行+兜底，第38行+门禁检查） | 低 | ✅ 2026-07-22 |
 | F02 | 防御纵深第2层：核心门禁规则写入 CLAUDE.md → 多入口兜底，抗上下文压缩 | CLAUDE.md | 低 | ✅ 已落地（经 P-032，2026-07；CLAUDE.md 第7~34行含完整门禁铁律+两层防御体系） |
-| F01.5 | PreToolUse 工具调用拦截：settings.json + gate-check.mjs → Agent 无法绕过的物理硬约束 | settings.json, gate-check.mjs | 低 | ✅ 2026-07-22 |
-| 注 | 三层纵深防御：F01（触发面）+ F02（多入口）+ F01.5（物理拦截）。F01.5 是真正的架构级白名单——即使 Skill 未加载、上下文压缩、Agent 行为漂移，write_file/replace_in_file/delete_file 调用前均被物理拦截。 | | | |
+| F01.5 | PreToolUse 工具调用拦截：settings.json + gate-check.mjs → **仅在 Claude Code CLI 生效**（CodeBuddy IDE 不支持 PreToolUse Hook） | settings.json, gate-check.mjs | 低 | ✅ 2026-07-22（CLI 验证通过） |
+| 注 | 三层纵深防御：F01（触发面）+ F02（多入口）+ F01.5（物理拦截）。F01.5 是真正的架构级白名单——即使 Skill 未加载、上下文压缩、Agent 行为漂移，write_file/replace_in_file/delete_file 调用前均被物理拦截。**⚠️ 仅 Claude Code CLI 生效。CodeBuddy IDE 中物理拦截层不生效（P-041），门禁仅靠 Prompt 层。** | | | |
 | F04 | ACTIVE fallback 路径行为文档化，消除非确定性 | state-protocol.md | 低 | ✅ 已完成（2026-07-23；§6.3 重写 + §6.4 追加 + §七精简） |
 | F05 | 06 阶段客户部署手动步骤清单 + 归档检查 | phase-steps.md, deploy-config.yaml, 上线记录模板, workflow-engine.md L789-793 | 中 | ✅ 已完成（2026-07-23；v2方案：文档结构化改进而非"闭环修复"；新增 step-1.2-backup-capture + step-1.5-deploy-stage2 + enabled 开关；三级 fallback 变更清单来源；回滚方案基于备份基线具体化） |
 
@@ -499,7 +499,7 @@ lessons-learned.md P-021 记录了一次成功的自我修复迭代，验证了�
 | 维度 | 评分 | 剩余主要短板 |
 |------|:---:|------|
 | 完整性 | 4/5 | 06阶段仍手动非自动 |
-| 可靠性 | 4/5 | 门禁无自动化测试；hook仅覆盖3个写入工具 |
+| 可靠性 | 4/5 | 门禁无自动化测试；hook仅覆盖3个写入工具且**仅在 Claude Code CLI 生效**（CodeBuddy IDE 无物理拦截层） |
 | 可维护性 | 3/5 | 48文件总量大；跨工具冲突处理缺失 |
 | 可扩展性 | 2/5 | 复杂度因素偏C#/Oracle；无模板覆盖；无引擎升级路径 |
 | Token效率 | 4/5 | 启动仍需多文件 |
@@ -786,3 +786,19 @@ Skill 检测 MEMORY.md 无微核
 | 编号 | 问题 | 处置 |
 |:--|------|------|
 | P-045 | 冷启动门禁微核存在于 MEMORY.md（项目文件），但 MEMORY.md 不是 Skill 的一部分 → Skill 安装到新项目时微核静默缺失（跨项目部署缺口）。且微核是 CodeBuddy IDE 专属补丁（Claude Code CLI 由 Hook 层保护），方案须环境感知 | **方案 E**：微核模板化（engine/templates/）+ Step A.5 环境感知 + 用户确认注入 + setup 脚本；不追求全自动，首次真空窗口靠 setup 脚本覆盖 |
+
+#### 10.7.7 方案 E 落地状态（2026-07-24 检查）
+
+三组件已全部创建并可用：
+
+| 组件 | 文件 | 状态 |
+|------|------|:--:|
+| 微核模板 | `engine/templates/cold-start-gate-nucleus.md`（70行） | ✅ |
+| 安装脚本 | `scripts/setup-gate.py`（227行，含 --check/--force/幂等注入/环境检测/SHA256校验） | ✅ |
+| Step A.5 自检 | `engine/startup-protocol.md` L26-80（新增第3项：CodeBuddy IDE → 检测 MEMORY.md 微核版本；Claude Code CLI → 静默跳过） | ✅ |
+
+**评分影响**：三组件的性质是部署工具而非能力增强，不影响当前 31/40 评分。跨项目实际安装验证后，可扩展性维度可能从 2→3。
+
+**⚠️ 实测声明**：P-045 方案 E 的三组件（微核模板 / setup-gate.py / Step A.5 自检）均处于**文件级创建完成**状态，**未在任何其他项目中执行跨项目运行验证**。`setup-gate.py` 的 `--check`/`--force`/幂等注入/环境检测仅在当前项目自测通过（含 NUCLEUS_MARKER v1.1→前缀匹配修复），从未在全新空白项目中执行端到端部署验证。跨项目部署缺口在文件层面已闭合，在运行验证层面仍为未验证状态。
+
+**仍保留的真空窗口**：Skill 安装后、setup 脚本首次运行前、Step A.5 首次触发前的冷启动会话。此窗口仅能靠 setup 脚本覆盖，不可能在 Prompt 层完全消除。

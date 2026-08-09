@@ -1,4 +1,4 @@
-﻿# =============================================================================
+# =============================================================================
 # iteration-workflow Skill — 门禁回归测试矩阵
 # =============================================================================
 # 版本: v1.0
@@ -28,7 +28,7 @@ skill_path = ".claude/skills/iteration-workflow/"
 # hook_script 由 run-gate-tests.mjs 根据环境变量自动检测：
 #   CODEBUDDY_PROJECT_DIR → .codebuddy/hooks/gate-check.mjs
 #   否则 → .claude/hooks/gate-check.mjs
-project_dir = "e:/workspace/示例工程/master-pre/0002示例应用管理系统/temp-branch"
+project_dir = "e:/SJYL/三佳工程/master-pre/0002预检分诊管理系统/temp-branch"
 test_iteration_id = "2026-07-23-020-S1门禁自动化回归测试矩阵"
 execution_date = "2026-07-23"
 executor = "run-gate-tests.mjs (L3)/手动 (L1/L2/并发)"
@@ -53,7 +53,7 @@ Hook 应无条件放行（exit 0），工具正常执行。
 active = "2026-07-23-020-S1门禁自动化回归测试矩阵"
 phase = "04"
 tool = "replace_in_file"
-file_path = "front-end/my-app-upgrade/src/pages/triage/triage_emergency_record.ts"
+file_path = "front-end/pre_examination_triage_upgrade/src/pages/triage/triage_emergency_record.ts"
 stdin_type = "normal"
 gate_bypass = false
 [case.expect]
@@ -79,7 +79,7 @@ Hook 应拦截（exit 2），输出"当前无活跃迭代"提示框。
 active = "none"
 phase = ""
 tool = "write_to_file"
-file_path = "front-end/my-app-upgrade/src/test.js"
+file_path = "front-end/pre_examination_triage_upgrade/src/test.js"
 stdin_type = "normal"
 gate_bypass = false
 [case.expect]
@@ -105,7 +105,7 @@ Hook 应拦截，提示"当前处于 01 阶段，仅允许修改迭代产出目�
 active = "2026-07-23-020-S1门禁自动化回归测试矩阵"
 phase = "01"
 tool = "write_to_file"
-file_path = "front-end/my-app-upgrade/src/test.js"
+file_path = "front-end/pre_examination_triage_upgrade/src/test.js"
 stdin_type = "normal"
 gate_bypass = false
 [case.expect]
@@ -157,7 +157,7 @@ Hook 应拦截（exit 2），提示当前阶段不允许文件写入。
 active = "2026-07-23-020-S1门禁自动化回归测试矩阵"
 phase = "05"
 tool = "replace_in_file"
-file_path = "front-end/my-app-upgrade/src/pages/triage/test.vue"
+file_path = "front-end/pre_examination_triage_upgrade/src/pages/triage/test.vue"
 stdin_type = "normal"
 gate_bypass = false
 [case.expect]
@@ -184,7 +184,7 @@ Hook 收到空 stdin 时的实际行为——根据源码第 72-74 行，当前�
 active = "none"
 phase = ""
 tool = "write_to_file"
-file_path = "front-end/my-app-upgrade/src/test.js"
+file_path = "front-end/pre_examination_triage_upgrade/src/test.js"
 stdin_type = "empty"
 gate_bypass = false
 [case.expect]
@@ -210,7 +210,7 @@ Hook 收到格式错误 JSON 时的实际行为——源码第 84-86 行，JSON 
 active = "none"
 phase = ""
 tool = "write_to_file"
-file_path = "front-end/my-app-upgrade/src/test.js"
+file_path = "front-end/pre_examination_triage_upgrade/src/test.js"
 stdin_type = "malformed_json"
 gate_bypass = false
 [case.expect]
@@ -237,7 +237,7 @@ description = """
 active = "none"
 phase = ""
 tool = "write_to_file"
-file_path = "front-end/my-app-upgrade/src/test_gate_bypass.js"
+file_path = "front-end/pre_examination_triage_upgrade/src/test_gate_bypass.js"
 stdin_type = "normal"
 gate_bypass = true
 [case.expect]

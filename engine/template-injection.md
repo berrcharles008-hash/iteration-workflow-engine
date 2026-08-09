@@ -50,6 +50,15 @@ Step B / Step C / Step D（读取 engine/ 或 project/ 文件时）
 | `{{sql_conventions.xxx}}` | `sql_conventions.xxx` | SQL 编写规范 |
 | `{{deploy.xxx}}` | `deploy.xxx` | 部署目标 |
 
+**多项目变量（`additional_projects` 非空时解析）**：
+
+| 占位符 | 含义 | 来源 |
+|--------|------|------|
+| `{{ALL_FRONTEND_ROOTS}}` | 所有前端项目根目录（主+附加） | 运行时解析：`[paths.frontend_root]` + 附加中 `type=frontend` 的 root |
+| `{{ALL_BACKEND_ROOTS}}` | 所有后端项目根目录（主+附加） | 运行时解析：`[paths.backend_root]` + 附加中 `type=backend` 的 root |
+| `{{ALL_BACKEND_SLNS}}` | 所有后端 .sln 文件路径 | 运行时解析：`[paths.backend_solution]` + 附加中 `type=backend` 且有 solution 的 |
+| `{{HAS_MULTI_PROJECTS}}` | 是否为多项目模式 | 运行时解析：`paths.additional_projects` 非空且长度>0 |
+
 ### 2.3 特殊占位符
 
 | 占位符 | 说明 | 来源 |
@@ -93,6 +102,16 @@ function load_runtime_variables():
     variables["database.type"]    = manifest.database.type
     variables["database.connections.cis.name"] = manifest.database.connections.cis.name
     // ... 其他按需解析
+
+    // 多项目变量（附加项目列表存在时解析）
+    additional = manifest.paths.additional_projects || []
+    variables["HAS_MULTI_PROJECTS"]   = additional.length > 0
+    variables["ALL_FRONTEND_ROOTS"]   = [manifest.paths.frontend_root] +
+        additional.filter(p => p.type == "frontend").map(p => p.root)
+    variables["ALL_BACKEND_ROOTS"]    = [manifest.paths.backend_root] +
+        additional.filter(p => p.type == "backend").map(p => p.root)
+    variables["ALL_BACKEND_SLNS"]     = [manifest.paths.backend_solution] +
+        additional.filter(p => p.type == "backend" && p.solution).map(p => p.solution)
     
     return variables
 
