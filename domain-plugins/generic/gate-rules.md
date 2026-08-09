@@ -1,26 +1,24 @@
-# Generic Domain Rules
+# Generic Gate Rules
 
-> 默认空规则集 — 零额外规则，适用于通用软件项目。
+> 通用项目门禁规则（默认加载，零额外规则）。
 
-## 说明
+## 默认规则
 
-此文件为 `generic` 领域插件的门禁规则占位。
+本项目无额外技术栈约束。门禁仅检查迭代阶段状态：
 
-当你安装 iteration-workflow 引擎后，引擎会默认加载此规则集。
-通用项目无需额外规则约束，因此本文件保持为空。
+- **阶段 04**：放行所有文件写入
+- **阶段 01-03**：仅允许迭代文档目录写入
+- **其他阶段**：阻止所有业务代码写入
 
-## 自定义规则
+## 自定义
 
-如需添加项目特定的门禁规则（如特定技术栈铁律、命名规范、禁止 API 等），
-请创建新的领域插件目录（如 `domain-plugins/my-project/`）
-并在 `project.manifest.yaml` 中指定：
+如需添加企业特定规则（如 Oracle 表名规范、SVN 工作流约定等），
+请复制 `domain-plugins/enterprise-legacy/gate-rules.md` 作为参考模板，
+并在 `project/project.manifest.yaml` 中引用你的规则文件。
 
-```yaml
-domain_plugin: "my-project"
-```
+## 逃生口
 
-自定义规则格式请参考：`domain-plugins/enterprise-legacy/gate-rules.md`（Phase D 实现）
+- `GATE_BYPASS=1` 环境变量
+- `hooks/.gate-bypass` 标记文件
 
----
-
-> **Phase D**：`enterprise-legacy/gate-rules.md` 将从 MEMORY.md 抽离的技术栈铁律（Oracle全大写/.csproj编译/SVN工作流等）迁移至此。
+> 此文件默认加载。无规则可安全删除，引擎会自动退化为纯阶段门禁。

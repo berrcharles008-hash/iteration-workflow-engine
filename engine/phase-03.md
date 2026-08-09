@@ -8,6 +8,56 @@
 
 **🟢 简单需求极简模式**：产出独立 `03-技术方案.md`（极简 ~300字），聚焦改动范围表 + 接口签名，不含完整代码示例。内容模板见 `SKILL.md` 关键原则 #14。
 
+### ★ 六步定位漏斗（step-1-explore 子步骤）
+
+> 将原"全量 code-explorer 搜索"改为分层漏斗，逐级收敛 token 消耗。通过策略模式保证 L1/L2 不存在时自动回退，零改造代价。
+
+**理论模型**：L1总览(~2K) → L2模块(~15K) → search_content(五维, 0) → read_file追踪(~10K) → read_file确认(~5K)，漏斗逐步收窄。
+
+| 子步骤 | 功能 | 优先数据源 | 回退路径 | 预估Token |
+|:------:|------|-----------|---------|:---:|
+| step-1.1 | **意图消歧**：匹配需求关键词→候选模块 | `L1-overview.md`（读取 config.yaml→specs_dir/l1_file） | specs 4文件 → list_dir | ~2K |
+| step-1.2 | **模块定位**：锁定模块→精确文件清单（★多项目：遍历 `ALL_FRONTEND_ROOTS` + `ALL_BACKEND_ROOTS`） | `L2-modules/{module}.md`（HTML注释解析 root_dirs） | list_dir 扫描候选目录 | ~15K |
+| step-1.3 | **关键词搜索**：五维展开搜索命中行 | `search_content`（类名/方法名/表名/路由/业务术语） | — | 0（Agent侧预过滤） |
+| step-1.4 | **调用链追踪**：读取命中函数→展开调用链 | `read_file` 命中函数上下文 | — | ~10K |
+| step-1.5 | **验证确认**：读取最终改动点→确认方案 | `read_file` 最终修改目标文件 | — | ~5K |
+| step-1.6 | **知识库缓存**：自动生成L1（若不存在）（★多项目：遍历 `ALL_FRONTEND_ROOTS` + `ALL_BACKEND_ROOTS`，在L1模块表中标注归属项目） | 自动生成 `L1-overview.md` | 跳过 | ~3K |
+
+**策略模式回退规则**：
+```
+Step 1.1: L1-overview.md 存在？→ 读 L1 : 读 specs 4 文件
+           L1 存在但格式损坏？→ 输出警告 + 走回退路径
+Step 1.2: L2-modules/{module}.md 存在？→ 读 L2 : list_dir 扫描
+           L2 存在但 root_dirs 缺失？→ 输出警告 + 走回退路径
+Step 1.6: L1-overview.md 不存在？→ 自动生成 : 跳过
+```
+
+**★ 多项目遍历逻辑**（`HAS_MULTI_PROJECTS = true` 时生效，单项目跳过本段）：
+
+```
+Step 1.2 模块定位回退路径（L2 不存在时）：
+  对每个前端根目录（ALL_FRONTEND_ROOTS）：
+    list_dir({root}/{frontend_layers.page.dir})  → 追加到候选
+    list_dir({root}/{frontend_layers.bll.dir})   → 追加到候选
+  对每个后端根目录（ALL_BACKEND_ROOTS）：
+    list_dir({root}/{backend_layers.bll.dir})    → 追加到候选
+    list_dir({root}/{backend_layers.entity.dir}) → 追加到候选
+
+Step 1.6 L1 自动生成时：
+  遍历 ALL_FRONTEND_ROOTS：
+    扫描 {root}/{frontend_layers.page.dir}/*.vue
+    → L1 前端模块表标注归属项目（路径前缀）
+  遍历 ALL_BACKEND_ROOTS：
+    扫描 {root}/{backend_layers.bll.dir}/*.cs
+    → L1 后端模块表标注归属项目（路径前缀）
+  
+  若某项目的分层结构与主 frontend_layers/backend_layers 不一致：
+    检查 manifest.paths.project_overrides[{项目目录名}]
+    → 存在则使用覆盖值，不存在则使用主配置默认值
+```
+
+**🟢 简单迭代快速路径**：L1 命中唯一模块 + 无跨模块调用 → 跳过 step-1.3~1.4，仅保留 step-1.5 验证确认。
+
 **产出**：`03-技术方案/{{DOC_03_TECHNICAL}}`（模板：`phase-03-技术方案.md`，优先级见启动协议 §模板解析优先级），必须包含：
 - 现状与痛点
 - 改造方案（DDL、数据流、页面设计）
@@ -41,7 +91,7 @@
 1. **从方案文档的「代码改动范围」表提取所有新增/修改的符号**（类名、方法名、异常类、路由名等）
 2. **按优先级排序，最多取 5 项**：
    - 优先级 1（必验）：异常类（`XxxException`）、接口签名（`IMgr` 方法）
-   - 优先级 2（必验）：继承基类（`: SJMgrBase` / `: api`）、路由名（`[WebApi("...")]`）
+   - 优先级 2（必验）：继承基类（`: {{backend_layers.bll.base_class}}` / `: {{frontend_layers.net.base_class}}`）、路由名（`[WebApi("...")]`）
    - 优先级 3（按需验）：前端类名大小写、参数绑定方式、权限前提
 3. **每项用 `search_content` 在代码库中搜索一次**，确认实际存在
 4. **超过 5 项时**：只验前 5 项，其余标注"⚠️ 建议后续验证"
@@ -97,7 +147,7 @@
 - [ ] 子组件是否有异步初始化方法？→ 父组件必须先等待它完成
 - [ ] 模拟延迟下时序是否仍然正确？→ 关键路径建议用延迟验证
 
-> 当前项目（Vue2）的具体 API 映射和事故案例见：`project/vue2-async-timing-patterns.md`
+> 当前项目（{{frontend_framework}}）的具体 API 映射和事故案例见：`project/{{frontend_framework}}-async-timing-patterns.md`
 
 ### ★ 评审边界与通过标准（强制，自主审查完成后执行）
 
@@ -237,7 +287,13 @@
 
 | 步骤ID | 步骤名称 | 强制 | 触发条件 |
 |--------|---------|:--:|---------|
-| step-1-explore | 代码探索 | — | 按需 |
+| step-1-explore | 代码探索（容器步骤，实际执行由子步骤条件决定） | — | 始终 |
+| step-1.1 | 意图消歧（L1匹配→候选模块） | — | 始终 |
+| step-1.2 | 模块定位（L2读取→精确文件清单） | — | 始终 |
+| step-1.3 | 关键词搜索（五维 search_content） | — | 始终（🟢简单快速路径可跳过） |
+| step-1.4 | 调用链追踪（read_file 命中函数） | — | 始终（🟢简单快速路径可跳过） |
+| step-1.5 | 验证确认（read_file 最终改动点） | ✅ | 始终 |
+| step-1.6 | 知识库缓存（L1 不存在时自动生成） | — | L1 不存在时 |
 | step-2-output | 产出技术方案文档 | ✅ | 始终 |
 | step-3-self-review | 自主审查L1/L2（关键符号验证） | ✅ | 始终 |
 | step-3x-cross-review | 独立Agent交叉审查L1/L2 | ✅ | 🟡🔴 |

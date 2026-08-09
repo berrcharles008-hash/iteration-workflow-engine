@@ -65,6 +65,18 @@ python scripts/setup-gate.py
 > Claude Code CLI 用户可跳过——Hook 层已提供硬拦截保护。
 > 也可在首次对话中由 Step A.5 自动检测并提示注入。
 
+### 新项目初始化向导
+
+在新项目中接入时，运行交互式向导自动完成全套配置：
+
+```powershell
+cd .codebuddy/skills/iteration-workflow
+pwsh scripts/init-checklist.ps1 -ProjectPath "你的项目路径"
+```
+
+向导会引导你完成：`project.manifest.yaml` 项目配置、编码规范、审查规则、门禁微核注入等。
+也可手动编辑 `project/` 下的配置文件（见下节文件地图）。
+
 ### 典型对话
 
 ```

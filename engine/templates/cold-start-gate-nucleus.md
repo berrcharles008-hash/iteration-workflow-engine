@@ -1,9 +1,9 @@
 <!--
-  cold-start-gate-nucleus v1.1
+  cold-start-gate-nucleus v1.2
   Source: gate-protocol.md 2026-07-27
-  用途：注入到 .codebuddy/memory/MEMORY.md，为 CodeBuddy IDE 提供冷启动门禁保护
-  目标环境：仅 CodeBuddy IDE（Claude Code CLI 由 Hook 层保护，不需要此文件）
-  注入方式：setup-gate.py 或 startup-protocol.md Step A.5 用户确认后写入
+  用途：注入到目标 IDE 的 memory/claude/cursorrules 配置文件，提供冷启动门禁保护
+  目标环境：CodeBuddy/Cursor (→MEMORY.md)、Claude Code (→CLAUDE.md)
+  注入方式：setup-gate.py --ide {codebuddy|claude-code|cursor} 或安装脚本自动调用
 -->
 <!-- 当 gate-protocol.md 门禁规则更新时，请同步检查本模板是否需要更新 -->
 
@@ -17,7 +17,7 @@
 
 在 write_to_file / replace_in_file / delete_file 之前，必须先执行：
 
-1. 读取 `.codebuddy/skills/iteration-workflow/runtime/ACTIVE`（1 个文件，~2 行）
+1. 读取 `.{{IDE_DIR}}/skills/iteration-workflow/runtime/ACTIVE`（1 个文件，~2 行）
 2. 解析 Line 2 的 `STATUS` 和 `PHASE`（格式：`STATUS=xxx PHASE=xx`）
 
 | 条件 | 动作 |
@@ -72,12 +72,12 @@
 ### 层 2：完整门禁（Skill 加载后生效）
 
 若 `iteration-workflow` Skill 已被加载，以
-`.codebuddy/skills/iteration-workflow/engine/gate-protocol.md`
+`.{{IDE_DIR}}/skills/iteration-workflow/engine/gate-protocol.md`
 完整决策树为准，层 1 微核退化为不执行。
 
 **注意**：`.claude/settings.json` 的 PreToolUse Hook 仅在 Claude Code CLI 中生效。
-CodeBuddy IDE 不支持 PreToolUse Hook。
+其他 IDE 可能不支持 PreToolUse Hook，以 Prompt 层门禁为主。
 
 ### 逃生口
 
-`GATE_BYPASS=1` 环境变量 或 `.codebuddy/hooks/.gate-bypass` 标记文件。
+`GATE_BYPASS=1` 环境变量 或 `.{{IDE_DIR}}/hooks/.gate-bypass` 标记文件。

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 /**
  * 门禁回归测试执行器
  * 
@@ -102,6 +102,46 @@ const TESTS = [
     tool: 'write_to_file', file: '.claude/skills/iteration-workflow/engine/test.txt',
     expectExit: 0, expectBlock: false
   },
+
+  // ── Phase E: 多IDE场景测试（去平台化验证）────────────────
+  // E1: .claude/hooks/.gate-bypass → 放行（验证多路径检测）
+  {
+    id: 'E1', name: '.claude .gate-bypass → 放行',
+    phase: '', active: false,
+    gateBypassFile: '.claude/hooks/.gate-bypass',
+    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/test.js',
+    expectExit: 0, expectBlock: false
+  },
+  // E2: .cursor/hooks/.gate-bypass → 放行（验证 cursor 路径）
+  {
+    id: 'E2', name: '.cursor .gate-bypass → 放行',
+    phase: '', active: false,
+    gateBypassFile: '.cursor/hooks/.gate-bypass',
+    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/test.js',
+    expectExit: 0, expectBlock: false
+  },
+  // E3: 01阶段写 .cursor/skills/... → 放行（验证 EXEMPT_PATHS 含 cursor）
+  {
+    id: 'E3', name: '01阶段写 Cursor Skill → 放行',
+    phase: '01', active: true,
+    tool: 'write_to_file', file: '.cursor/skills/iteration-workflow/test.txt',
+    expectExit: 0, expectBlock: false
+  },
+  // E4: 01阶段写 .codex/skills/... → 放行（验证 EXEMPT_PATHS 含 codex）
+  {
+    id: 'E4', name: '01阶段写 Codex Skill → 放行',
+    phase: '01', active: true,
+    tool: 'write_to_file', file: '.codex/skills/iteration-workflow/test.txt',
+    expectExit: 0, expectBlock: false
+  },
+  // E5: .codex/hooks/.gate-bypass → 放行（验证 codex 路径）
+  {
+    id: 'E5', name: '.codex .gate-bypass → 放行',
+    phase: '', active: false,
+    gateBypassFile: '.codex/hooks/.gate-bypass',
+    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/test.js',
+    expectExit: 0, expectBlock: false
+  },
 ];
 
 // ── 工具函数 ──────────────────────────────────────────
@@ -135,6 +175,23 @@ function setupState(testCase) {
     }
   } else {
     writeFileSync(ACTIVE_FILE, 'none', 'utf-8');
+  }
+
+  // 创建 gate-bypass 标记文件（Phase E: 多IDE路径测试）
+  if (testCase.gateBypassFile) {
+    const bypassPath = join(PROJECT_DIR, testCase.gateBypassFile);
+    mkdirSync(dirname(bypassPath), { recursive: true });
+    writeFileSync(bypassPath, '', 'utf-8');
+  }
+}
+
+/** 清理 gate-bypass 标记文件 */
+function cleanupBypassFile(testCase) {
+  if (testCase.gateBypassFile) {
+    const bypassPath = join(PROJECT_DIR, testCase.gateBypassFile);
+    try { unlinkSync(bypassPath); } catch {}
+    // 尝试删除父目录（如果为空）
+    try { rmdirSync(dirname(bypassPath)); } catch {}
   }
 }
 
@@ -188,6 +245,7 @@ for (const tc of TESTS) {
   try {
     setupState(tc);
     const result = runHook(tc);
+    cleanupBypassFile(tc);
     
     const isPass = result.exitCode === tc.expectExit;
     const isKnownIssue = tc.id === 'S4' || tc.id === 'S5';

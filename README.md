@@ -82,6 +82,7 @@ sj-iteration-workflow-engine/
 │   ├── review-models-configurator.py
 │   ├── review-gateway.py
 │   ├── setup-gate.py                ← 微核注入脚本 (P-045)
+│   ├── init-checklist.ps1           ← 项目初始化向导 (P-039)
 │   └── run-gate-tests.mjs           ← 门禁回归测试
 ├── quickstart.md                    ← 5分钟快速入门
 ├── SKILL.md                         ← Claude Code 入口
@@ -118,6 +119,11 @@ sj-iteration-workflow-engine/
 - `coding-conventions.md` — 项目编码规范
 - `code-review-rules.md` — 代码审查规则矩阵
 - `deploy-config.yaml` — 部署配置
+
+> 或运行交互式初始化向导，自动完成全套配置：
+> ```powershell
+> pwsh scripts/init-checklist.ps1 -ProjectPath "你的项目路径"
+> ```
 
 ### 项目级覆盖
 
@@ -204,6 +210,7 @@ sj-iteration-workflow-engine/
 │   ├── review-models-configurator.py
 │   ├── review-gateway.py
 │   ├── setup-gate.py                ← Nucleus injection (P-045)
+│   ├── init-checklist.ps1           ← Project init wizard (P-039)
 │   └── run-gate-tests.mjs           ← Gate regression test
 ├── quickstart.md                    ← 5-minute quick start
 ├── SKILL.md                         ← Claude Code SKILL entry
@@ -240,6 +247,11 @@ Project-level configuration lives in `project/`. Edit these files to match your 
 - `coding-conventions.md` — Project coding conventions
 - `code-review-rules.md` — Code review rules matrix
 - `deploy-config.yaml` — Deploy configuration
+
+> Or run the interactive setup wizard:
+> ```powershell
+> pwsh scripts/init-checklist.ps1 -ProjectPath "your-project-path"
+> ```
 
 ### Project-Level Overrides
 

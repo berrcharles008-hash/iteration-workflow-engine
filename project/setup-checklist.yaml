@@ -1,0 +1,119 @@
+# setup-checklist.yaml — 项目初始化步骤定义
+# 版本: v1.0.0（039迭代）
+# 用途: 由 init-checklist.ps1 读取，定义新项目初始化向导的完整步骤序列
+
+# 步骤类型:
+#   auto   — 脚本自动执行
+#   manual — 提示用户手动操作，完成后重新运行脚本
+#   verify — 验证手动步骤是否完成（检查必填字段/文件是否存在/占位符残留）
+
+# 步骤状态 (写入 .setup-state.yaml):
+#   pending     — 尚未开始
+#   in_progress — 正在执行（故障恢复标记）
+#   completed   — 已完成
+#   failed      — 执行失败（可重试）
+#   skipped     — 用户手动跳过
+
+steps:
+  - id: "engine-ready"
+    name: "引擎仓库就绪"
+    type: verify
+    depends: []
+    description: "验证 iteration-workflow-engine 仓库文件完整"
+    verify:
+      type: file_exists
+      path: "scripts/install.ps1"
+      fail_message: "引擎仓库 scripts/install.ps1 不存在，请先 clone: git clone <engine-repo>"
+
+  - id: "dep-check"
+    name: "依赖检查"
+    type: auto
+    depends: ["engine-ready"]
+    description: "检查运行时依赖（Python + pyyaml, Node.js）"
+    verify:
+      type: commands
+      commands:
+        - { cmd: "python --version", fail_message: "Python 未安装或不在 PATH 中" }
+        - { cmd: 'python -c "import yaml; print(yaml.__version__)"', fail_message: "pyyaml 未安装: pip install pyyaml" }
+        - { cmd: "node --version", fail_message: "Node.js 未安装或不在 PATH 中" }
+
+  - id: "ide-dir"
+    name: "IDE 标记目录"
+    type: auto
+    depends: ["dep-check"]
+    description: "创建 IDE 标记目录（.codebuddy / .claude / .cursor）"
+    verify:
+      type: dir_exists
+      path: ".codebuddy"
+      fail_message: ".codebuddy 目录创建失败，请手动创建"
+
+  - id: "backup"
+    name: "备份已有配置"
+    type: auto
+    depends: ["ide-dir"]
+    description: "备份已有的 .codebuddy/ 等目录，防止覆盖丢失"
+    verify:
+      type: any_of
+      checks:
+        - { type: "noop", description: "备份步骤默认通过；若失败则标记为 skipped" }
+
+  - id: "run-install"
+    name: "运行 install.ps1"
+    type: auto
+    depends: ["engine-ready", "dep-check", "ide-dir", "backup"]
+    description: "运行引擎核心安装脚本（8步全自动）"
+    verify:
+      type: file_exists
+      path: ".codebuddy/skills/iteration-workflow/SKILL.md"
+      fail_message: "SKILL.md 未生成，请检查 install.ps1 执行日志"
+
+  - id: "fill-manifest"
+    name: "填写项目清单"
+    type: manual
+    depends: ["run-install"]
+    description: "编辑 .codebuddy/skills/iteration-workflow/project/project.manifest.yaml"
+    verify:
+      type: yaml_fields_not_empty
+      path: ".codebuddy/skills/iteration-workflow/project/project.manifest.yaml"
+      fields: ["project_name", "tech_stack"]
+      fail_message: "project.manifest.yaml 中必填字段（project_name, tech_stack）为空"
+    hints:
+      - "请打开 project.manifest.yaml 填写 project_name, tech_stack, paths 等字段"
+      - "完成后重新运行 init-checklist.ps1 继续"
+
+  - id: "fill-conventions"
+    name: "填写编码规范"
+    type: manual
+    depends: ["fill-manifest"]
+    description: "编辑编码规范文件，确保无 TODO/占位符残留"
+    verify:
+      type: no_placeholder_in_file
+      path: ".codebuddy/skills/iteration-workflow/project/coding-conventions.md"
+      placeholders: ["TODO", "FIXME", "{{", "}}"]
+      fail_message: "coding-conventions.md 中仍存在 TODO/FIXME/{{}} 占位符"
+    hints:
+      - "请编辑 coding-conventions.md，填写项目实际的编码规范"
+      - "完成后重新运行 init-checklist.ps1 继续"
+
+  - id: "gate-check"
+    name: "门禁自检"
+    type: auto
+    depends: ["run-install"]
+    description: "运行门禁自检脚本，验证安装完整性"
+    verify:
+      type: command_exit_zero
+      cmd: "node .codebuddy/skills/iteration-workflow/scripts/run-gate-tests.mjs --quick"
+      fail_message: "门禁自检失败，请查看错误日志后修复"
+
+  - id: "trial-run"
+    name: "首次试运行"
+    type: manual
+    depends: ["gate-check"]
+    description: "在 IDE 中发起第一次对话，验证迭代工作流正常启动"
+    verify:
+      type: noop
+      description: "需要用户手动确认"
+    hints:
+      - "请在 IDE 对话中输入: 开始迭代：集成验证"
+      - "确认 Skill 正常加载、门禁生效、迭代创建成功"
+      - "完成后重新运行 init-checklist.ps1 以完成初始化"

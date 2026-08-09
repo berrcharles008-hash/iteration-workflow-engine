@@ -18,7 +18,6 @@
 mkdir -p .skills/iteration-workflow
 cp -r engine/             .skills/iteration-workflow/engine/
 cp -r project/            .skills/iteration-workflow/project/
-cp -r domain-plugins/     .skills/iteration-workflow/domain-plugins/
 cp -r scripts/            .skills/iteration-workflow/scripts/
 cp SKILL.template.md       .skills/iteration-workflow/
 cp README.md LICENSE CONTRIBUTING.md .skills/iteration-workflow/
@@ -54,4 +53,4 @@ node scripts/run-gate-tests.mjs --quick
 
 ---
 
-> **Phase C 完善**：本文由 `install.sh --ide generic` 自动复制到目标目录。
+> **Phase E 完善**：本文由 `install.sh --ide generic` 自动复制到目标目录。

@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""setup-gate.py — 冷启动门禁微核注入脚本
+"""setup-gate.py — 多 IDE 冷启动门禁微核注入脚本
 
-将 cold-start-gate-nucleus 注入到项目 .codebuddy/memory/MEMORY.md，
-为 CodeBuddy IDE 提供冷启动门禁保护。
+将 cold-start-gate-nucleus 注入到目标 IDE 的配置文件，
+为 Agent IDE 提供冷启动门禁保护。
 
-环境感知：
-  - CodeBuddy IDE（.codebuddy/memory/ 目录存在）→ 执行注入
-  - Claude Code CLI（无 .codebuddy/memory/）→ 跳过，输出提示
+支持 IDE：
+  - CodeBuddy (.codebuddy/memory/MEMORY.md)
+  - Claude Code (CLAUDE.md)
+  - Cursor (.cursorrules)
 
 用法：
-  python setup-gate.py              # 检测并注入（幂等）
-  python setup-gate.py --check      # 仅检测，不写入
-  python setup-gate.py --force      # 强制重新注入（覆盖旧版本）
+  python setup-gate.py                  # 自动检测并注入（幂等）
+  python setup-gate.py --ide cursor     # 指定目标 IDE
+  python setup-gate.py --check          # 仅检测，不写入
+  python setup-gate.py --force          # 强制重新注入（覆盖旧版本）
 """
 
 import os
@@ -26,6 +28,14 @@ NUCLEUS_TEMPLATE = "cold-start-gate-nucleus.md"
 NUCLEUS_MARKER_PREFIX = "cold-start-gate-nucleus"   # 版本无关：只匹配前缀
 NUCLEUS_VERSION = "v1.0"                              # 默认值；启动时由模板动态覆盖
 GATE_MARKER = "当 gate-protocol.md 门禁规则更新时"
+
+# IDE 映射：ide_dir 用于 {{IDE_DIR}} 占位符替换 + 技能路径探测
+#          target   用于确定微核注入的目标文件（项目根目录相对路径）
+IDE_MAP = {
+    "codebuddy":   {"ide_dir": ".codebuddy", "target": "memory/MEMORY.md", "desc": "CodeBuddy IDE"},
+    "claude-code": {"ide_dir": ".claude",    "target": "CLAUDE.md",        "desc": "Claude Code (CLAUDE.md)"},
+    "cursor":      {"ide_dir": ".cursor",    "target": ".cursorrules",     "desc": "Cursor (.cursorrules)"},
+}
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 TEMPLATE_DIR = SCRIPT_DIR.parent / "engine" / "templates"
@@ -52,40 +62,64 @@ def _read_template_version() -> str:
 
 # ─── 环境检测 ───────────────────────────────────────────
 
-def detect_environment():
-    """检测当前 IDE 环境，返回 (is_codebuddy, memory_dir_path)
+def detect_environment(ide_hint=None):
+    """检测 IDE 环境，返回 (ide_key, target_path, ide_dir)
     
-    从脚本位置向上查找项目根目录（包含 .codebuddy/ 的目录），
-    而非依赖 cwd（脚本可能从任意位置运行）。
+    Args:
+        ide_hint: 指定的 IDE key，如 "codebuddy"/"claude-code"/"cursor"。
+                  None 时自动检测（优先 CodeBuddy → Claude Code → Cursor）。
+
+    Returns:
+        (ide_key, target_path, ide_dir) 或 (None, None, None)
     """
-    # Walk up from script dir to find project root (dir containing .codebuddy/)
+    # 找到项目根目录（包含任意 IDE 目录的目录）
     candidate = SCRIPT_DIR
+    project_root = None
     for _ in range(5):
-        if (candidate / ".codebuddy").is_dir():
-            memory_dir = candidate / ".codebuddy" / "memory"
-            return True, memory_dir
+        if (candidate / ".codebuddy").is_dir() or \
+           (candidate / ".claude").is_dir() or \
+           (candidate / ".cursor").is_dir():
+            project_root = candidate
+            break
         candidate = candidate.parent
-    # Fallback: try cwd
-    cwd = Path.cwd()
-    memory_dir = cwd / ".codebuddy" / "memory"
-    return memory_dir.is_dir(), memory_dir
+
+    if project_root is None:
+        # Fallback: use cwd
+        project_root = Path.cwd()
+
+    if ide_hint:
+        info = IDE_MAP.get(ide_hint)
+        if not info:
+            return None, None, None
+        target_path = project_root / info["target"]
+        return ide_hint, target_path, info["ide_dir"]
+
+    # 自动检测：按优先级 CodeBuddy → Claude Code → Cursor
+    for key, info in IDE_MAP.items():
+        if (project_root / info["ide_dir"]).is_dir():
+            target_path = project_root / info["target"]
+            return key, target_path, info["ide_dir"]
+
+    # 无任何 IDE 目录，默认回退到 CodeBuddy
+    target_path = project_root / "MEMORY.md"
+    return "codebuddy", target_path, ".codebuddy"
 
 
 # ─── 检查 ───────────────────────────────────────────────
 
-def has_nucleus(memory_md_path: Path) -> bool:
-    """检查 MEMORY.md 是否已包含微核段（按前缀匹配，版本无关）"""
-    if not memory_md_path.exists():
+def has_nucleus(target_path: Path) -> bool:
+    """检查目标文件是否已包含微核段（按前缀匹配，版本无关）"""
+    if not target_path.exists():
         return False
-    content = memory_md_path.read_text(encoding="utf-8")
+    content = target_path.read_text(encoding="utf-8")
     return NUCLEUS_MARKER_PREFIX in content
 
 
-def get_nucleus_version(memory_md_path: Path) -> str:
+def get_nucleus_version(target_path: Path) -> str:
     """Get version of injected nucleus, or None if not present"""
-    if not memory_md_path.exists():
+    if not target_path.exists():
         return None
-    content = memory_md_path.read_text(encoding="utf-8")
+    content = target_path.read_text(encoding="utf-8")
     for line in content.split("\n"):
         if "cold-start-gate-nucleus" in line:
             parts = line.strip().split()
@@ -95,49 +129,46 @@ def get_nucleus_version(memory_md_path: Path) -> str:
     return None
 
 
-def compute_template_hash() -> str:
-    """计算模板文件的 SHA256"""
-    if not TEMPLATE_PATH.exists():
-        return "TEMPLATE_NOT_FOUND"
-    content = TEMPLATE_PATH.read_bytes()
-    return hashlib.sha256(content).hexdigest()[:16]
+# ─── 模板渲染 ───────────────────────────────────────────
+
+def render_template(ide_dir: str) -> str:
+    """读取模板并替换 {{IDE_DIR}} 占位符"""
+    raw = TEMPLATE_PATH.read_text(encoding="utf-8")
+    return raw.replace("{{IDE_DIR}}", ide_dir)
 
 
 # ─── 注入 ───────────────────────────────────────────────
 
-def inject_nucleus(memory_md_path: Path) -> bool:
-    """Inject nucleus template into MEMORY.md (preserve existing content)"""
+def inject_nucleus(target_path: Path, ide_dir: str) -> bool:
+    """Inject nucleus template into target file (preserve existing content)"""
     if not TEMPLATE_PATH.exists():
         safe_print(f"[FAIL] Template not found: {TEMPLATE_PATH}")
         return False
 
-    nucleus_content = TEMPLATE_PATH.read_text(encoding="utf-8")
+    nucleus_content = render_template(ide_dir)
 
-    if memory_md_path.exists():
-        existing = memory_md_path.read_text(encoding="utf-8")
+    if target_path.exists():
+        existing = target_path.read_text(encoding="utf-8")
         # 如果已有内容，追加到末尾（用分隔线隔开）
         new_content = nucleus_content + "\n\n---\n\n" + existing
     else:
-        memory_md_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
         new_content = nucleus_content
 
-    memory_md_path.write_text(new_content, encoding="utf-8")
+    target_path.write_text(new_content, encoding="utf-8")
     return True
 
 
-def force_inject(memory_md_path: Path) -> bool:
+def force_inject(target_path: Path, ide_dir: str) -> bool:
     """Force re-injection (remove old nucleus, write fresh)"""
     if not TEMPLATE_PATH.exists():
         safe_print(f"[FAIL] Template not found: {TEMPLATE_PATH}")
         return False
 
-    nucleus_content = TEMPLATE_PATH.read_text(encoding="utf-8")
+    nucleus_content = render_template(ide_dir)
 
-    if memory_md_path.exists():
-        existing = memory_md_path.read_text(encoding="utf-8")
-        # Remove old nucleus block: from "cold-start-gate-nucleus" marker
-        # through the gate-protocol reminder comment line (inclusive).
-        # Handles both single-line and multi-line comment formats.
+    if target_path.exists():
+        existing = target_path.read_text(encoding="utf-8")
         lines = existing.split("\n")
         new_lines = []
         in_old_nucleus = False
@@ -153,15 +184,22 @@ def force_inject(memory_md_path: Path) -> bool:
             if in_old_nucleus:
                 continue
             new_lines.append(line)
-        # Remove trailing blank lines/separtors left by removal
         clean = "\n".join(new_lines).strip()
         new_content = nucleus_content + "\n\n" + clean if clean else nucleus_content
     else:
-        memory_md_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
         new_content = nucleus_content
 
-    memory_md_path.write_text(new_content, encoding="utf-8")
+    target_path.write_text(new_content, encoding="utf-8")
     return True
+
+
+def compute_template_hash() -> str:
+    """计算模板文件的 SHA256"""
+    if not TEMPLATE_PATH.exists():
+        return "TEMPLATE_NOT_FOUND"
+    content = TEMPLATE_PATH.read_bytes()
+    return hashlib.sha256(content).hexdigest()[:16]
 
 
 # ─── 主流程 ─────────────────────────────────────────────
@@ -183,30 +221,30 @@ def safe_print(*args, **kwargs):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Inject cold-start gate nucleus into MEMORY.md")
+    parser = argparse.ArgumentParser(description="Inject cold-start gate nucleus (multi-IDE)")
+    parser.add_argument("--ide", choices=list(IDE_MAP.keys()),
+                        help="Target IDE (default: auto-detect)")
     parser.add_argument("--check", action="store_true", help="Check only, no write")
     parser.add_argument("--force", action="store_true", help="Force re-injection")
     args = parser.parse_args()
 
-    is_codebuddy, memory_dir = detect_environment()
+    ide_key, target_path, ide_dir = detect_environment(ide_hint=args.ide)
 
-    if not is_codebuddy:
-        safe_print("[INFO] Non-CodeBuddy IDE environment (.codebuddy/memory/ not found)")
-        safe_print("       Gate protection provided by Claude Code CLI PreToolUse Hook.")
-        safe_print("       Nucleus injection not needed. Skipping.")
-        return 0
+    if ide_key is None:
+        safe_print(f"[FAIL] Unknown IDE: {args.ide}")
+        safe_print(f"       Supported: {', '.join(IDE_MAP.keys())}")
+        return 1
 
     # 在做任何检查/注入前，先从模板同步最新版本号，避免日志中显示过时版本
     _read_template_version()
 
-    memory_md_path = memory_dir / "MEMORY.md"
-    already_has = has_nucleus(memory_md_path)
-    current_ver = get_nucleus_version(memory_md_path)
-
+    already_has = has_nucleus(target_path)
+    current_ver = get_nucleus_version(target_path)
     template_hash = compute_template_hash()
+    ide_desc = IDE_MAP[ide_key]["desc"]
 
-    safe_print(f"Env : CodeBuddy IDE")
-    safe_print(f"Target: {memory_md_path}")
+    safe_print(f"IDE : {ide_desc}")
+    safe_print(f"Target: {target_path}")
     safe_print(f"Template: {TEMPLATE_PATH} (SHA256: {template_hash})")
 
     if already_has and not args.force:
@@ -218,24 +256,25 @@ def main():
         if already_has:
             safe_print(f"[OK] Check passed: nucleus present ({current_ver})")
         else:
-            safe_print(f"[WARN] Injection needed: MEMORY.md lacks cold-start gate nucleus")
-            safe_print(f"       Run 'python setup-gate.py' to inject.")
+            safe_print(f"[WARN] Injection needed: {target_path.name} lacks cold-start gate nucleus")
+            hint_cmd = f" --ide {ide_key}" if args.ide else ""
+            safe_print(f"       Run 'python setup-gate.py{hint_cmd}' to inject.")
         return 0 if already_has else 1
 
     if args.force and already_has:
         safe_print(f"[FORCE] Re-injecting ({current_ver} -> {NUCLEUS_VERSION})...")
-        success = force_inject(memory_md_path)
+        success = force_inject(target_path, ide_dir)
     else:
         safe_print(f"[INJECT] Writing cold-start gate nucleus ({NUCLEUS_VERSION})...")
-        success = inject_nucleus(memory_md_path)
+        success = inject_nucleus(target_path, ide_dir)
 
     if success:
-        safe_print(f"[OK] Injection successful! MEMORY.md now contains cold-start gate nucleus.")
+        safe_print(f"[OK] Injection successful! {target_path.name} now contains cold-start gate nucleus.")
         safe_print(f"     Version: {NUCLEUS_VERSION}  Hash: {template_hash}")
-        if has_nucleus(memory_md_path):
-            safe_print(f"     Verify: nucleus confirmed in MEMORY.md")
+        if has_nucleus(target_path):
+            safe_print(f"     Verify: nucleus confirmed in {target_path.name}")
         else:
-            safe_print(f"     [WARN] Post-injection verification failed, check MEMORY.md")
+            safe_print(f"     [WARN] Post-injection verification failed, check {target_path.name}")
             return 2
         return 0
     else:

@@ -1,0 +1,27 @@
+# Cursor Rules — iteration-workflow
+
+## ★ 修改门禁（最高优先级）
+
+任何代码修改前，必须先通过 iteration-workflow 门禁检查：
+
+1. 读取 `runtime/ACTIVE` 文件
+2. 检查当前迭代状态（STATUS / PHASE）
+3. 仅在 PHASE=04（开发实现）阶段允许修改业务代码
+4. GATE_BYPASS=1 可绕行
+
+## 迭代工作流
+
+按 01-07 标准阶段执行：需求分析 → 需求评审 → 技术方案 → 开发实现 → 测试验证 → 发布上线 → 迭代回顾
+
+## 关键原则
+
+- 阶段不可跳过，按序推进
+- 04 阶段必须先出任务清单，用户确认后再编码
+- 文档驱动：每个阶段产出作为下阶段输入
+
+## 文件组织
+
+- `docs/iterations/` — 迭代文档
+- `skills/iteration-workflow/runtime/` — 运行时状态
+- `skills/iteration-workflow/engine/` — 引擎核心
+- `skills/iteration-workflow/project/` — 项目配置

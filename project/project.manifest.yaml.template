@@ -23,10 +23,13 @@ paths:
   docs: "docs/iterations"  # iteration documents output directory
   sql: "sql"               # SQL scripts output directory
 
-# Build verification (optional, leave empty to skip)
+# Build commands (leave empty to skip)
 build:
-  backend_command: ""      # e.g., "msbuild Solution.sln /p:Configuration=Debug /t:Build /v:minimal"
-  frontend_command: ""     # e.g., "npm run build"
+  frontend:
+    dev_command: ""
+    build_command: ""
+  backend:
+    build_command: ""
 
 # Iteration workflow configuration
 workflow:
