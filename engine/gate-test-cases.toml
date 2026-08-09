@@ -53,7 +53,7 @@ Hook 应无条件放行（exit 0），工具正常执行。
 active = "2026-07-23-020-S1门禁自动化回归测试矩阵"
 phase = "04"
 tool = "replace_in_file"
-file_path = "front-end/my-app_upgrade/src/pages/triage/triage_emergency_record.ts"
+file_path = "front-end/my-app_upgrade/src/pages/example/example_page.ts"
 stdin_type = "normal"
 gate_bypass = false
 [case.expect]
@@ -157,7 +157,7 @@ Hook 应拦截（exit 2），提示当前阶段不允许文件写入。
 active = "2026-07-23-020-S1门禁自动化回归测试矩阵"
 phase = "05"
 tool = "replace_in_file"
-file_path = "front-end/my-app_upgrade/src/pages/triage/test.vue"
+file_path = "front-end/my-app_upgrade/src/pages/example/test.vue"
 stdin_type = "normal"
 gate_bypass = false
 [case.expect]
