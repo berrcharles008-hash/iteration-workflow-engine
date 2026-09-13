@@ -1,0 +1,34 @@
+# ============================================================
+# .gitattributes — 行尾与二进制文件约定
+# ============================================================
+# 【背景】此前本仓库无 .gitattributes 且 core.autocrlf=true，导致：
+#   1) 工作区行尾混用（部分文件 LF、部分 CRLF，甚至同一文件内混合）
+#   2) git 频繁报 "LF will be replaced by CRLF"，下次 checkout 会产生 diff 噪音
+#
+# 【约定】统一以 LF 存库、以 LF 检出（跨平台一致，避免 Windows 检出差异）。
+#   已存在的工作区 CRLF 文件会在下次 git checkout 时自动转为 LF；
+#   由于索引中本已是 LF，此过程不会产生内容变更。
+# ============================================================
+
+# ── 统一行尾：所有文本文件 ──────────────────────────────
+* text=auto eol=lf
+
+# ── 二进制文件：不做行尾转换 ────────────────────────────
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.xlsx  binary
+*.xls   binary
+*.docx  binary
+*.zip   binary
+*.gz    binary
+*.7z    binary
+*.dll   binary
+*.exe   binary
+*.pyc   binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary

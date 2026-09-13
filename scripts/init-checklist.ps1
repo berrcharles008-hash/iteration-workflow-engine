@@ -119,7 +119,16 @@ with open(r'$FilePath', 'r', encoding='utf-8') as f:
     data = yaml.safe_load(f) or {}
 with open(r'$tempJson', 'r', encoding='utf-8-sig') as f:
     fields = json.load(f)
-missing = [f for f in fields if not data.get(f)]
+
+def get_path(root, dotted):
+    cur = root
+    for part in dotted.split('.'):
+        if not isinstance(cur, dict) or part not in cur:
+            return None
+        cur = cur[part]
+    return cur
+
+missing = [f for f in fields if not get_path(data, f)]
 if missing:
     print('MISSING:' + ','.join(missing))
     sys.exit(1)

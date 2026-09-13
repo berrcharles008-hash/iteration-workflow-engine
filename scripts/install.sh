@@ -118,7 +118,8 @@ if $DRY_RUN; then
     echo "    $ mkdir -p $SKILL_TARGET/runtime && echo 'none\nSTATUS=none PHASE=none' > ACTIVE"
     echo ""
     echo "  Step 6 (模板注入 + 验证):"
-    echo "    $ python scripts/inject-template.py --manifest $SKILL_TARGET/project/project.manifest.yaml"
+    echo "    $ 若 project.manifest.yaml 不存在，从 .template 创建"
+    echo "    $ python scripts/inject-template.py --manifest $SKILL_TARGET/project/project.manifest.yaml --template $SKILL_TARGET/SKILL.template.md --output $SKILL_TARGET/SKILL.md"
     echo "    $ 验证: 扫描 SKILL.md 中残留 {{}} 占位符"
     echo ""
     case $DETECTED_IDE in
@@ -228,13 +229,29 @@ fi
 # ── Step 6: 模板注入 + 占位符验证 ─────────────────────
 echo "[Step 6/8] Injecting template..."
 INJECTED_OK=0
+MANIFEST_PATH="$SKILL_TARGET/project/project.manifest.yaml"
+MANIFEST_TPL="$SKILL_TARGET/project/project.manifest.yaml.template"
+
+# 首次安装：从模板创建 project.manifest.yaml（已存在则不覆盖，避免抹掉用户已填内容）
+if [ ! -f "$MANIFEST_PATH" ] && [ -f "$MANIFEST_TPL" ]; then
+    cp "$MANIFEST_TPL" "$MANIFEST_PATH"
+    echo "  ✅ Created project.manifest.yaml from template (to be filled in)"
+fi
+
 if command -v python &>/dev/null; then
-    python "$ENGINE_DIR/scripts/inject-template.py" --manifest "$SKILL_TARGET/project/project.manifest.yaml" && INJECTED_OK=1 || true
+    # 显式传入 template/output 绝对路径：脚本默认值是相对当前工作目录，
+    # 不传会导致从项目根找不到 SKILL.template.md 而注入失败
+    python "$ENGINE_DIR/scripts/inject-template.py" --manifest "$MANIFEST_PATH" --template "$SKILL_TARGET/SKILL.template.md" --output "$SKILL_TARGET/SKILL.md" && INJECTED_OK=1 || true
 elif command -v python3 &>/dev/null; then
-    python3 "$ENGINE_DIR/scripts/inject-template.py" --manifest "$SKILL_TARGET/project/project.manifest.yaml" && INJECTED_OK=1 || true
+    python3 "$ENGINE_DIR/scripts/inject-template.py" --manifest "$MANIFEST_PATH" --template "$SKILL_TARGET/SKILL.template.md" --output "$SKILL_TARGET/SKILL.md" && INJECTED_OK=1 || true
 else
+    # 无 Python 兜底：直接复制模板，保证 SKILL.md 可用
+    if [ -f "$SKILL_TARGET/SKILL.template.md" ] && [ ! -f "$SKILL_TARGET/SKILL.md" ]; then
+        cp "$SKILL_TARGET/SKILL.template.md" "$SKILL_TARGET/SKILL.md"
+        echo "  ✅ SKILL.md created by direct copy (Python unavailable)"
+    fi
     echo "  ⚠  Python not found. Skipping template injection."
-    echo "     Run manually: python $ENGINE_DIR/scripts/inject-template.py --manifest $SKILL_TARGET/project/project.manifest.yaml"
+    echo "     Run manually: python $ENGINE_DIR/scripts/inject-template.py --manifest $MANIFEST_PATH --template $SKILL_TARGET/SKILL.template.md --output $SKILL_TARGET/SKILL.md"
 fi
 
 # ── 方案 B: 占位符验证 ──

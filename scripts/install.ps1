@@ -96,7 +96,8 @@ if ($DryRun) {
     Write-Host "    > 创建 $SkillTarget\runtime\ACTIVE (如果不存在)"
     Write-Host ""
     Write-Host "  Step 6 (模板注入):"
-    Write-Host "    > python scripts\inject-template.py --manifest $SkillTarget\project\project.manifest.yaml"
+    Write-Host "    > 若 project.manifest.yaml 不存在，从 .template 创建"
+    Write-Host "    > python scripts\inject-template.py --manifest $SkillTarget\project\project.manifest.yaml --template $SkillTarget\SKILL.template.md --output $SkillTarget\SKILL.md"
     Write-Host "    > 验证: 扫描 SKILL.md 中残留 {{}} 占位符"
     Write-Host ""
     if ($DetectedIde -in @("codebuddy","claude-code","cursor")) {
@@ -293,8 +294,18 @@ $pythonCmd = $null
 if (Get-Command python -ErrorAction SilentlyContinue) { $pythonCmd = "python" }
 elseif (Get-Command python3 -ErrorAction SilentlyContinue) { $pythonCmd = "python3" }
 
+# 首次安装：从模板创建 project.manifest.yaml（已存在则不覆盖，避免抹掉用户已填内容）
+$manifestPath = "$SkillTarget\project\project.manifest.yaml"
+$manifestTpl = "$SkillTarget\project\project.manifest.yaml.template"
+if (-not (Test-Path $manifestPath) -and (Test-Path $manifestTpl)) {
+    Copy-Item $manifestTpl $manifestPath -Force
+    Write-Host "  ✅ Created project.manifest.yaml from template (to be filled in)"
+}
+
 if ($pythonCmd) {
-    & $pythonCmd "$EngineDir\scripts\inject-template.py" --manifest "$SkillTarget\project\project.manifest.yaml"
+    # 显式传入 template/output 绝对路径：脚本默认值是相对当前工作目录，
+    # 不传会导致从项目根找不到 SKILL.template.md 而注入失败
+    & $pythonCmd "$EngineDir\scripts\inject-template.py" --manifest "$manifestPath" --template "$SkillTarget\SKILL.template.md" --output "$SkillTarget\SKILL.md"
 
     # ── 方案 B: 占位符验证 ──
     $skillMdPath = "$SkillTarget\SKILL.md"
@@ -315,8 +326,13 @@ if ($pythonCmd) {
         Write-Host "  ⏭  SKILL.md not found, skipping placeholder verification"
     }
 } else {
+    # 无 Python 兜底：直接复制模板，保证 SKILL.md 可用
+    if ((Test-Path "$SkillTarget\SKILL.template.md") -and -not (Test-Path "$SkillTarget\SKILL.md")) {
+        Copy-Item "$SkillTarget\SKILL.template.md" "$SkillTarget\SKILL.md" -Force
+        Write-Host "  ✅ SKILL.md created by direct copy (Python unavailable)"
+    }
     Write-Host "  ⚠  Python not found. Skipping template injection."
-    Write-Host "     Run manually: python $EngineDir\scripts\inject-template.py --manifest $SkillTarget\project\project.manifest.yaml"
+    Write-Host "     Run manually: python $EngineDir\scripts\inject-template.py --manifest $manifestPath --template $SkillTarget\SKILL.template.md --output $SkillTarget\SKILL.md"
 }
 
 # ── Step 7: 冷启动微核注入（多 IDE）───────────

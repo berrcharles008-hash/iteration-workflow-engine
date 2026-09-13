@@ -1,29 +1,200 @@
-# Project Manifest Template
-# ========================
-# Copy this file to `project.manifest.yaml` and fill in your project's details.
-# This file is consumed by the iteration-workflow engine at startup (Step A).
+# ============================================================
+# project.manifest.yaml — 项目元信息清单（模板）
+# ============================================================
+# 这是本 Skill 所有运行时变量的唯一数据源。
+# 变量注入协议详见 engine/template-injection.md
+#
+# 【用法】把本文件复制为 project.manifest.yaml，填写全部标 ★ 的项。
+#    install.ps1 / install.sh 会在首次安装时自动完成复制；
+#    若为手工部署，请自行复制并重命名。
+#
+# 【必填校验】init-checklist.ps1 的 fill-manifest 步骤会校验以下点号路径非空：
+#    project.name / project.workspace_root / tech_stack /
+#    paths.docs_iterations / paths.specs_dir
+#
+# 【两套占位符体系，务必区分】
+#   [A] engine/ 下形如 section.key 的小写点号占位符
+#       → 由 Agent 在 startup-protocol Step A 读取本文件后「内存替换」，不落地改文件。
+#         例：engine 中写的 database.type，运行时被替换为本文件的 database.type 值。
+#   [B] SKILL.template.md 中形如 SECTION_KEY 的大写下划线占位符
+#       → 由 scripts/inject-template.py 展平本文件后替换，产出 SKILL.md。
+#         展平规则：section/key → SECTION_KEY（点号转下划线并全大写）。
+#         因此注意：database.type 这种点号写法只适用于 [A]，
+#         若要在 [B] 中使用须写成 DATABASE_TYPE。
+#
+# 【注意】本文件内不要出现双花括号占位符语法，避免被占位符残留扫描误报。
+# ============================================================
 
-version: 1
+# schema 版本（仅作人工识别用，无程序消费者）
+version: 2
 
-# Project identification
-project_name: ""           # e.g., "MyApp"
-project_description: ""    # one-line description
+# ── 项目基础信息 ──
+# engine 引用：project.name / project.short_name / project.workspace_root
+project:
+  name: ""                 # ★必填 项目中文全名，用于迭代文档标题
+  short_name: ""           # ★必填 英文短名（不含空格），用于目录名/文件名前缀
+  workspace_root: ""       # ★必填 工作区绝对根路径；下列 paths.* 均相对此路径解析
 
-# Tech stack (used for complexity scoring and build verification)
+# ── 技术栈声明 ──
+# engine 引用：tech_stack.frontend.* / tech_stack.backend.*
+# 该段用于复杂度评估（complexity-scoring）与构建验证（phase-05）
 tech_stack:
-  language: ""             # e.g., "csharp", "typescript", "python"
-  framework: ""            # e.g., "dotnet-framework-4.0", "vue-2.6", "django"
-  database: ""             # e.g., "oracle", "mysql", "postgresql"
+  frontend:
+    framework: ""          # 如 Vue2 / Vue3 / React
+    language: ""           # 如 TypeScript / JavaScript
+    ui_library: ""         # 如 ElementUI / Ant Design
+    build_tool: ""         # 如 webpack / vite
+    package_manager: ""    # 如 npm / pnpm / yarn
+    test_framework: ""     # 无单元测试则填 N/A
+    e2e_framework: ""      # 无 E2E 则填 N/A
+  backend:
+    language: ""           # 如 C# / Java / Python
+    framework: ""          # 如 .NET Framework 4.x / Spring Boot 3 / Django
+    orm: ""                # 无 ORM 则填 N/A
+    build_tool: ""         # 如 MSBuild / dotnet / maven
+    test_framework: ""     # 无则填 N/A
+    solution_pattern: ""   # 如 *.sln / *.Web.sln；非 .NET 项目填 N/A
 
-# Paths (relative to project root)
+# ── 运行时占位符 ──
+# engine 直接引用 frontend_framework（取本顶级键）。语义 = 前端框架标识，
+# 用作文件名/模板名，取值如 vue / react / angular。
+frontend_framework: ""
+
+# ── 领域插件（可选）──
+# 启用 domain-plugins/ 下的领域规则插件，省略 = 不启用。
+# 取值 = domain-plugins/ 下的子目录名。内置两个：
+#   enterprise-legacy — Oracle + .NET + SVN 企业铁律（表名全大写、列名不加引号、SVN 中文路径等）
+#   generic           — 通用规则（无企业特定约束时的占位）
+# domain_plugin: "enterprise-legacy"
+
+# ── 数据库配置 ──
+# engine 引用：database.type / database.connections.<别名>.name|mcp_server
+database:
+  type: ""                 # ★必填 Oracle / MySQL / PostgreSQL / SQLServer
+  # ★必填 至少配置一个命名连接。别名可自定义（cis / sys / main ...）。
+  # 下面给出示例结构，请按实际增删；不需要 MCP 时可省略 mcp_server。
+  # connections:
+  #   main:
+  #     name: "<数据库名>"
+  #     mcp_server: "<MCP 数据库服务名>"
+
+# ── SQL 编写规范 ──
+# engine 引用：sql_conventions.language / sql_conventions.dml_wrapper
+sql_conventions:
+  language: ""             # 如 PL/SQL / T-SQL / MySQL
+  dml_wrapper: ""          # 如 EXECUTE IMMEDIATE；无需包装则填 N/A
+  quote_syntax: ""         # 如 q-quote (q'!...!')；无特殊语法填 N/A
+  require_commit: true     # 是否要求脚本显式提交
+
+# ── 部署目标 ──
+# engine 引用：deploy.stage1.frontend_target（phase-06 发布上线）
+deploy:
+  stage1:
+    frontend_target: ""        # 前端产物部署目录（绝对路径或相对部署根）
+    backend_target: ""         # 后端产物部署目录
+    backend_dll_pattern: ""    # 需部署的程序集通配，如 SJ.*.dll；无则填 N/A
+
+# ── 目录结构约定（相对 workspace_root）──
+# engine 引用：paths.frontend_root / paths.backend_solution / paths.docs_iterations / paths.specs_dir
+# startup-protocol Step A 会据此拼出 PROJECT_ROOT / FRONTEND_ROOT / BACKEND_SLN / ITERATIONS_DIR / SPECS_DIR
 paths:
-  root: "."                # project root directory
-  backend: ""              # backend source root (e.g., "back-end/MyApp")
-  frontend: ""             # frontend source root (e.g., "front-end/my-app")
-  docs: "docs/iterations"  # iteration documents output directory
-  sql: "sql"               # SQL scripts output directory
+  frontend_root: ""        # ★必填 前端工程根目录，如 front-end/my-app
+  frontend_src: ""         # 前端源码目录
+  frontend_dist: ""        # 前端构建产物目录
+  backend_root: ""         # 后端工程根目录
+  backend_solution: ""     # ★必填 后端解决方案文件完整相对路径，如 back-end/MyApp/My.sln
+  backend_build_output: "" # 后端构建输出目录
+  docs_iterations: "docs/iterations"  # ★必填 迭代文档根目录（通用默认值，可改）
+  specs_dir: ""                       # ★必填 Spec 活文档目录，如 .codebuddy/specs（与 IDE 相关，须自行填写）
 
-# Build commands (leave empty to skip)
+  # ===== 多项目扩展（可选）=====
+  # 当 workspace 含 N 个前端 + M 个后端时在此声明额外项目。
+  # 省略整个 additional_projects = 单项目模式（向后兼容）。
+  # additional_projects:
+  #   - root: "front-end/another_portal"      # 相对 workspace_root
+  #     type: "frontend"
+  #   - root: "back-end/AnotherService"
+  #     type: "backend"
+  #     solution: "back-end/AnotherService/Another.sln"
+  #   - root: "D:/external/shared-lib"        # 绝对路径，允许跨盘
+  #     type: "frontend"
+
+  # ===== 分层覆盖（可选，极少用）=====
+  # 仅当 additional_projects 中某项目的分层结构与主 frontend_layers/backend_layers
+  # 不同时才需要填写。
+  # project_overrides:
+  #   "project-b":                 # root 路径的尾部目录名
+  #     frontend_layers:
+  #       page:
+  #         dir: "src/views"       # 该项目用 views/ 而非 pages/
+
+# ── 分层映射（前端）──
+# Agent 在 03/04 阶段据此定位 pages → domain → bll → net 各层目录。
+# engine 引用：frontend_layers.net.base_class / frontend_layers.page.dir
+frontend_layers:
+  net:                     # 网络请求层
+    dir: ""
+    base_class: ""
+    http_get: ""
+    http_post: ""
+    super_param_source: ""
+  bll:                     # 业务逻辑层
+    dir: ""
+    base_class: ""
+  domain:                  # 领域层
+    dir: ""
+  page:                    # 页面层
+    dir: ""
+    file_pattern: ""
+    companion_file_pattern: ""
+  route:                   # 路由/参数配置文件
+    files: []
+
+# ── 分层映射（后端）──
+# engine 引用：backend_layers.bll.dir / backend_layers.bll.base_class
+backend_layers:
+  entity:
+    dir: ""
+    base_class: ""
+    key_attributes: []
+  interface:
+    dir: ""
+    naming: ""             # 如 I{Name}Mgr
+    namespace: ""
+    first_param: ""
+  bll:
+    dir: ""
+    base_class: ""
+    key_methods: []
+    constructor_params: []
+    id_generation: ""
+    soft_delete_field: ""
+    soft_delete_value: 0
+  webapi:
+    dir: ""
+    attributes: []
+    echo_method: ""
+    context_access: ""
+    mgr_access: ""
+
+# ── 编译单元注册 ──
+# 新增/删除源文件时如何登记进构建系统（phase-04 强制项）。
+# type: none = 无需登记（如纯脚本语言）；csproj / vcxproj / pom / gradle / cargo 等按实际填写。
+compilation_units:
+  type: ""
+  registration_format: ""
+  registration_entry: ""
+  mappings: []             # 形如 [{source_dir: "BLL", unit_file: "BLL/My.csproj"}]
+
+# ── 依赖注入注册方式 ──
+# type: none = 无需手工注册（如特性自动扫描）；
+# 其他取值按实际框架填写，具体步骤见对应领域插件说明。
+di_registration:
+  type: ""
+
+# ── 构建命令 ──
+# engine 引用：build.frontend.dev_command / build.build_command
+# backend.build_command 中可用 {solution} 代表 paths.backend_solution
 build:
   frontend:
     dev_command: ""
@@ -31,8 +202,22 @@ build:
   backend:
     build_command: ""
 
-# Iteration workflow configuration
-workflow:
-  default_complexity: "🟢"  # 🟢 simple / 🟡 medium / 🔴 complex
-  enable_team_agent: true   # use Team Agent mode for 🟡🔴 in phase 04
-  enable_cross_review: true # use independent Agent cross-review for 🟡🔴
+# ── 复杂度评估因素（可选）──
+# 省略本段 → 使用 engine/complexity-scoring.md §1.1 的「技术栈中立默认因素」
+# （new_db_table / new_api / affected_files / new_module / new_layer_file /
+#   layer_modification / database_logic_change / ddl_change / cross_module_impact）。
+# 定义本段 → 覆盖默认值，可增删因素或调整权重。典型场景：
+#   纯前端项目：删除 DB 类因素，增加 new_component / new_route
+#   微服务项目：增加 new_service / api_breaking_change
+# complexity_factors:
+#   factors:
+#     - id: "new_component"          # 因素标识（英文，snake_case）
+#       weight: 2                    # 固定权重；动态评分改用 weight_dynamic + rules
+#       description: "是否新增前端组件"
+#     - id: "affected_files"         # 动态权重示例
+#       weight_dynamic: true
+#       rules:
+#         - { condition: "1-2 个文件", score: 0 }
+#         - { condition: "3-5 个文件", score: 1 }
+#         - { condition: "6+ 个文件", score: 2 }
+#       description: "涉及的源文件数量"

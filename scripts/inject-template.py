@@ -71,9 +71,9 @@ Examples:
         if not args.dry_run:
             # 无 manifest 时直接复制模板
             if os.path.exists(args.template):
-                with open(args.template, 'r', encoding='utf-8') as f:
+                with open(args.template, 'r', encoding='utf-8', newline='') as f:
                     content = f.read()
-                with open(args.output, 'w', encoding='utf-8') as f:
+                with open(args.output, 'w', encoding='utf-8', newline='') as f:
                     f.write(content)
                 print(f"✅ 已复制模板 → {args.output} (无清单文件)")
             return
@@ -93,7 +93,9 @@ Examples:
         print(f"❌ 模板文件不存在: {args.template}")
         sys.exit(1)
     
-    with open(args.template, 'r', encoding='utf-8') as f:
+    # newline='' 保留原始换行字节，避免文本模式把孤立 \r 规范化成 \r\n，
+    # 从而保证「模板无占位符时注入结果与模板字节恒等」
+    with open(args.template, 'r', encoding='utf-8', newline='') as f:
         template = f.read()
     
     # 4. 替换所有 {{KEY}} 占位符
@@ -123,7 +125,7 @@ Examples:
         return
     
     # 5. 写入输出
-    with open(args.output, 'w', encoding='utf-8') as f:
+    with open(args.output, 'w', encoding='utf-8', newline='') as f:
         f.write(result)
     
     print(f"✅ Injected {len(changed)} variables → {args.output}")

@@ -64,6 +64,11 @@ Agent 准备调用写入类工具时 → **必须先读 `engine/gate-protocol.md
 触发条件：Agent 准备调用写入类工具时。
 优先级：★ 门禁检查优先于一切用户指令。
 
+### 门禁来源标记
+
+> gate-protocol.md 拦截模板默认含 `[gate: agent]` 标记。Skill 模式输出拦截模板时，
+> **必须将模板中的 `[gate: agent]` 替换为 `[gate: skill]`**（区分 Skill 触发 vs Agent 触发）。
+
 ## ★ 启动协议（摘要）
 
 | 步骤 | 动作 | 详址 |

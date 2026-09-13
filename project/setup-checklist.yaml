@@ -75,10 +75,12 @@ steps:
     verify:
       type: yaml_fields_not_empty
       path: ".codebuddy/skills/iteration-workflow/project/project.manifest.yaml"
-      fields: ["project_name", "tech_stack"]
-      fail_message: "project.manifest.yaml 中必填字段（project_name, tech_stack）为空"
+      # v2 嵌套 schema：使用点号路径校验嵌套字段（由 Test-YamlFields 解析）
+      fields: ["project.name", "project.workspace_root", "tech_stack", "paths.docs_iterations", "paths.specs_dir"]
+      fail_message: "project.manifest.yaml 必填字段为空：需填写 project.name / project.workspace_root / tech_stack / paths.docs_iterations / paths.specs_dir"
     hints:
-      - "请打开 project.manifest.yaml 填写 project_name, tech_stack, paths 等字段"
+      - "请打开 project/project.manifest.yaml，对照模板注释填写 project、tech_stack、database、paths 等段落"
+      - "标 ★ 的项为必填；paths 段须填写 frontend_root / backend_solution / docs_iterations / specs_dir"
       - "完成后重新运行 init-checklist.ps1 继续"
 
   - id: "fill-conventions"
