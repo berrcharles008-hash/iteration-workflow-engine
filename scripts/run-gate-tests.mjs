@@ -10,22 +10,75 @@
  */
 
 import { execFileSync } from 'child_process';
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, rmdirSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { tmpdir } from 'os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROJECT_DIR = join(__dirname, '..', '..', '..', '..');
+const SKILL_ROOT = join(__dirname, '..');
 
-// ── 工具检测：根据环境变量识别运行方 ──────────────────
-const IS_CODEBUDDY = !!process.env.CODEBUDDY_PROJECT_DIR;
-const HOOK = IS_CODEBUDDY
-  ? join(PROJECT_DIR, '.codebuddy', 'hooks', 'gate-check.mjs')
-  : join(PROJECT_DIR, '.claude', 'hooks', 'gate-check.mjs');
-const RUNTIME_DIR = IS_CODEBUDDY
-  ? join(PROJECT_DIR, '.codebuddy', 'skills', 'iteration-workflow', 'runtime')
-  : join(PROJECT_DIR, '.claude', 'skills', 'iteration-workflow', 'runtime');
+// ── 参数解析 ──────────────────────────────────────────
+// --project-root <path>  用指定项目根（默认为隔离沙箱）
+// --runtime-dir  <path>  指定 ACTIVE/state.yaml 读写目录
+// --ide <name>           claude-code | codebuddy（默认自动）
+// --quick                install 脚本会传入，接受（仅精简明细输出）
+const argv = process.argv.slice(2);
+const argOf = (flag) => {
+  const i = argv.indexOf(flag);
+  return i >= 0 && argv[i + 1] ? argv[i + 1] : null;
+};
+const QUICK = argv.includes('--quick');
+const IDE_ARG = argOf('--ide');
+
+// ── 项目根 ────────────────────────────────────────────
+// 注意：hook 以 PROJECT_DIR 判定 GATE_BYPASS_PATHS 与相对路径，
+// 故测试进程与 hook 必须收到同一个值。
+// 默认使用隔离沙箱，避免在真实项目里创建 .gate-bypass 等临时文件。
+// 旧的 join(__dirname,'..','..','..','..') 只在「部署布局」下成立
+// （skill 位于 {PROJECT}/{IDE}/skills/iteration-workflow），
+// 在引擎仓库内运行会解析成盘符根（如 D:\），故改为显式/隔离策略。
+const SANDBOX = join(tmpdir(), `iwf-gate-selftest-${process.pid}`);
+const REAL_PROJECT_DIR = argOf('--project-root');
+const PROJECT_DIR = REAL_PROJECT_DIR || SANDBOX;
+const ISOLATED = !REAL_PROJECT_DIR;
+if (ISOLATED) mkdirSync(PROJECT_DIR, { recursive: true });
+
+// ── Hook 定位 ─────────────────────────────────────────
+// 1) skill 自带 hooks/（引擎仓库与「hooks 已随 skill 部署」的项目都存在）
+// 2) 真实项目下项目级 hooks/（install Step 4 的安装位置）
+function resolveHook() {
+  const local = join(SKILL_ROOT, 'hooks', 'gate-check.mjs');
+  if (existsSync(local)) return local;
+
+  const projReal = REAL_PROJECT_DIR
+    || process.env.CODEBUDDY_PROJECT_DIR
+    || process.env.CLAUDE_PROJECT_DIR
+    || process.cwd();
+  const ide = IDE_ARG || (process.env.CODEBUDDY_PROJECT_DIR ? 'codebuddy' : 'claude-code');
+  const ordered = ide === 'codebuddy' ? ['.codebuddy', '.claude'] : ['.claude', '.codebuddy'];
+  for (const d of ordered) {
+    const p = join(projReal, d, 'hooks', 'gate-check.mjs');
+    if (existsSync(p)) return p;
+  }
+  console.error('❌ 未找到 gate-check.mjs，已尝试:');
+  console.error('   ' + local);
+  for (const d of ordered) console.error('   ' + join(projReal, d, 'hooks', 'gate-check.mjs'));
+  process.exit(3);
+}
+const HOOK = resolveHook();
+
+// ── 运行时目录 ────────────────────────────────────────
+// 始终隔离（可用 --runtime-dir 或 GATE_TEST_RUNTIME_DIR 覆盖），
+// 因此本脚本不会再改写真实项目的 runtime/ACTIVE。
+const RUNTIME_DIR = argOf('--runtime-dir')
+  || process.env.GATE_TEST_RUNTIME_DIR
+  || join(SANDBOX, 'runtime');
+mkdirSync(RUNTIME_DIR, { recursive: true });
 const ACTIVE_FILE = join(RUNTIME_DIR, 'ACTIVE');
+
+// hook 只取 ACTIVE 首行作为迭代 ID，再从 {id}.state.yaml 读 current_phase
+const TEST_ITERATION_ID = 'selftest-gate-regression';
 
 // ── 测试用例定义（直接从 gate-test-cases.toml 核心映射） ──
 
@@ -65,21 +118,19 @@ const TESTS = [
     tool: 'replace_in_file', file: 'front-end/my-app-upgrade/src/test.vue',
     expectExit: 2, expectBlock: true
   },
-  // S4: 空 stdin → 当前行为 exit 0（fail-open，修复后期望 exit 2）
+  // S4: 空 stdin → fail-closed 阻止（hook 已完成 fail-closed 修复）
   {
-    id: 'S4', name: '空 stdin → 当前 fail-open 行为',
+    id: 'S4', name: '空 stdin → fail-closed 阻止',
     phase: '', active: false,
     stdin: '', // 空输入
-    expectExit: 0, expectBlock: false, // 当前行为
-    expectExit_fixed: 2 // S2 修复后期望
+    expectExit: 2, expectBlock: true
   },
-  // S5: 畸形 JSON → 当前行为 exit 0
+  // S5: 畸形 JSON → fail-closed 阻止
   {
-    id: 'S5', name: '畸形 JSON → 当前 fail-open 行为',
+    id: 'S5', name: '畸形 JSON → fail-closed 阻止',
     phase: '', active: false,
     stdin: '{this is not json!!!',
-    expectExit: 0, expectBlock: false, // 当前行为
-    expectExit_fixed: 2
+    expectExit: 2, expectBlock: true
   },
   // S6: GATE_BYPASS=1 → 放行
   {
@@ -156,7 +207,7 @@ function backupActive() {
 function restoreActive(content) {
   if (content === null) {
     // 文件原本不存在，清理
-    try { require('fs').unlinkSync(ACTIVE_FILE); } catch {}
+    try { unlinkSync(ACTIVE_FILE); } catch {}
   } else {
     writeFileSync(ACTIVE_FILE, content, 'utf-8');
   }
@@ -165,14 +216,15 @@ function restoreActive(content) {
 function setupState(testCase) {
   // 设置 ACTIVE
   if (testCase.active) {
-    writeFileSync(ACTIVE_FILE, '2026-07-23-020-S1门禁自动化回归测试矩阵', 'utf-8');
-    // 修改 state.yaml 的 phase
-    const stateFile = join(RUNTIME_DIR, '2026-07-23-020-S1门禁自动化回归测试矩阵.state.yaml');
-    if (existsSync(stateFile)) {
-      let content = readFileSync(stateFile, 'utf-8');
-      content = content.replace(/^current_phase:\s*".*"/m, `current_phase: "${testCase.phase}"`);
-      writeFileSync(stateFile, content, 'utf-8');
-    }
+    writeFileSync(ACTIVE_FILE, TEST_ITERATION_ID, 'utf-8');
+    // state.yaml 必须「创建」而非仅在已存在时改写：
+    // hook 在状态文件缺失时会直接阻止，导致所有 active 用例误判为 exit 2。
+    const stateFile = join(RUNTIME_DIR, `${TEST_ITERATION_ID}.state.yaml`);
+    writeFileSync(stateFile, [
+      'iteration_status: "active"',
+      `current_phase: "${testCase.phase}"`,
+      '',
+    ].join('\n'), 'utf-8');
   } else {
     writeFileSync(ACTIVE_FILE, 'none', 'utf-8');
   }
@@ -205,9 +257,18 @@ function runHook(testCase) {
 
   const env = {
     ...process.env,
-    COBUDDY_PROJECT_DIR: PROJECT_DIR,
     GATE_TEST_RUNTIME_DIR: RUNTIME_DIR,
   };
+  // hook 的项目根优先级：CODEBUDDY_PROJECT_DIR > CLAUDE_PROJECT_DIR > cwd。
+  // 旧代码写入的是 COBUDDY_PROJECT_DIR（少一个 E），hook 不识别，等于从未传递；
+  // 这里显式设置目标变量并清除另一个，避免外部环境变量抢占优先级。
+  if (IDE_ARG === 'codebuddy') {
+    env.CODEBUDDY_PROJECT_DIR = PROJECT_DIR;
+    delete env.CLAUDE_PROJECT_DIR;
+  } else {
+    env.CLAUDE_PROJECT_DIR = PROJECT_DIR;
+    delete env.CODEBUDDY_PROJECT_DIR;
+  }
   if (testCase.gateBypass) {
     env.GATE_BYPASS = '1';
   }
@@ -231,7 +292,10 @@ function runHook(testCase) {
 
 console.log('╔══════════════════════════════════════════════════╗');
 console.log('║  门禁回归测试 — L3 Hook 层                        ║');
-console.log('╚══════════════════════════════════════════════════╝\n');
+console.log('╚══════════════════════════════════════════════════╝');
+console.log(`  Hook        : ${HOOK}`);
+console.log(`  PROJECT_DIR : ${PROJECT_DIR}${ISOLATED ? '   (隔离沙箱)' : '   (⚠ 真实项目)'}`);
+console.log(`  RUNTIME_DIR : ${RUNTIME_DIR}\n`);
 
 const originalActive = backupActive();
 let passed = 0;
@@ -248,13 +312,14 @@ for (const tc of TESTS) {
     cleanupBypassFile(tc);
     
     const isPass = result.exitCode === tc.expectExit;
-    const isKnownIssue = tc.id === 'S4' || tc.id === 'S5';
+    // 已知漏洞用例须在用例定义上显式标注 knownIssue: true（当前无）
+    const isKnownIssue = !!tc.knownIssue;
     
     if (isPass) {
       console.log('✅ PASS');
       passed++;
     } else if (isKnownIssue) {
-      console.log(`🟡 KNOWN (exit=${result.exitCode}, expect=${tc.expectExit}, fixed=${tc.expectExit_fixed})`);
+      console.log(`🟡 KNOWN (exit=${result.exitCode}, expect=${tc.expectExit})`);
       knownFails++;
     } else {
       console.log(`❌ FAIL (exit=${result.exitCode}, expect=${tc.expectExit})`);
@@ -277,8 +342,12 @@ for (const tc of TESTS) {
 }
 
 // 恢复现场
+// 原先此处还会执行 setupState({active:true, phase:'04'})，
+// 会把「无活跃迭代」误改为「04 阶段活跃迭代」，属破坏性副作用，已移除。
 restoreActive(originalActive);
-setupState({ active: true, phase: '04' }); // 恢复 04 阶段
+if (ISOLATED) {
+  try { rmSync(SANDBOX, { recursive: true, force: true }); } catch {}
+}
 
 // ── 汇总 ──────────────────────────────────────────────
 
@@ -294,10 +363,11 @@ if (failed > 0) {
   });
 }
 
-if (knownFails > 0) {
-  console.log('已知漏洞（S2 修复目标）：');
-  console.log(`  🟡 S4 空 stdin → fail-open（当前 exit 0，应 exit 2）`);
-  console.log(`  🟡 S5 畸形 JSON → fail-open（当前 exit 0，应 exit 2）`);
+if (knownFails > 0 && !QUICK) {
+  console.log('已知漏洞（待修复，不计入失败）：');
+  results.filter(r => r.isKnownIssue).forEach(r => {
+    console.log(`  🟡 [${r.id}] exit=${r.exitCode} expect=${r.expectExit}`);
+  });
 }
 
 process.exit(failed > 0 ? 1 : 0);
