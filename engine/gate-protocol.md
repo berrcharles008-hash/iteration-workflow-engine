@@ -73,8 +73,44 @@ Agent 准备修改文件
                 │       ║                                          [gate: agent] ║
                 │       ╚══════════════════════════════════════════════════╝
                 │
-                └── 文件路径不在 docs/iterations/ 下（普通源代码）→ ALLOW
+                ├── 文件路径不在 docs/iterations/ 下（普通源代码）→ ALLOW
+                └── ★ 删除/移动类操作（Delete 工具 / Bash 删除段）→ 追加「清单锚定」校验
+                    （见下节「04 阶段的删除类操作校验」；未登记即 BLOCK，fail-closed）
 ```
+
+### 04 阶段的删除类操作校验（★ FIX-9 · 2026-09-14 用户定）
+
+> 原则：**不在当前迭代任务清单内的文件，不得被删除。**
+
+**触发**：`delete_file`（规范化名 `Delete`）／ Bash 命令段命中删除或移动类动词
+（`del` / `erase` / `rm` / `rmdir` / `rd` / `Remove-Item` / `Move-Item` / `Rename-Item` / `mv` / `move` / `ren` / `rename` / `svn delete|rm|remove|move|mv|rename`）。
+移动/重命名一并纳管 —— 原路径将消失。
+
+**校验顺序**（fail-closed）：
+
+| 步 | 判定 | 结果 |
+|:--:|------|------|
+| 1 | 目标命中「删除豁免」（工程性/维护性删除） | ALLOW |
+| 2 | 目标 ∈ `state.yaml` 的 `delete_allow` | ALLOW |
+| 3 | 其他（`delete_allow` 缺失/为空、项目外路径、删除段无明确路径） | **BLOCK** |
+
+**删除豁免清单**（无需登记）：
+`skills/iteration-workflow/runtime/`（工作流自身）· `{IDE}/temp/` · `{IDE}/memory/` ·
+`node_modules/` · `dist/` · `obj/` · `bin/` · `.vs/` · `*.bak*` · `*.tmp|log|orig|rej|swp|old`
+
+**`delete_allow` 录入**（任务清单 → `state.yaml`，step-1-6 用户确认任务清单后执行）：
+- 来源 = 任务清单中类型为 `DELETED` 的项（计划删除）+ `ADDED` 的项（自建文件可自删）
+- 格式：`- { path: "相对路径", task_id: "T5-11", from: "DELETED" }`
+- `path` 以 `/` 结尾 = 目录前缀；含 `*` = 通配；仅文件名 = basename 后缀匹配
+- 清单外的删除需求 → 先增补清单项并请用户确认，或走逃生口（留痕）
+
+**留痕**：放行（`DELETE_ALLOW`）与拦截（`BLOCK`）均写入 `runtime/gate-audit.log`。
+
+**强度上限（如实声明）**：`runtime/` 属 `ALWAYS_ALLOW` ⇒ `delete_allow` 本身可被 Agent 修改，
+故本机制保证的是「**删除必须先登记并经用户确认**」的流程约束 + 可追溯性，非不可绕过；
+最终防线仍为 SVN/git 提交前的人工审阅。
+
+---
 
 ### 兜底分支：ACTIVE=none 但 state.yaml 显示 07 待执行
 
@@ -391,6 +427,7 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
 - 读取文件（read_file / search_content / search_file）
 - 创建迭代文档目录和文档文件（docs/iterations/ 下的 .md 文件）
 - 修改 `.codebuddy/skills/` 下的 Skill 自身进化文件
+- 删除/移动类操作命中「删除豁免」清单的（见 §一「04 阶段的删除类操作校验」）
 
 ---
 
@@ -430,4 +467,4 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
 
 ---
 
-**最后更新**：2026-07-13
+**最后更新**：2026-09-14（FIX-9：04 阶段删除/移动类操作「清单锚定」校验 + ALWAYS_ALLOW 收紧为段前缀匹配 + 拦截留痕）

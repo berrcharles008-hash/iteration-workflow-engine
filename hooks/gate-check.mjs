@@ -8,15 +8,21 @@
  * 规则 SSOT：{TARGET}/skills/iteration-workflow/engine/gate-protocol.md
  *
  * === 门禁逻辑 ===
- * 1. ALWAYS_ALLOW（runtime/）→ 无条件放行
+ * 1. ALWAYS_ALLOW（本迭代 runtime/ 目录）→ 无条件放行（★ FIX-9：段前缀匹配，不再用子串 includes）
  * 2. 逃生口（GATE_BYPASS 环境变量 或 .gate-bypass 标记文件）→ 放行
  * 3. execute_command → 命令风险分级：纯读放行，危险命令走门禁
  * 4. 无活跃迭代 → 阻止
- * 5. 04-开发实现 → 放行（合法修改业务代码窗口）
- * 6. 01-03 阶段 → 仅 EXEMPT_PATHS 放行，其余阻止
+ * 5. 04-开发实现 → **写入**放行（合法修改业务代码窗口）
+ *    ★ FIX-9：**删除/移动类**（Delete 工具 ／ Bash 段含 del/rm/Remove-Item/move/ren/svn delete…）
+ *      改为「清单锚定」——仅放行 {ID}.state.yaml 的 delete_allow 内路径（= 任务清单 DELETED/ADDED 项）；
+ *      命中删除豁免（node_modules//dist//obj//bin//.vs//temp//memory//*.bak* 等）亦放行；
+ *      delete_allow 缺失或为空 = 一律拦（fail-closed）。
+ * 6. 01-03 阶段 → 仅 EXEMPT_PATHS 放行，其余阻止（删除类同受此限）
  * 7. 其他阶段 → 阻止
  *
  * 退出码：0=放行  2=阻止（阻塞错误，工具不执行）
+ *
+ * 变更历史：FIX-7 段级危险判定 ｜ FIX-8 工具名规范化 ｜ FIX-9 删除类清单锚定 + ALWAYS_ALLOW 收紧 + 拦截留痕
  */
 
 import { readFileSync, existsSync, appendFileSync } from 'fs';
@@ -31,8 +37,40 @@ const RUNTIME_DIR = process.env.GATE_TEST_RUNTIME_DIR
     ? join(PROJECT_DIR, '.claude/skills/iteration-workflow/runtime')
     : join(PROJECT_DIR, '.codebuddy/skills/iteration-workflow/runtime'));
 
-/** 任何阶段都无条件放行的路径（状态维护） */
-const ALWAYS_ALLOW = ['runtime/'];
+/** 任何阶段都无条件放行的目录段（状态维护）；★ FIX-9：由 includes() 子串匹配收紧为段前缀匹配 */
+const ALWAYS_ALLOW_SEGMENTS = ['/skills/iteration-workflow/runtime/'];
+
+/**
+ * ★ FIX-9 删除类操作豁免（工程性/维护性删除，无需清单登记）
+ * 判据：项目相对路径、正斜杠、小写比较
+ */
+const DELETE_EXEMPT_PATTERNS = [
+  /(?:^|\/)node_modules\//,
+  /(?:^|\/)dist\//,
+  /(?:^|\/)obj\//,
+  /(?:^|\/)bin\//,
+  /(?:^|\/)\.vs\//,
+  /(?:^|\/)\.codebuddy\/temp\//,
+  /(?:^|\/)\.codebuddy\/memory\//,
+  /\.bak(?:[-.][\w.-]+)?$/,
+  /\.(?:tmp|log|orig|rej|swp|old)$/,
+];
+
+/** ★ FIX-9 删除/移动类命令段（一并管重命名/移动：原路径将消失） */
+const DELETE_CMD_PATTERNS = [
+  /\b(?:Remove-Item|erase|rmdir|del|delete|delete_files)\b/i,
+  /\brm\b/i,
+  /\brd\b/i,
+  /\b(?:Move-Item|Rename-Item|mv|move|ren|rename)\b/i,
+  /\bsvn\s+(?:delete|rm|remove|move|mv|rename)\b/i,
+];
+
+/** 项目/运行时目录的规范化形式（供路径判定复用；★ FIX-9 提前定义，避免 Bash 分支 TDZ） */
+const PROJECT_DIR_NORM = PROJECT_DIR.replace(/\\/g, '/');
+const RUNTIME_DIR_NORM = RUNTIME_DIR.replace(/\\/g, '/');
+const RUNTIME_REL = RUNTIME_DIR_NORM.startsWith(PROJECT_DIR_NORM)
+  ? RUNTIME_DIR_NORM.slice(PROJECT_DIR_NORM.length + 1).replace(/\/?$/, '/')
+  : null;
 
 /** 01-03 阶段内允许写入的目录 */
 const EXEMPT_PATHS = [
@@ -199,6 +237,12 @@ if (toolName === 'execute_command' || toolName === 'Bash') {
   const segments = splitCommandChain(cmd);
   const dangerSeg = segments.find((seg) => isDangerousSegment(seg));
 
+  // ★ FIX-9：删除/移动类段先走「清单锚定」校验（04 阶段不再无条件放行删除）
+  const deleteSeg = segments.find((seg) => isDeleteSegment(seg));
+  if (deleteSeg) {
+    await deleteGate(extractPathsFromCommand(deleteSeg), deleteSeg);
+  }
+
   if (!dangerSeg) {
     // 无任何危险段 → 放行（含纯读命令与未知命令，保持原「不阻塞未知」策略）。
     // SAFE_CMD_PATTERNS 保留供人工查阅，实际已由本分支统一覆盖。
@@ -211,21 +255,28 @@ if (toolName === 'execute_command' || toolName === 'Bash') {
 
 // ── 无文件路径放行（防御） ────────────────────────────
 if (!filePath) {
+  // ★ FIX-9：Delete 工具缺路径 ⇒ fail-closed（无法核验删除目标）
+  if (toolName === 'Delete' || toolName === 'delete_file' || toolName === 'delete_files') {
+    block('删除操作未提供目标路径，无法核验。', '工具: ' + toolName);
+  }
   process.exit(0);
 }
 
 // ── 标准化路径 ─────────────────────────────────────────
-const projectDirNorm = PROJECT_DIR.replace(/\\/g, '/');
+const projectDirNorm = PROJECT_DIR_NORM;
 const filePathNorm = filePath.replace(/\\/g, '/');
 const relativePath = filePathNorm.startsWith(projectDirNorm)
   ? filePathNorm.slice(projectDirNorm.length + 1)
   : filePathNorm;
 
-// ── 第1关：ALWAYS_ALLOW ────────────────────────────────
-for (const pattern of ALWAYS_ALLOW) {
-  if (relativePath.includes(pattern)) {
-    process.exit(0);
-  }
+// ── 第1关：ALWAYS_ALLOW（★ FIX-9：段前缀匹配，不再子串 includes）────
+if (isAlwaysAllow(relativePath)) {
+  process.exit(0);
+}
+
+// ── 第1.5关：删除类操作（Delete 工具）→ 清单锚定 ★ FIX-9 ──
+if (toolName === 'Delete' || toolName === 'delete_file' || toolName === 'delete_files') {
+  await deleteGate([relativePath], relativePath);
 }
 
 await gateCheck(relativePath);
@@ -294,6 +345,150 @@ async function gateCheck(fsPath) {
   block(`当前阶段 ${currentPhase} 不允许进行文件写入操作。`);
 }
 
+// ── ★ FIX-9：删除类操作校验（清单锚定 + 豁免 + 默认禁删）──────
+/** 段是否为删除/移动类（★ FIX-9b：只看「命令名位置」——避免 commit message 等文本中出现 delete/move 等词被误判）*/
+function isDeleteSegment(seg) { const tokens = String(seg || String()).replace(/[\x27\x22]/g, String.fromCharCode(32)).split(/\s+/).map((t) => t.replace(/^[;&|]+|[;,)]+$/g, String())).filter((t) => t && !/^[-/]/.test(t)); for (let i = 0; i < tokens.length && i < 4; i++) { const low = tokens[i].toLowerCase().replace(/\.(exe|cmd|bat|ps1)$/, String()); if (/^(?:cmd|powershell|pwsh|bash|sh|zsh|call|start|exec|sudo|env|npx)(?:\.exe)?$/.test(low)) continue; if (/^(?:svn|git)$/.test(low)) { return /^(?:rm|mv|delete|move|remove|rename|del)$/.test((tokens[i + 1] || String()).toLowerCase()); } return /^(?:del|erase|rm|rmdir|rd|ri|unlink|remove-item|remove-itemproperty|remove|delete|delete_files|move-item|rename-item|mi|mv|move|ren|rni|rename)$/.test(low); } return false; }
+
+/** 相对路径是否落在工作流 runtime 目录（ALWAYS_ALLOW） */
+function isAlwaysAllow(relPath) {
+  const p = '/' + String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  if (RUNTIME_REL && p.startsWith('/' + RUNTIME_REL)) return true;
+  return ALWAYS_ALLOW_SEGMENTS.some((seg) => p.includes(seg));
+}
+
+/** 删除豁免判定（工程性/维护性删除） */
+function isDeleteExempt(relPath) {
+  const raw = String(relPath || '');
+  if (!raw) return false;
+  if (isAlwaysAllow(raw)) return true;
+  const p = raw.replace(/\\/g, '/').toLowerCase();
+  const pSlash = p.endsWith('/') ? p : p + '/';   // 目录本体（如 node_modules）按目录判定
+  return DELETE_EXEMPT_PATTERNS.some((re) => re.test(p) || re.test(pSlash));
+}
+
+/** 绝对/相对路径 → 项目相对路径；项目外绝对路径返回 null */
+function toProjectRelative(p) {
+  const s = String(p || '').replace(/\\/g, '/').trim().replace(/^["']|["']$/g, '');
+  if (!s) return null;
+  if (/^[a-zA-Z]:\//.test(s) || s.startsWith('//')) {
+    const low = s.toLowerCase();
+    const base = PROJECT_DIR_NORM.toLowerCase();
+    if (low === base) return '';
+    if (low.startsWith(base + '/')) return s.slice(base.length + 1);
+    return null;
+  }
+  return s.replace(/^\.?\/+/, '');
+}
+
+/** 从删除类命令段提取候选路径 token */
+function extractPathsFromCommand(seg) {
+  let s = String(seg || '').replace(/["']/g, ' ');
+  s = s.replace(/\s-[a-zA-Z][\w-]*/g, ' ');                 // -Recurse / -Force / -LiteralPath
+  s = s.replace(/(?:^|\s)\/[a-zA-Z]{1,3}(?=\s|$)/g, ' ');   // cmd 开关 /q /s /f /y
+  s = s.replace(/\b(?:Remove-Item|Remove-ItemProperty|Move-Item|Rename-Item|Copy-Item|erase|rmdir|del|delete_files|delete|remove|rename|move|ren|rni|ri|mi|rm|rd|mv|svn)\b/gi, ' ');
+  s = s.replace(/\b(?:cmd|powershell|pwsh|bash|sh|zsh|call|start|exec|xargs)\b/gi, ' ');   // shell 前缀词（非路径）
+  const tokens = s.split(/\s+/).map((t) => t.replace(/[;,)]+$/, '')).filter((t) => t && !/^-/.test(t));
+  // ★ 优先只校验「像路径」的 token（含分隔符或扩展名），避免 cmd/shell 前缀或裸词干扰豁免判定
+  const pathLike = tokens.filter((t) => /[\\/]/.test(t) || /\.[A-Za-z0-9]{1,8}$/.test(t));
+  return (pathLike.length ? pathLike : tokens).slice(0, 40);
+}
+
+/** delete_allow 匹配：精确路径 / 目录前缀（以 / 结尾）/ 通配 / basename 后缀 */
+function matchDeleteAllow(rel, allowed) {
+  const a = String(allowed || '').replace(/\\/g, '/').toLowerCase();
+  const r = String(rel || '').replace(/\\/g, '/').toLowerCase();
+  if (!a || !r) return false;
+  if (a.endsWith('/')) return r === a.slice(0, -1) || r.startsWith(a);
+  if (a.indexOf('*') >= 0) {
+    const rx = new RegExp('^' + a.split('*').map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*') + '$');
+    return rx.test(r);
+  }
+  if (r === a) return true;
+  if (r.indexOf('/') < 0 && a.endsWith('/' + r)) return true;   // 仅给出文件名（如 svn delete X.cs）
+  return false;
+}
+
+/** 读取 state.yaml 的 delete_allow（= 任务清单 DELETED/ADDED 项） */
+function readDeleteAllow(activeId) {
+  try {
+    const sf = join(RUNTIME_DIR, `${activeId}.state.yaml`);
+    if (!existsSync(sf)) return null;
+    const lines = readFileSync(sf, 'utf-8').split(/\r?\n/);
+    let inSection = false;
+    const allow = [];
+    for (const line of lines) {
+      if (/^delete_allow\s*:/.test(line)) {
+        inSection = true;
+        const inline = line.match(/\[(.*)\]/);
+        if (inline) {
+          const re = /\bpath\s*:\s*"([^"]+)"/g;
+          let m;
+          while ((m = re.exec(inline[1])) !== null) allow.push(m[1]);
+        }
+        continue;
+      }
+      if (inSection) {
+        if (/^[A-Za-z_]/.test(line)) break;                     // 下一个顶层键
+        const m = line.match(/\bpath\s*:\s*"?([^",}\s]+)"?/);
+        if (m) allow.push(m[1]);
+      }
+    }
+    return allow;
+  } catch {
+    return null;
+  }
+}
+
+/** 删除类操作统一校验入口：任一目标越界即 block（fail-closed） */
+async function deleteGate(paths, label) {
+  const activeFile = join(RUNTIME_DIR, 'ACTIVE');
+  let activeId = null;
+  if (existsSync(activeFile)) {
+    activeId = readFileSync(activeFile, 'utf-8').split('\n')[0].trim();
+  }
+  if (!activeId || activeId === 'none') {
+    block(
+      '当前无活跃迭代，删除/移动类操作被拒绝。',
+      `本次尝试: ${label}`,
+      '维护性删除请走逃生口（.gate-bypass），留痕于 gate-audit.log。'
+    );
+  }
+
+  const allow = readDeleteAllow(activeId);
+  const list = (Array.isArray(paths) ? paths : []).filter(Boolean);
+  if (list.length === 0) {
+    block(
+      '删除/移动类命令无法自动核验目标路径。',
+      `命令: ${label}`,
+      '请给出明确路径，或改用「登记 delete_allow + 明确路径」的方式执行。'
+    );
+  }
+
+  for (const raw of list) {
+    if (isDeleteExempt(raw)) continue;
+    const rel = toProjectRelative(raw);
+    if (rel && Array.isArray(allow) && allow.some((a) => matchDeleteAllow(rel, a))) continue;
+    block(
+      '删除/移动类操作未在任务清单登记。',
+      `目标: ${rel === null ? raw + '（项目外路径）' : rel}`,
+      `迭代: ${activeId}`,
+      '登记方式: 任务清单增补 DELETED 项 → 用户确认 → 写入 state.yaml 的 delete_allow。',
+      '豁免: runtime/ · temp/ · memory/ · node_modules/ · dist/ · obj/ · bin/ · *.bak*'
+    );
+  }
+
+  audit('DELETE_ALLOW', `${label} → ${list.join(' , ')}`);
+  process.exit(0);
+}
+
+/** ★ FIX-9：通用审计留痕（放行与拦截均记录） */
+function audit(kind, detail) {
+  try {
+    const logFile = join(RUNTIME_DIR, 'gate-audit.log');
+    appendFileSync(logFile, `[${new Date().toISOString()}] ${kind} ${detail}\n`, 'utf-8');
+  } catch { /* 审计失败不阻断判定 */ }
+}
+
 // ── 逃生口审计 ─────────────────────────────────────────
 function auditBypass(reason) {
   try {
@@ -323,6 +518,7 @@ function auditBypass(reason) {
 
 // ── 阻止输出 ───────────────────────────────────────────
 function block(...lines) {
+  audit('BLOCK', lines.join(' | '));   // ★ FIX-9：拦截留痕（原仅 BYPASS 有记录）
   const box = [
     '╔══════════════════════════════════════════════════╗',
     '║  🛑 修改门禁：操作已被拦截                        ║',
