@@ -32,7 +32,7 @@ GATE_MARKER = "当 gate-protocol.md 门禁规则更新时"
 # IDE 映射：ide_dir 用于 {{IDE_DIR}} 占位符替换 + 技能路径探测
 #          target   用于确定微核注入的目标文件（项目根目录相对路径）
 IDE_MAP = {
-    "codebuddy":   {"ide_dir": ".codebuddy", "target": "memory/MEMORY.md", "desc": "CodeBuddy IDE"},
+    "codebuddy":   {"ide_dir": ".codebuddy", "target": ".codebuddy/memory/MEMORY.md", "desc": "CodeBuddy IDE"},
     "claude-code": {"ide_dir": ".claude",    "target": "CLAUDE.md",        "desc": "Claude Code (CLAUDE.md)"},
     "cursor":      {"ide_dir": ".cursor",    "target": ".cursorrules",     "desc": "Cursor (.cursorrules)"},
 }

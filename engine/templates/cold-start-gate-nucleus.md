@@ -1,6 +1,10 @@
 <!--
-  cold-start-gate-nucleus v1.2
+  cold-start-gate-nucleus v1.3
   Source: gate-protocol.md 2026-07-27
+  v1.3 (2026-09-14): 修复 IDE_DIR 双点 Bug —— 原写 .{{IDE_DIR}}，而 ide_dir 本身自带点，
+       导致 codebuddy / claude-code / cursor 三个环境全部生成 ..codebuddy / ..claude /
+       ..cursor 错误路径，微核指引失效。现统一去掉前导点，由 ide_dir 自带。
+  v1.2 变更历史见仓库提交记录。
   用途：注入到目标 IDE 的 memory/claude/cursorrules 配置文件，提供冷启动门禁保护
   目标环境：CodeBuddy/Cursor (→MEMORY.md)、Claude Code (→CLAUDE.md)
   注入方式：setup-gate.py --ide {codebuddy|claude-code|cursor} 或安装脚本自动调用
@@ -17,7 +21,7 @@
 
 在 write_to_file / replace_in_file / delete_file 之前，必须先执行：
 
-1. 读取 `.{{IDE_DIR}}/skills/iteration-workflow/runtime/ACTIVE`（1 个文件，~2 行）
+1. 读取 `{{IDE_DIR}}/skills/iteration-workflow/runtime/ACTIVE`（1 个文件，~2 行）
 2. 解析 Line 2 的 `STATUS` 和 `PHASE`（格式：`STATUS=xxx PHASE=xx`）
 
 | 条件 | 动作 |
@@ -72,7 +76,7 @@
 ### 层 2：完整门禁（Skill 加载后生效）
 
 若 `iteration-workflow` Skill 已被加载，以
-`.{{IDE_DIR}}/skills/iteration-workflow/engine/gate-protocol.md`
+`{{IDE_DIR}}/skills/iteration-workflow/engine/gate-protocol.md`
 完整决策树为准，层 1 微核退化为不执行。
 
 **注意**：`.claude/settings.json` 的 PreToolUse Hook 仅在 Claude Code CLI 中生效。
@@ -80,4 +84,4 @@
 
 ### 逃生口
 
-`GATE_BYPASS=1` 环境变量 或 `.{{IDE_DIR}}/hooks/.gate-bypass` 标记文件。
+`GATE_BYPASS=1` 环境变量 或 `{{IDE_DIR}}/hooks/.gate-bypass` 标记文件。

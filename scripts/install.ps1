@@ -228,9 +228,19 @@ if ($DetectedIde -eq "generic") {
 Write-Host "[Step 2/8] Copying core engine..."
 New-Item -ItemType Directory -Force -Path $SkillTarget | Out-Null
 # 先删除再复制，避免更新安装时 Copy-Item -Recurse 合并导致 engine/engine/ 嵌套
-@("engine","project","domain-plugins","scripts") | ForEach-Object {
+# ⚠ project/ 不参与整目录替换：它存放用户已填的项目配置，删除 = 配置全丢（需手工备份恢复）。
+#   这里只对缺失文件做增量补齐，已存在的一律不动。
+@("engine","domain-plugins","scripts") | ForEach-Object {
     Remove-Item -Recurse -Force "$SkillTarget\$_" -ErrorAction SilentlyContinue
     Copy-Item -Recurse -Force "$EngineDir\$_" "$SkillTarget\$_"
+}
+New-Item -ItemType Directory -Force -Path "$SkillTarget\project" | Out-Null
+Get-ChildItem "$EngineDir\project" -File | ForEach-Object {
+    $dst = Join-Path "$SkillTarget\project" $_.Name
+    if (-not (Test-Path $dst)) {
+        Copy-Item $_.FullName $dst
+        Write-Host "  [+] project/$($_.Name) (new)"
+    }
 }
 Copy-Item -Force "$EngineDir\SKILL.template.md" "$SkillTarget\"
 @("README.md","LICENSE","CONTRIBUTING.md") | ForEach-Object {
