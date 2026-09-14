@@ -17,6 +17,7 @@
 """
 
 import os
+import re
 import sys
 import hashlib
 from pathlib import Path
@@ -27,7 +28,18 @@ from pathlib import Path
 NUCLEUS_TEMPLATE = "cold-start-gate-nucleus.md"
 NUCLEUS_MARKER_PREFIX = "cold-start-gate-nucleus"   # 版本无关：只匹配前缀
 NUCLEUS_VERSION = "v1.0"                              # 默认值；启动时由模板动态覆盖
-GATE_MARKER = "当 gate-protocol.md 门禁规则更新时"
+
+# ⚠ 禁止再用「注释文字」当微核边界！v1.3 及以前用 GATE_MARKER 判定微核结束，
+#   实际命中的是模板头部说明注释（位于正文之前）→ 只删注释头、正文整段残留，
+#   且只剥第一份 ⇒ 每跑一次 --force 多叠一份微核（FIX-4 根因）。
+#   v1.4+ 一律用 NUCLEUS-BEGIN / NUCLEUS-END 显式边界标记。
+NUCLEUS_BEGIN_RE = re.compile(
+    r"[^\S\n]*<!--\s*NUCLEUS-BEGIN.*?NUCLEUS-END\s*-->[^\S\n]*\n?", re.S)
+# 兜底：v1.3 及更早注入的旧微核没有边界标记 → 从起始注释块删到首个 '---' 分隔线
+LEGACY_NUCLEUS_RE = re.compile(
+    r"<!--(?:(?!-->).)*?cold-start-gate-nucleus.*?(?:\n[^\S\n]*---[^\S\n]*\n|\Z)", re.S)
+# 剥离后正文开头可能残留 '---' 分隔线（历史注入遗留，且常被空行隔开），清掉以免每次 force 累积
+LEADING_SEP_RE = re.compile(r"\A(?:\s*---\s*(?:\n|\Z))+")
 
 # IDE 映射：ide_dir 用于 {{IDE_DIR}} 占位符替换 + 技能路径探测
 #          target   用于确定微核注入的目标文件（项目根目录相对路径）
@@ -137,6 +149,28 @@ def render_template(ide_dir: str) -> str:
     return raw.replace("{{IDE_DIR}}", ide_dir)
 
 
+# ─── 微核剥离 / 计数 ─────────────────────────────────────
+
+def count_nucleus_blocks(content: str) -> int:
+    """统计微核份数（v1.4+ 边界标记 与 旧版版本注释，取较大者以防漏报）"""
+    return max(len(NUCLEUS_BEGIN_RE.findall(content)),
+               content.count(NUCLEUS_MARKER_PREFIX))
+
+
+def strip_nucleus(content: str):
+    """剥离全部微核段，返回 (clean_content, removed_count, mode)
+
+    mode: "marker" = v1.4+ 显式边界；"legacy" = 旧版启发式兜底；"none" = 未发现
+    """
+    cleaned, n = NUCLEUS_BEGIN_RE.subn("", content)
+    if n:
+        return cleaned, n, "marker"
+    cleaned, n = LEGACY_NUCLEUS_RE.subn("", content)
+    if n:
+        return cleaned, n, "legacy"
+    return content, 0, "none"
+
+
 # ─── 注入 ───────────────────────────────────────────────
 
 def inject_nucleus(target_path: Path, ide_dir: str) -> bool:
@@ -160,7 +194,11 @@ def inject_nucleus(target_path: Path, ide_dir: str) -> bool:
 
 
 def force_inject(target_path: Path, ide_dir: str) -> bool:
-    """Force re-injection (remove old nucleus, write fresh)"""
+    """Force re-injection (remove ALL old nucleus blocks, write fresh)
+
+    v1.4+：按 NUCLEUS-BEGIN / NUCLEUS-END 显式边界全量剥离；
+    旧版（无标记）：走 LEGACY_NUCLEUS_RE 启发式兜底并告警。
+    """
     if not TEMPLATE_PATH.exists():
         safe_print(f"[FAIL] Template not found: {TEMPLATE_PATH}")
         return False
@@ -169,23 +207,21 @@ def force_inject(target_path: Path, ide_dir: str) -> bool:
 
     if target_path.exists():
         existing = target_path.read_text(encoding="utf-8")
-        lines = existing.split("\n")
-        new_lines = []
-        in_old_nucleus = False
-        nucleus_start_found = False
-        for line in lines:
-            if "cold-start-gate-nucleus" in line and not nucleus_start_found:
-                in_old_nucleus = True
-                nucleus_start_found = True
-                continue
-            if in_old_nucleus and GATE_MARKER in line:
-                in_old_nucleus = False
-                continue
-            if in_old_nucleus:
-                continue
-            new_lines.append(line)
-        clean = "\n".join(new_lines).strip()
-        new_content = nucleus_content + "\n\n" + clean if clean else nucleus_content
+        clean, removed, mode = strip_nucleus(existing)
+        if removed > 1:
+            safe_print(f"[WARN] Removed {removed} nucleus blocks (mode={mode}) — "
+                       f"file was polluted by the pre-v1.4 --force bug.")
+        elif removed == 1:
+            safe_print(f"[INFO] Removed 1 nucleus block (mode={mode}).")
+        else:
+            safe_print(f"[WARN] No nucleus block found in {target_path.name}; "
+                       f"prepending a fresh one.")
+        if mode == "legacy":
+            safe_print(f"[WARN] Legacy nucleus (no NUCLEUS-BEGIN marker) stripped "
+                       f"heuristically — please eyeball {target_path.name}.")
+        # 清掉剥离后残留的分隔线，再按 inject_nucleus() 的统一格式（微核 + '---' + 正文）拼回
+        clean = LEADING_SEP_RE.sub("", clean.strip())
+        new_content = nucleus_content + "\n\n---\n\n" + clean if clean else nucleus_content
     else:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         new_content = nucleus_content
@@ -247,19 +283,27 @@ def main():
     safe_print(f"Target: {target_path}")
     safe_print(f"Template: {TEMPLATE_PATH} (SHA256: {template_hash})")
 
+    hint_cmd = f" --ide {ide_key}" if args.ide else ""
+
+    # ⚠ --check 必须早于下面的 already_has 早退，否则永远走不到份数校验
+    if args.check:
+        if not already_has:
+            safe_print(f"[WARN] Injection needed: {target_path.name} lacks cold-start gate nucleus")
+            safe_print(f"       Run 'python setup-gate.py{hint_cmd}' to inject.")
+            return 1
+        blocks = count_nucleus_blocks(target_path.read_text(encoding="utf-8"))
+        if blocks > 1:
+            safe_print(f"[WARN] Multiple nucleus blocks detected: {blocks} (expected 1)")
+            safe_print(f"       Caused by the pre-v1.4 --force bug. Keep one copy manually, or run")
+            safe_print(f"       'python setup-gate.py{hint_cmd} --force' (v1.4+ removes all).")
+            return 1
+        safe_print(f"[OK] Check passed: nucleus present ({current_ver}, 1 block)")
+        return 0
+
     if already_has and not args.force:
         safe_print(f"[OK] Nucleus already injected ({current_ver}), no action needed.")
         safe_print(f"     Use --force to re-inject.")
         return 0
-
-    if args.check:
-        if already_has:
-            safe_print(f"[OK] Check passed: nucleus present ({current_ver})")
-        else:
-            safe_print(f"[WARN] Injection needed: {target_path.name} lacks cold-start gate nucleus")
-            hint_cmd = f" --ide {ide_key}" if args.ide else ""
-            safe_print(f"       Run 'python setup-gate.py{hint_cmd}' to inject.")
-        return 0 if already_has else 1
 
     if args.force and already_has:
         safe_print(f"[FORCE] Re-injecting ({current_ver} -> {NUCLEUS_VERSION})...")

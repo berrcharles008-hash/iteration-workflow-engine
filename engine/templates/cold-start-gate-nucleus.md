@@ -1,6 +1,11 @@
+<!-- NUCLEUS-BEGIN v1.4 -->
 <!--
-  cold-start-gate-nucleus v1.3
+  cold-start-gate-nucleus v1.4
   Source: gate-protocol.md 2026-07-27
+  v1.4 (2026-09-14): 新增显式边界标记 NUCLEUS-BEGIN / NUCLEUS-END（FIX-4）。
+       旧版 force_inject() 用 GATE_MARKER 判定微核结束，实际命中的是模板头部说明注释
+       （位于正文之前）→ 只删注释头、正文整段残留，且只剥第一份 ⇒ 每跑一次 --force 多叠一份。
+       现改为按边界标记全量剥离。
   v1.3 (2026-09-14): 修复 IDE_DIR 双点 Bug —— 原写 .{{IDE_DIR}}，而 ide_dir 本身自带点，
        导致 codebuddy / claude-code / cursor 三个环境全部生成 ..codebuddy / ..claude /
        ..cursor 错误路径，微核指引失效。现统一去掉前导点，由 ide_dir 自带。
@@ -85,3 +90,5 @@
 ### 逃生口
 
 `GATE_BYPASS=1` 环境变量 或 `{{IDE_DIR}}/hooks/.gate-bypass` 标记文件。
+
+<!-- NUCLEUS-END -->
