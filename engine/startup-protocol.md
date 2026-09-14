@@ -195,7 +195,7 @@
 
 ## Step C：复杂度评估（新迭代时执行）
 
-读取 `engine/complexity-scoring.md`，按 11 因素评分算法评估当前需求，输出：
+读取 `engine/complexity-scoring.md`，按 9 因素评分算法评估当前需求（因素可在 `project/project.manifest.yaml` 的 `complexity_factors` 段覆盖），输出：
 - 评分详情（每个因素得分）
 - 最终等级（🟢/🟡/🔴）
 - 对应执行深度说明
@@ -347,7 +347,7 @@ Agent 根据复杂度选择了 Lite 模板（文件名从映射表获取，如 "
 | `engine/templates/project-lessons-learned.example.md` | 项目级模式库模板 | Step A.5（文件不存在时） |
 | `engine/templates/review-models.example.json` | 外部审查模型配置模板 | Step A.5（文件不存在时） |
 | `engine/state-protocol.md` | 状态读写规则 | 写入/校验 `runtime/*.state.yaml` 时 |
-| `engine/complexity-scoring.md` | 复杂度评估算法（11 因素评分） | Step C（新迭代创建时） |
+| `engine/complexity-scoring.md` | 复杂度评估算法（9 因素评分） | Step C（新迭代创建时） |
 | `engine/workflow-engine.md` | 七阶段流程入口 + 横向规则 | Step D（进入具体阶段时） |
 | `engine/phase-01.md` ~ `phase-07.md` | 各阶段详细定义 | 进入对应阶段时读取 |
 | `project/context-conventions.md` | 项目上下文约定（spec 清单 + 后端类型约定） | 01 阶段读取 specs 或 04 阶段编码时 |

@@ -18,13 +18,13 @@ flowchart TD
     STEP_B --> HAS_ACTIVE{有活跃迭代?}
 
     HAS_ACTIVE -->|是| STEP_D[Step D: 进入对应阶段执行]
-    HAS_ACTIVE -->|否| STEP_C[Step C: 复杂度评估<br/>11因素评分]
+    HAS_ACTIVE -->|否| STEP_C[Step C: 复杂度评估<br/>9因素评分]
 
     STEP_C --> CMPX_RESULT{复杂度等级?}
 
     CMPX_RESULT -->|🟢 简单| SIMPLE[主Agent直写<br/>无Team]
-    CMPX_RESULT -->|🟡 中等| MEDIUM["Team 1-2 Agent<br/>（如新增配置页）"]
-    CMPX_RESULT -->|🔴 复杂| COMPLEX["Team + 动态并行<br/>（新表+新API+新页面）"]
+    CMPX_RESULT -->|🟡 中等| MEDIUM["Team 1-2 Agent<br/>（3-5分：如新API+新分层文件）"]
+    CMPX_RESULT -->|🔴 复杂| COMPLEX["Team + 动态并行<br/>（≥6分：如新表+新API+6+文件）"]
 
     SIMPLE --> NEW_ITER[创建新迭代目录<br/>进入阶段一]
     MEDIUM --> NEW_ITER
@@ -48,7 +48,7 @@ flowchart TD
 | 决策点 | 条件 | 分支 |
 |--------|------|------|
 | 有活跃迭代? | runtime/ 中存在 ACTIVE 标记 | 是 → 直接进入对应阶段 |
-| 复杂度等级? | 11因素评分结果 | 🟢简单 / 🟡中等 / 🔴复杂 |
+| 复杂度等级? | 9因素评分结果（0-2 / 3-5 / 6+） | 🟢简单 / 🟡中等 / 🔴复杂 |
 
 ## How to Edit in Excalidraw
 
