@@ -45,14 +45,19 @@ const EXEMPT_PATHS = [
   '.claude/memory/',
 ];
 
-/** 需要检查的写入工具名（兼容多平台） */
+/**
+ * 需要检查的工具名。
+ * ★ FIX-8（2026-09-14）：CodeBuddy IDE 在调用 hook 前会经 normalizeToolName() 把内部工具名
+ * 映射为 Claude Code 风格名（IDE 内 TOOL_NAME_CRAFT_TO_CLI），实际收到的是：
+ *   write_to_file → Write ／ replace_in_file → Edit ／ delete_file → Delete ／ execute_command → Bash
+ * 旧列表只写内部名 ⇒ delete_file / execute_command 从未命中，删除与终端命令实际不受门禁约束。
+ * 现两种命名都收，兼容其他宿主与未规范化场景。
+ */
 const WATCHED_TOOLS = [
-  // CodeBuddy
-  'write_to_file', 'replace_in_file', 'delete_file',
-  // Claude Code
-  'Write', 'Edit',
-  // 终端命令（命令级风险分级，非全部拦截）
-  'execute_command',
+  // CodeBuddy（IDE 实际传入的规范化名）
+  'Write', 'Edit', 'Delete', 'Bash',
+  // CodeBuddy 内部名 + Claude Code 原生名（兼容/兜底）
+  'write_to_file', 'replace_in_file', 'delete_file', 'delete_files', 'execute_command',
 ];
 
 /** Shell 命令：写/删除类模式（触发门禁） */
@@ -183,7 +188,8 @@ if (!WATCHED_TOOLS.includes(toolName)) {
 }
 
 // ── execute_command 命令风险分级 ──────────────────────
-if (toolName === 'execute_command') {
+if (toolName === 'execute_command' || toolName === 'Bash') {
+  // ★ FIX-8：CodeBuddy 传入的规范化名是 'Bash'（非 'execute_command'），必须一并接受。
   const cmd = (hookInput.tool_input || {}).command || '';
 
   // ★ FIX-7：先按「段」找危险，再决定放行 —— 顺序不可颠倒。
