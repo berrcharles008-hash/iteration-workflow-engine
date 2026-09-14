@@ -107,6 +107,32 @@ if (GATE_BYPASS_PATHS.some(p => existsSync(p))) {
 }
 
 // ── 读取 stdin ────────────────────────────────────────
+// ── FIX-7：复合命令拆分 + 解释器内联执行判定 ─────────────
+// 旧实现只对「整条命令」做 SAFE_CMD_PATTERNS 前缀匹配（^ 锚定行首），
+// 首段为 cd / echo / dir 等安全前缀时整条放行 ⇒ 后续危险动作可无声绕过。
+/** 解释器内联执行 —— 等价任意代码执行，且绕过文件路径豁免判定，一律视为危险 */
+const INTERPRETER_INLINE_PATTERNS = [
+  /\b(?:node|nodejs|deno|bun)\s+(?:--?\w+\s+)*-e\b/i,
+  /\b(?:python|python3|py)\s+(?:--?\w+\s+)*-c\b/i,
+  /\b(?:ruby|perl|php)\s+(?:--?\w+\s+)*-e\b/i,
+  /\b(?:powershell|pwsh)\b[^|;&]*(?:-c\b|-command\b|-encodedcommand\b)/i,
+  /\b(?:bash|sh|zsh)\s+-c\b/i,
+];
+
+/** 按链式分隔符拆分复合命令（&& || ; & | 换行） */
+function splitCommandChain(cmd) {
+  return String(cmd || '')
+    .split(/&&|\|\||[;&|\n]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** 单个命令段是否危险（危险模式 或 解释器内联） */
+function isDangerousSegment(seg) {
+  return DANGEROUS_CMD_PATTERNS.some((p) => p.test(seg))
+      || INTERPRETER_INLINE_PATTERNS.some((p) => p.test(seg));
+}
+
 let stdinIsTTY = false;
 const input = await new Promise((resolve) => {
   let data = '';
@@ -159,18 +185,22 @@ if (!WATCHED_TOOLS.includes(toolName)) {
 // ── execute_command 命令风险分级 ──────────────────────
 if (toolName === 'execute_command') {
   const cmd = (hookInput.tool_input || {}).command || '';
-  // 纯读命令 → 直接放行
-  if (SAFE_CMD_PATTERNS.some(p => p.test(cmd))) {
+
+  // ★ FIX-7：先按「段」找危险，再决定放行 —— 顺序不可颠倒。
+  // 旧实现先判 SAFE（^ 锚定整条命令行首）再判 DANGEROUS，导致首段为
+  // cd / echo / dir 等安全前缀时，后续的 del / Remove-Item / 重定向 /
+  // 解释器内联（node -e、python -c）被整条放行。
+  const segments = splitCommandChain(cmd);
+  const dangerSeg = segments.find((seg) => isDangerousSegment(seg));
+
+  if (!dangerSeg) {
+    // 无任何危险段 → 放行（含纯读命令与未知命令，保持原「不阻塞未知」策略）。
+    // SAFE_CMD_PATTERNS 保留供人工查阅，实际已由本分支统一覆盖。
     process.exit(0);
   }
-  // 危险命令 → 继续门禁检查
-  if (!DANGEROUS_CMD_PATTERNS.some(p => p.test(cmd))) {
-    // 未匹配任何危险模式 → 默认放行（不阻塞未知命令）
-    process.exit(0);
-  }
-  // 危险命令通过门禁，用命令文本作为审查标识
-  const dangerousPath = `[CMD] ${cmd.substring(0, 80)}`;
-  await gateCheck(dangerousPath);
+
+  // 命中危险段 → 走门禁（命令无文件路径可参与豁免判定，标识取命令文本）
+  await gateCheck(`[CMD] ${cmd.substring(0, 80)}`);
 }
 
 // ── 无文件路径放行（防御） ────────────────────────────
