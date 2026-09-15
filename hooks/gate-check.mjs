@@ -477,8 +477,9 @@ async function deleteGate(paths, label) {
     );
   }
 
+  // ★ 删除白名单校验通过 → 交回调用方继续走「阶段门禁」（不得直接 exit）：
+  //   01-03 仍受 EXEMPT_PATHS 约束；00/05/06/07 仍一律阻止；04 放行。
   audit('DELETE_ALLOW', `${label} → ${list.join(' , ')}`);
-  process.exit(0);
 }
 
 /** ★ FIX-9：通用审计留痕（放行与拦截均记录） */
