@@ -2,9 +2,10 @@
 
 > 业务术语 ↔ 代码命名的双向映射，五维搜索矩阵。
 > 来源：L1 模块总览 + L2 wiki + specs 4 文件交叉提取
-> 
-> **使用说明**：将此文件复制到 `.codebuddy/specs/L3-glossary.md`，
-> 然后根据项目实际情况填充术语。Phase 01 step-2-6 会自动生成初始版本。
+>
+> **使用说明**：此模板由 `scripts/gen-knowledge-base.py --level L3` 自动填充，
+> 输出到 `{{KB_DIR}}/L3-glossary.md`（默认 `docs/knowledge-base/L3-glossary.md`）。
+> 生成后人工校对"未映射代码片段"章节；Phase 01 step-2-6 会在迭代中补充迭代级术语。
 
 ## 一、术语↔代码 映射表
 

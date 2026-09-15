@@ -8,11 +8,14 @@ description: |
   ★ 兜底：任何涉及代码/文件修改、迭代管理、需求分析的意图（即使未命中以上关键词）
   ★ 状态查询类（查进度/查阶段/查迭代状态）
   ★ 多 Story 并行模式触发词
-version: "2.0.0"
+version: "2.1.0"
 config:
   specs_dir: references/specs/
   specs_fallback_dirs:
     - .codebuddy/specs/
+  # 活文档知识库根目录（L1/L2/L3 自动生成）
+  # 读取路径: {kb_dir}/{l1_file}, {kb_dir}/{l2_dir}/, {kb_dir}/{l3_file}
+  kb_dir: docs/knowledge-base/
   l1_file: L1-overview.md
   l2_dir: L2-modules/
   l3_file: L3-glossary.md
@@ -53,6 +56,7 @@ config:
 | 进入阶段/开始迭代 | 重量 | 全量加载 | — |
 | 修改代码/审查代码 | 重量 | 全量加载 | — |
 | 分析需求 | 重量 | 全量加载 | — |
+| 初始化知识库/gen-kb | 中等 | project.manifest.yaml、`gen-knowledge-base.py --check` | 核心协议文件 |
 
 ## ★ 门禁规则（一句话摘要）
 
@@ -109,5 +113,6 @@ Agent 准备调用写入类工具时 → **必须先读 `engine/gate-protocol.md
 12. **★ 独立Agent交叉审查（自审+互审双保险）**：🔴 复杂级 02/03/04 阶段强制启动独立 Agent 交叉审查；🟡 中等级 03/04 强制、02 可选。主 Agent 在需要时先启动独立 Agent，再立即执行自审。详见 `engine/cross-review-protocol.md`。
 13. **★ 外部模型审查路由（v2.0.0）**：🔴 复杂级的 02 阶段强制使用，03/04 阶段优先使用。详见 `engine/cross-review-protocol.md` §八。
 14. **★ 每个阶段必须有独立目录产出**：复杂度只决定内容详细程度，不决定文件位置。🟢 简单：独立文件，内容极简（02 ~200字 / 03 ~300字 / 07 精简三段式）；🟡🔴：独立文件，标准/完整内容。
+15. **★ 知识库自动兜底**：`{{KB_DIR}}` 下 L1/L2/L3 由 `scripts/gen-knowledge-base.py` 维护（`--check` 检测缺失/过时，`--force` 刷新）。01 前置步骤与 step-1.6-dir-diff 发现缺失/过时时**自动刷新**（不等待用户确认）；03 step-1.2 读取 L2 前做新鲜度校验。人工编辑文件（`auto-generated: false`）永不被覆盖。
 
 > 完整流程定义见 `engine/workflow-engine.md`，门禁规则见 `engine/gate-protocol.md`。

@@ -74,6 +74,9 @@ sj-iteration-workflow-engine/
 │       ├── phase-07-迭代回顾报告.md
 │       ├── phase-07-迭代回顾-lite.md
 │       ├── bug-requirement-template.md
+│       ├── L1-overview.example.md   ← 知识库 L1 模块总览模板
+│       ├── L2-module.example.md     ← 知识库 L2 模块 Wiki 模板
+│       ├── L3-glossary.example.md   ← 知识库 L3 术语映射模板
 │       ├── project-lessons-learned.example.md
 │       ├── review-models.example.json
 │       └── cold-start-gate-nucleus.md ← 冷启动门禁微核模板 (P-045)
@@ -82,6 +85,7 @@ sj-iteration-workflow-engine/
 │   ├── review-models-configurator.py
 │   ├── review-gateway.py
 │   ├── setup-gate.py                ← 微核注入脚本 (P-045)
+│   ├── gen-knowledge-base.py        ← L1/L2/L3 知识库生成/过时检测
 │   ├── init-checklist.ps1           ← 项目初始化向导 (P-039)
 │   └── run-gate-tests.mjs           ← 门禁回归测试
 ├── quickstart.md                    ← 5分钟快速入门
@@ -210,6 +214,7 @@ sj-iteration-workflow-engine/
 │   ├── review-models-configurator.py
 │   ├── review-gateway.py
 │   ├── setup-gate.py                ← Nucleus injection (P-045)
+│   ├── gen-knowledge-base.py        ← L1/L2/L3 knowledge base generator
 │   ├── init-checklist.ps1           ← Project init wizard (P-039)
 │   └── run-gate-tests.mjs           ← Gate regression test
 ├── quickstart.md                    ← 5-minute quick start

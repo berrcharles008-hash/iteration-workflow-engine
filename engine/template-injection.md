@@ -64,7 +64,8 @@ Step B / Step C / Step D（读取 engine/ 或 project/ 文件时）
 | 占位符 | 说明 | 来源 |
 |--------|------|------|
 | `{{ITERATIONS_DIR}}` | 迭代文档根目录 | `paths.docs_iterations` |
-| `{{SPECS_DIR}}` | Spec 活文档目录 | `paths.specs_dir` |
+| `{{SPECS_DIR}}` | Spec 活文档目录（冻结态人工规格） | `paths.specs_dir` |
+| `{{KB_DIR}}` | 知识库目录（L1/L2/L3 自动生成 + 人工补充） | `paths.kb_dir` |
 | `{{frontend_framework}}` | 前端框架标识（用作文件名） | `frontend_framework`（manifest 顶级键） |
 | `{{ITERATION_ID}}` | 当前迭代编号 | 运行时动态（由 Step B/C 确定） |
 
@@ -91,6 +92,7 @@ function load_runtime_variables():
     // 路径变量（高频使用，直接平铺）
     variables["ITERATIONS_DIR"] = manifest.paths.docs_iterations
     variables["SPECS_DIR"]      = manifest.paths.specs_dir
+    variables["KB_DIR"]         = manifest.paths.kb_dir
     variables["FRONTEND_ROOT"]  = manifest.paths.frontend_root
     variables["BACKEND_SLN"]    = manifest.paths.backend_solution
     

@@ -16,20 +16,24 @@
 
 | 子步骤 | 功能 | 优先数据源 | 回退路径 | 预估Token |
 |:------:|------|-----------|---------|:---:|
-| step-1.1 | **意图消歧**：匹配需求关键词→候选模块 | `L1-overview.md`（读取 config.yaml→specs_dir/l1_file） | specs 4文件 → list_dir | ~2K |
-| step-1.2 | **模块定位**：锁定模块→精确文件清单（★多项目：遍历 `ALL_FRONTEND_ROOTS` + `ALL_BACKEND_ROOTS`） | `L2-modules/{module}.md`（HTML注释解析 root_dirs） | list_dir 扫描候选目录 | ~15K |
+| step-1.1 | **意图消歧**：匹配需求关键词→候选模块 | `{{KB_DIR}}/L1-overview.md`（读取 config→kb_dir/l1_file） | specs 4文件 → list_dir | ~2K |
+| step-1.2 | **模块定位**：锁定模块→精确文件清单（★多项目：遍历 `ALL_FRONTEND_ROOTS` + `ALL_BACKEND_ROOTS`） | `{{KB_DIR}}/L2-modules/{module}.md`（HTML注释解析 root_dirs；读取前 `--check` 校验新鲜度，过时先刷） | list_dir 扫描候选目录 | ~15K |
 | step-1.3 | **关键词搜索**：五维展开搜索命中行 | `search_content`（类名/方法名/表名/路由/业务术语） | — | 0（Agent侧预过滤） |
 | step-1.4 | **调用链追踪**：读取命中函数→展开调用链 | `read_file` 命中函数上下文 | — | ~10K |
 | step-1.5 | **验证确认**：读取最终改动点→确认方案 | `read_file` 最终修改目标文件 | — | ~5K |
-| step-1.6 | **知识库缓存**：自动生成L1（若不存在）（★多项目：遍历 `ALL_FRONTEND_ROOTS` + `ALL_BACKEND_ROOTS`，在L1模块表中标注归属项目） | 自动生成 `L1-overview.md` | 跳过 | ~3K |
+| step-1.6 | **知识库缓存**：L1 缺失/过时自动刷新（★多项目：遍历 `ALL_FRONTEND_ROOTS` + `ALL_BACKEND_ROOTS`，在L1模块表中标注归属项目） | 执行 `python scripts/gen-knowledge-base.py --level L1 --force` 刷新 `{{KB_DIR}}/L1-overview.md` | 跳过 | ~3K |
 
 **策略模式回退规则**：
 ```
-Step 1.1: L1-overview.md 存在？→ 读 L1 : 读 specs 4 文件
+Step 1.1: {{KB_DIR}}/L1-overview.md 存在？→ 读 L1 : 读 specs 4 文件
            L1 存在但格式损坏？→ 输出警告 + 走回退路径
-Step 1.2: L2-modules/{module}.md 存在？→ 读 L2 : list_dir 扫描
+Step 1.2: ★ 读取前新鲜度校验（防御性兜底，覆盖同迭代内 04 改动场景）：
+           python scripts/gen-knowledge-base.py --check --level L2
+           若目标模块被标记"过时/缺失"→ 先执行 --force --module {module} 刷新，再读取
+           {{KB_DIR}}/L2-modules/{module}.md 存在？→ 读 L2 : list_dir 扫描
            L2 存在但 root_dirs 缺失？→ 输出警告 + 走回退路径
-Step 1.6: L1-overview.md 不存在？→ 自动生成 : 跳过
+Step 1.6: {{KB_DIR}}/L1-overview.md 不存在？→ 自动生成 : 跳过
+           （自动生成逻辑等同 scripts/gen-knowledge-base.py --level L1）
 ```
 
 **★ 多项目遍历逻辑**（`HAS_MULTI_PROJECTS = true` 时生效，单项目跳过本段）：
@@ -46,10 +50,10 @@ Step 1.2 模块定位回退路径（L2 不存在时）：
 Step 1.6 L1 自动生成时：
   遍历 ALL_FRONTEND_ROOTS：
     扫描 {root}/{frontend_layers.page.dir}/*.vue
-    → L1 前端模块表标注归属项目（路径前缀）
+    → {{KB_DIR}}/L1-overview.md 前端模块表标注归属项目（路径前缀）
   遍历 ALL_BACKEND_ROOTS：
     扫描 {root}/{backend_layers.bll.dir}/*.cs
-    → L1 后端模块表标注归属项目（路径前缀）
+    → {{KB_DIR}}/L1-overview.md 后端模块表标注归属项目（路径前缀）
   
   若某项目的分层结构与主 frontend_layers/backend_layers 不一致：
     检查 manifest.paths.project_overrides[{项目目录名}]

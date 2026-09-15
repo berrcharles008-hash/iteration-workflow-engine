@@ -17,9 +17,10 @@
 - BACKEND_SLN     = {PROJECT_ROOT}/{paths.backend_solution}
 - ITERATIONS_DIR  = {PROJECT_ROOT}/{paths.docs_iterations}
 - SPECS_DIR       = {PROJECT_ROOT}/{paths.specs_dir}
+- KB_DIR          = {PROJECT_ROOT}/{paths.kb_dir}
 ```
 
-> 后续所有步骤读取 engine/ 或 project/ 文件时，Agent 在内存中将 `{{占位符}}` 替换为以上具体值（变量注入协议详见 `engine/template-injection.md`），**绝不输出占位符字符串本身**。
+> 后续所有步骤读取 engine/ 或 project/ 文件时，Agent 在内存中将 `{{占位符}}` 替换为以上具体值（变量注入协议详见 `engine/template-injection.md`），**绝不输出占位符字符串本身**。`{{KB_DIR}}` 指向活文档知识库（L1/L2/L3），与冻结态 `{{SPECS_DIR}}` 分离。若 `{{KB_DIR}}` 下的知识库文件不存在，可执行 `python scripts/gen-knowledge-base.py` 生成。
 
 ---
 

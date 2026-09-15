@@ -228,6 +228,10 @@ def w2_unreferenced_files(skill_dir, r):
         'cold-start-gate-nucleus.md',
         'project-lessons-learned.example.md',
         'review-models.example.json',
+        # Knowledge base templates (maintained by scripts/gen-knowledge-base.py)
+        'L1-overview.example.md',
+        'L2-module.example.md',
+        'L3-glossary.example.md',
     }
     for f in sorted(unreferenced):
         if f in known:

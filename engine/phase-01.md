@@ -2,7 +2,9 @@
 
 **前置步骤**：
 1. **step-0-init-state**（仅新迭代首次进入时执行）：创建 `runtime/{ITERATION_ID}.state.yaml` + 写入 `runtime/ACTIVE` + 创建迭代目录结构 + 更新 README 迭代清单。详见 `phase-steps.md` §阶段一步骤清单。
-2. 读取 `{{SPECS_DIR}}/` 下的项目上下文文件清单（详见 `project/context-conventions.md` → 一、项目上下文文件清单）获取项目上下文。
+2. 读取 `{{SPECS_DIR}}/` 下的项目上下文文件清单（详见 `project/context-conventions.md` → 一、项目上下文文件清单）获取项目上下文 + 读取 `{{KB_DIR}}/` 下的 L1/L2/L3 知识库。
+   - 知识库**不存在** → 执行 `python scripts/gen-knowledge-base.py` 生成
+   - 知识库**过时** → 先执行 `python scripts/gen-knowledge-base.py --check` 检测，若有"过时/缺失"项则执行 `--force` 自动刷新（`auto-generated: false` 的人工编辑文件不会被覆盖），再读取
 
 **目标**：明确需求范围、梳理现状、识别痛点、产出需求文档。
 
@@ -30,15 +32,23 @@
 
 ### step-1.6-dir-diff 详细说明
 
-> 每次迭代开始时（phase-01 step-1），扫描实际目录结构与 L1-overview.md 模块列表对比，检测模块新增/删除/重命名。
+> 每次迭代开始时（phase-01 step-1），扫描实际目录结构与 `{{KB_DIR}}/L1-overview.md` 模块列表对比，检测模块新增/删除/重命名。
 
 **执行流程**：
 1. **Scan** 后端 `{{backend_layers.bll.dir}}/` + 前端 `{{frontend_layers.page.dir}}/` 目录，提取模块级目录清单
-2. **对比** L1-overview.md 中的模块列表
+2. **对比** `{{KB_DIR}}/L1-overview.md` 中的模块列表
 3. **输出差异**：
    - `+` 新增模块（目录存在但 L1 未收录）→ 提醒用户执行 gen-l1 更新
    - `-` 删除模块（L1 收录但目录不存在）→ 标记待清理
    - `~` 目录变化（模块名相同但文件数或子目录变化）→ 提醒 L2 wiki 可能过时
+4. **★ 自动刷新知识库**（发现任一差异时强制执行）：
+   ```
+   python scripts/gen-knowledge-base.py --check          # 确认过时范围
+   python scripts/gen-knowledge-base.py --force          # 自动刷新（含缺失的新模块）
+   # 或精准刷新：--level L2 --force --module {变化模块名}
+   ```
+   - 自动执行，**不需等待用户确认**：`auto-generated: false` 的人工编辑内容不会被覆盖
+   - 刷新后继续后续步骤（01 step-2 及 03 阶段读到的即为最新知识库）
 
 **L1 覆盖规则**（决议F）：
 - `auto-generated: true` → 可被 gen-l1 自动覆盖更新
@@ -51,7 +61,7 @@
 + 新增模块：ModuleName1 (path/to/dir)
 - 删除模块：ModuleName2 (L1收录但目录不存在)
 ~ 目录变化：ModuleName3 (文件数 15→18)
-→ 建议：执行 gen-l1 更新 L1-overview.md
+→ 建议：执行 `python scripts/gen-knowledge-base.py --level L1` 更新 L1-overview.md
 ```
 
 ### step-2-5 详细说明：闭环追问（5W2H 框架）
@@ -84,7 +94,7 @@
 **目的**：在需求分析阶段就建立术语映射，避免到 06 归档阶段才发现术语不一致导致理解偏差。
 
 **执行流程**：
-1. Agent 从 `{{SPECS_DIR}}/L3-glossary.md` 和 Spec 活文档提取本次迭代涉及的术语
+1. Agent 从 `{{KB_DIR}}/L3-glossary.md` 和 Spec 活文档提取本次迭代涉及的术语
 2. 生成 `{{SPECS_DIR}}/iteration-context/{ITERATION_ID}-context.md`（迭代范围子集快照）
 3. 用户确认术语映射
 
@@ -101,6 +111,6 @@
 - 只读声明（04 起不可修改）
 
 **读取优先级**（按阶段区分，消除自循环）：
-- 01 step-1/2（需求分析中）：L3-glossary.md → Spec 活文档（CONTEXT.md 尚未生成）
+- 01 step-1/2（需求分析中）：`{{KB_DIR}}/L3-glossary.md` → Spec 活文档（CONTEXT.md 尚未生成）
 - 01 step-2-6 完成之后：CONTEXT.md 已生成，后续步骤可读取
-- 03+（技术方案起）：CONTEXT.md → L3-glossary.md → Spec 活文档
+- 03+（技术方案起）：CONTEXT.md → `{{KB_DIR}}/L3-glossary.md` → Spec 活文档

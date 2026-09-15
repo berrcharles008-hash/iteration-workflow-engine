@@ -31,6 +31,10 @@
 - REMOVED 条目 → 移除行
 - 更新每个 spec 文件头部的"最后更新"日期和迭代编号
 
+> ★ 若本次迭代新增/删除模块或类，同步刷新知识库：
+> `python scripts/gen-knowledge-base.py --force`（仅覆盖 auto-generated: true 的文件，
+> 人工编辑的 L2 wiki 与 L3 术语不会被覆盖）。
+
 ### 对话摘要写入
 
 将本次迭代摘要写入 `runtime/{ITERATION_ID}.state.yaml` 的 `last_session_summary` 字段（100~200字），内容包含：核心交付、主要问题及解法、关键技术决策。

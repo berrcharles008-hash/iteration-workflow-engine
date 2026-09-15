@@ -8,11 +8,13 @@ description: |
   ★ 兜底：任何涉及代码/文件修改、迭代管理、需求分析的意图（即使未命中以上关键词）
   ★ 状态查询类（查进度/查阶段/查迭代状态）
   ★ 多 Story 并行模式触发词
-version: "2.0.0"
+version: "2.1.0"
 config:
   specs_dir: references/specs/
   specs_fallback_dirs:
     - .codebuddy/specs/
+  # 活文档知识库根目录（L1/L2/L3 自动生成，由 scripts/gen-knowledge-base.py 维护）
+  kb_dir: docs/knowledge-base/
   l1_file: L1-overview.md
   l2_dir: L2-modules/
   l3_file: L3-glossary.md

@@ -95,8 +95,8 @@ deploy:
     backend_dll_pattern: ""    # 需部署的程序集通配，如 SJ.*.dll；无则填 N/A
 
 # ── 目录结构约定（相对 workspace_root）──
-# engine 引用：paths.frontend_root / paths.backend_solution / paths.docs_iterations / paths.specs_dir
-# startup-protocol Step A 会据此拼出 PROJECT_ROOT / FRONTEND_ROOT / BACKEND_SLN / ITERATIONS_DIR / SPECS_DIR
+# engine 引用：paths.frontend_root / paths.backend_solution / paths.docs_iterations / paths.specs_dir / paths.kb_dir
+# startup-protocol Step A 会据此拼出 PROJECT_ROOT / FRONTEND_ROOT / BACKEND_SLN / ITERATIONS_DIR / SPECS_DIR / KB_DIR
 paths:
   frontend_root: ""        # ★必填 前端工程根目录，如 front-end/my-app
   frontend_src: ""         # 前端源码目录
@@ -106,6 +106,7 @@ paths:
   backend_build_output: "" # 后端构建输出目录
   docs_iterations: "docs/iterations"  # ★必填 迭代文档根目录（通用默认值，可改）
   specs_dir: ""                       # ★必填 Spec 活文档目录，如 .codebuddy/specs（与 IDE 相关，须自行填写）
+  kb_dir: "docs/knowledge-base"       # 活文档知识库目录（L1/L2/L3 自动生成+人工补充，由 scripts/gen-knowledge-base.py 维护）
 
   # ===== 多项目扩展（可选）=====
   # 当 workspace 含 N 个前端 + M 个后端时在此声明额外项目。
