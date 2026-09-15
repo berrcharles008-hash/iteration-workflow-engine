@@ -385,23 +385,37 @@ def _scan_l1_modules(config):
 
     Returns (fe_modules, be_modules). Shared by generate_l1 and stale check.
     """
-    # Frontend modules: {page_dir}/*Module.vue
+    # Frontend modules: recursive scan under {page_dir}.
+    #
+    # FIX-10: originally this only globbed "{page_dir}/*Module.vue" (flat,
+    # one module = one file). Projects that nest pages as
+    # "pages/pivas/m1_order_receive/drug_list.vue" produced 0 modules.
+    # Now we reuse the same module key resolution as L2 (_fe_module_match),
+    # so L1 and L2 can never disagree about the module list.
     fe_modules = []
     fe_page_dir = config.get("fe_page_dir")
     if fe_page_dir and fe_page_dir.exists():
-        for vue_file in sorted(fe_page_dir.glob("*.vue")):
-            stem = vue_file.stem                      # M10Module
-            disp = re.sub(r'Module$', '', stem)       # M10
-            sibling_dir = vue_file.parent / disp.lower()
-            file_count = 1
-            if sibling_dir.exists():
-                file_count = sum(1 for _ in sibling_dir.rglob("*") if _.is_file())
-            fe_modules.append({
-                "name": disp,
-                "dir": str(vue_file.parent.relative_to(PROJECT_ROOT)).replace("\\", "/"),
-                "main_file": vue_file.name,
-                "file_count": file_count
-            })
+        fe_re = _build_fe_name_regex(config.get("fe_page_pattern"))
+        groups = {}
+        for vue_file in sorted(fe_page_dir.rglob("*.vue")):
+            if _is_build_artifact(vue_file):
+                continue
+            rel_path = str(vue_file.relative_to(PROJECT_ROOT)).replace("\\", "/")
+            key = _fe_module_match(rel_path, vue_file.stem, fe_re) or "Shared"
+            grp = groups.setdefault(key, {
+                "name": key, "dir": None, "main_file": None, "file_count": 0})
+            if grp["main_file"] is None:
+                grp["main_file"] = vue_file.name
+                grp["dir"] = str(vue_file.parent.relative_to(
+                    PROJECT_ROOT)).replace("\\", "/")
+                # Legacy layout: a sibling dir named after the module
+                # (e.g. m3/ next to M3Module.vue) also counts.
+                sibling_dir = vue_file.parent / key.lower()
+                if sibling_dir.exists():
+                    grp["file_count"] += sum(
+                        1 for _ in sibling_dir.rglob("*") if _.is_file())
+            grp["file_count"] += 1
+        fe_modules = list(groups.values())
         # Sort by M-number (M3 < M4 < ... < M11)
         def _m_sort_key(item):
             m = re.match(r'M(\d+)', item["name"])
@@ -634,16 +648,21 @@ def _fe_module_match(file_path, name, fe_re=None):
     """Match a frontend file to a module key (e.g. M3..M11 / Shared).
 
     Priority: file name matches configured file_pattern ->
-              dir name m{n} -> shared.
+              dir name m{n}[_suffix] -> shared.
+
+    Note (FIX-10): module dirs are often named ``m1_order_receive`` /
+    ``m10_quality_report`` (digit followed by a descriptive suffix), so the
+    directory regex must NOT require ``/`` or end-of-string right after the
+    digits -- it only needs to anchor on the leading ``m``.
     """
     if fe_re is None:
         fe_re = re.compile(r'M\d+Module$')
     if fe_re.match(name):
         # Key: strip conventional suffix for stable cross-layer naming
         return re.sub(r'Module$', '', name)
-    dm = re.search(r'/(m\d+)(?:/|$)', file_path, re.IGNORECASE)
+    dm = re.search(r'/m(\d+)[^/]*(?:/|$)', file_path, re.IGNORECASE)
     if dm:
-        return dm.group(1).upper()
+        return 'M' + dm.group(1)
     if '/shared/' in file_path:
         return "Shared"
     return None
