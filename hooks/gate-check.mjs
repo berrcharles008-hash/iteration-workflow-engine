@@ -244,9 +244,9 @@ if (toolName === 'execute_command' || toolName === 'Bash') {
   }
 
   // ★ FIX-9d：解释器内联「疑似删除」仅审计留痕（不拦截，理由见 isInlineDeleteSuspect 注释）
-  const suspectSeg = segments.find((seg) => isInlineDeleteSuspect(seg));
-  if (suspectSeg) {
-    audit('AUDIT_SUSPECT', `[CMD] ${suspectSeg.substring(0, 140)}`);
+  //   ★ 用**整条命令**判定：内联代码含 `;` 会被 splitCommandChain 拆段，逐段判定会漏检
+  if (isInlineDeleteSuspect(cmd)) {
+    audit('AUDIT_SUSPECT', `[CMD] ${cmd.substring(0, 140)}`);
   }
 
   if (!dangerSeg) {
