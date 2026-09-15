@@ -243,6 +243,12 @@ if (toolName === 'execute_command' || toolName === 'Bash') {
     await deleteGate(extractPathsFromCommand(deleteSeg), deleteSeg);
   }
 
+  // ★ FIX-9d：解释器内联「疑似删除」仅审计留痕（不拦截，理由见 isInlineDeleteSuspect 注释）
+  const suspectSeg = segments.find((seg) => isInlineDeleteSuspect(seg));
+  if (suspectSeg) {
+    audit('AUDIT_SUSPECT', `[CMD] ${suspectSeg.substring(0, 140)}`);
+  }
+
   if (!dangerSeg) {
     // 无任何危险段 → 放行（含纯读命令与未知命令，保持原「不阻塞未知」策略）。
     // SAFE_CMD_PATTERNS 保留供人工查阅，实际已由本分支统一覆盖。
@@ -346,8 +352,47 @@ async function gateCheck(fsPath) {
 }
 
 // ── ★ FIX-9：删除类操作校验（清单锚定 + 豁免 + 默认禁删）──────
-/** 段是否为删除/移动类（★ FIX-9b：只看「命令名位置」——避免 commit message 等文本中出现 delete/move 等词被误判）*/
-function isDeleteSegment(seg) { const tokens = String(seg || String()).replace(/[\x27\x22]/g, String.fromCharCode(32)).split(/\s+/).map((t) => t.replace(/^[;&|]+|[;,)]+$/g, String())).filter((t) => t && !/^[-/]/.test(t)); for (let i = 0; i < tokens.length && i < 4; i++) { const low = tokens[i].toLowerCase().replace(/\.(exe|cmd|bat|ps1)$/, String()); if (/^(?:cmd|powershell|pwsh|bash|sh|zsh|call|start|exec|sudo|env|npx)(?:\.exe)?$/.test(low)) continue; if (/^(?:svn|git)$/.test(low)) { return /^(?:rm|mv|delete|move|remove|rename|del)$/.test((tokens[i + 1] || String()).toLowerCase()); } return /^(?:del|erase|rm|rmdir|rd|ri|unlink|remove-item|remove-itemproperty|remove|delete|delete_files|move-item|rename-item|mi|mv|move|ren|rni|rename)$/.test(low); } return false; }
+/**
+ * 段是否为删除/移动类。
+ * ★ FIX-9b：只看「命令名位置」——避免 commit message 等文本中出现 delete/move 等词被误判。
+ * ★ FIX-9d：追加 Git 丢弃类（clean / restore / checkout --|.），并保留只读例外
+ *   （`clean -n|--dry-run` 仅预演、`restore --staged` 仅动索引 ⇒ 不算删除）。
+ */
+function isDeleteSegment(seg) {
+  const rawTokens = String(seg || String())
+    .replace(/[\x27\x22]/g, String.fromCharCode(32))
+    .split(/\s+/)
+    .map((t) => t.replace(/^[;&|]+|[;,)]+$/g, String()))
+    .filter(Boolean);
+  const tokens = rawTokens.filter((t) => !/^[-/]/.test(t));                 // 跳过 -Recurse /q 等选项
+  const has = (v) => rawTokens.some((t) => t.toLowerCase() === v);
+  for (let i = 0; i < tokens.length && i < 4; i++) {
+    const low = tokens[i].toLowerCase().replace(/\.(exe|cmd|bat|ps1)$/, String());
+    if (/^(?:cmd|powershell|pwsh|bash|sh|zsh|call|start|exec|sudo|env|npx)(?:\.exe)?$/.test(low)) continue;
+    const sub = (tokens[i + 1] || String()).toLowerCase();
+    if (low === 'git') {
+      if (sub === 'clean') return !(has('-n') || has('--dry-run'));
+      if (sub === 'restore') return !(has('--staged') && !has('--worktree'));
+      if (sub === 'checkout') return has('--') || tokens.indexOf('.') >= 0;
+      return /^(?:rm|mv|delete|move|remove|rename|del)$/.test(sub);
+    }
+    if (low === 'svn') return /^(?:rm|mv|delete|move|remove|rename|del)$/.test(sub);
+    return /^(?:del|erase|rm|rmdir|rd|ri|unlink|remove-item|remove-itemproperty|remove|delete|delete_files|move-item|rename-item|mi|mv|move|ren|rni|rename)$/.test(low);
+  }
+  return false;
+}
+
+/**
+ * ★ FIX-9d：解释器内联「疑似删除」判定（**仅审计、不拦截**）。
+ * 硬拦必须扫描整段文本 ⇒ 与 FIX-9b 修掉的误判同源（代码片段、注释、message 中的
+ * `os.remove(` / `rmtree(` 字样会被误伤），故只记 `AUDIT_SUSPECT` 供回溯。
+ */
+function isInlineDeleteSuspect(seg) {
+  const s = String(seg || String());
+  if (!/\b(?:python|python3|py|node|nodejs|deno|bun|ruby|perl|php|powershell|pwsh)\b/i.test(s)) return false;
+  if (!/(?:rmtree|unlink|unlinkSync|rmSync|rmdir|os\.remove|shutil|Remove-Item)\s*\(/i.test(s)) return false;
+  return /[\\/]/.test(s) || /\.[A-Za-z0-9]{1,8}\b/.test(s);                  // 含路径或文件名
+}
 
 /** 相对路径是否落在工作流 runtime 目录（ALWAYS_ALLOW） */
 function isAlwaysAllow(relPath) {

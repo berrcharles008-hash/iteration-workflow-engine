@@ -83,8 +83,18 @@ Agent 准备修改文件
 > 原则：**不在当前迭代任务清单内的文件，不得被删除。**
 
 **触发**：`delete_file`（规范化名 `Delete`）／ Bash 命令段命中删除或移动类动词
-（`del` / `erase` / `rm` / `rmdir` / `rd` / `Remove-Item` / `Move-Item` / `Rename-Item` / `mv` / `move` / `ren` / `rename` / `svn delete|rm|remove|move|mv|rename`）。
+（`del` / `erase` / `rm` / `rmdir` / `rd` / `Remove-Item` / `Move-Item` / `Rename-Item` / `mv` / `move` / `ren` / `rename` / `svn delete|rm|remove|move|mv|rename` / `git rm|mv`）。
 移动/重命名一并纳管 —— 原路径将消失。
+
+**★ FIX-9d（2026-09-15）追加**：
+
+- **Git 丢弃类**（工作区内容消失，等价删除）：
+  `git clean`（`-n`/`--dry-run` 仅预演 → 放行）、`git restore`（`--staged` 且无 `--worktree` 仅动索引 → 放行）、
+  `git checkout` 带 `--` 或 `.`（丢弃改动）；`git checkout <branch>` 切分支**不**判定。
+- **解释器内联**（`python -c` / `node -e` / `powershell -Command` … 内含 `os.remove(` / `rmtree(` / `unlink(` 且带路径）
+  **仅审计**（`AUDIT_SUSPECT` 写 `gate-audit.log`），**不拦截** —— 硬拦需整段文本扫描，会重蹈 FIX-9b 修掉的误判
+  （代码片段 / 注释 / commit message 中出现删除 API 字样会被误伤）。
+- **未纳入**：`robocopy /MIR`（可选加固）、`tar` / `7z` 覆盖解包（本项目实测零使用）。
 
 **校验顺序**（fail-closed）：
 
