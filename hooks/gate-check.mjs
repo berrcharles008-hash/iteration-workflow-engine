@@ -84,6 +84,28 @@ const EXEMPT_PATHS = [
 ];
 
 /**
+ * ★ FIX-11（2026-09-16）元层写入豁免：工作记忆目录 —— 与迭代状态无关。
+ * 依据：① 系统级要求「每次完成任务必须写记忆」；② 元层原则（记忆维护 ≠ 业务迭代）；
+ *      ③ 与 01-03 的 EXEMPT_PATHS、SSOT 删除豁免清单中的 {IDE}/memory/ 对齐。
+ * 范围严格限定 memory/：不含 temp/（门禁探测点）、skills/、hooks/（元层改动仍走逃生口）。
+ */
+const META_WRITE_EXEMPT_PATHS = [
+  '.codebuddy/memory/',
+  '.claude/memory/',
+  '.cursor/memory/',
+  '.codex/memory/',
+];
+
+/** ★ FIX-11：工作记忆路径判定。排除 Bash 伪路径（`[CMD] …`），
+ *  避免命令文本里含 memory 字样被误当豁免目标放行。 */
+function isMetaWriteExempt(relPath) {
+  const raw = String(relPath || '');
+  if (!raw || raw.startsWith('[')) return false;
+  const p = raw.replace(/\\/g, '/').replace(/^\/+/, '');
+  return META_WRITE_EXEMPT_PATHS.some((x) => p.startsWith(x) || p.includes('/' + x));
+}
+
+/**
  * 需要检查的工具名。
  * ★ FIX-8（2026-09-14）：CodeBuddy IDE 在调用 hook 前会经 normalizeToolName() 把内部工具名
  * 映射为 Claude Code 风格名（IDE 内 TOOL_NAME_CRAFT_TO_CLI），实际收到的是：
@@ -303,6 +325,12 @@ await gateCheck(relativePath);
 
 // ── 门禁检查（活跃迭代 + 阶段判定） ──────────────────
 async function gateCheck(fsPath) {
+  // ★ FIX-11：工作记忆写入/维护与迭代状态解耦（ACTIVE=none / 00 / 05 / 06 / 07 一并放行）。
+  if (isMetaWriteExempt(fsPath)) {
+    audit('META_ALLOW', fsPath);
+    process.exit(0);
+  }
+
   const activeFile = join(RUNTIME_DIR, 'ACTIVE');
   let activeId = null;
   if (existsSync(activeFile)) {
@@ -313,6 +341,7 @@ async function gateCheck(fsPath) {
     block(
       '当前无活跃迭代。',
       '所有代码修改必须经过迭代工作流。',
+      `本次尝试: ${fsPath}`,                       // ★ FIX-11：拦截留痕带目标，便于回溯
       '请先创建新迭代（开始迭代 / 进入01阶段）。'
     );
   }
@@ -500,6 +529,24 @@ function readDeleteAllow(activeId) {
 
 /** 删除类操作统一校验入口：任一目标越界即 block（fail-closed） */
 async function deleteGate(paths, label) {
+  const list = (Array.isArray(paths) ? paths : []).filter(Boolean);
+  if (list.length === 0) {
+    block(
+      '删除/移动类命令无法自动核验目标路径。',
+      `命令: ${label}`,
+      '请给出明确路径，或改用「登记 delete_allow + 明确路径」的方式执行。'
+    );
+  }
+
+  // ★ FIX-11：豁免过滤前置 —— 全部命中删除豁免清单时直接交回阶段门禁。
+  //   原实现把「无活跃迭代」检查放在豁免循环之前 ⇒ 删 {IDE}/memory/ 也被拒，
+  //   与 SSOT 删除豁免清单矛盾。现仅对「未豁免目标」做 none 检查与 delete_allow 校验。
+  const pending = list.filter((raw) => !isDeleteExempt(raw));
+  if (pending.length === 0) {
+    audit('DELETE_EXEMPT', `${label} → ${list.join(' , ')}`);
+    return;
+  }
+
   const activeFile = join(RUNTIME_DIR, 'ACTIVE');
   let activeId = null;
   if (existsSync(activeFile)) {
@@ -514,17 +561,7 @@ async function deleteGate(paths, label) {
   }
 
   const allow = readDeleteAllow(activeId);
-  const list = (Array.isArray(paths) ? paths : []).filter(Boolean);
-  if (list.length === 0) {
-    block(
-      '删除/移动类命令无法自动核验目标路径。',
-      `命令: ${label}`,
-      '请给出明确路径，或改用「登记 delete_allow + 明确路径」的方式执行。'
-    );
-  }
-
-  for (const raw of list) {
-    if (isDeleteExempt(raw)) continue;
+  for (const raw of pending) {
     const rel = toProjectRelative(raw);
     if (rel && Array.isArray(allow) && allow.some((a) => matchDeleteAllow(rel, a))) continue;
     block(
@@ -538,7 +575,7 @@ async function deleteGate(paths, label) {
 
   // ★ 删除白名单校验通过 → 交回调用方继续走「阶段门禁」（不得直接 exit）：
   //   01-03 仍受 EXEMPT_PATHS 约束；00/05/06/07 仍一律阻止；04 放行。
-  audit('DELETE_ALLOW', `${label} → ${list.join(' , ')}`);
+  audit('DELETE_ALLOW', `${label} → ${pending.join(' , ')}`);
 }
 
 /** ★ FIX-9：通用审计留痕（放行与拦截均记录） */

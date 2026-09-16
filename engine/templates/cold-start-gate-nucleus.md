@@ -1,5 +1,6 @@
-<!-- NUCLEUS-BEGIN v1.7 -->
-<!-- cold-start-gate-nucleus v1.7 · 规则源 gate-protocol.md · 注入 setup-gate.py --ide {codebuddy|claude-code|cursor}
+<!-- NUCLEUS-BEGIN v1.8 -->
+<!-- cold-start-gate-nucleus v1.8 · 规则源 gate-protocol.md · 注入 setup-gate.py --ide {codebuddy|claude-code|cursor}
+     v1.8 要点：`{IDE}/memory/` 工作记忆写入/维护**与迭代状态无关**（含 ACTIVE=none 一律放行，FIX-11）；
      v1.7 要点：04 阶段写入放行；删除/移动类走「清单锚定」（仅 state.yaml 的 delete_allow + 工程豁免）；拦截/放行均留痕 gate-audit.log；
      hook 实测硬拦（本微核仅兜底 hook 不可用环境）；阶段判据以 state.yaml 为准；改本模板前先查 gate-protocol.md；历史见仓库提交记录。 -->
 
@@ -20,7 +21,7 @@
 
 | 条件 | 动作 |
 |------|------|
-| 无活跃迭代 / 格式异常 | 🔴 阻断，等用户回复 |
+| 无活跃迭代 / 格式异常 | 🔴 阻断，等用户回复（**例外**：`{IDE}/memory/` 工作记忆写入/维护一律放行） |
 | `current_phase = 04` | 🟡 写入放行；**删除/移动类**须在 `state.yaml` 的 `delete_allow`（＝任务清单 DELETED/ADDED 项）内，否则硬拦 |
 | `current_phase` ∈ 01/02/03 | 🟡 仅放行 `{IDE}/skills/iteration-workflow/`、`docs/iterations/`、`{IDE}/memory/`、`runtime/`；越界即阻断 |
 | 其他（00/05/06/07） | 🔴 阻断 |
