@@ -20,6 +20,8 @@ import os
 import re
 import sys
 import hashlib
+import shutil
+import time
 from pathlib import Path
 
 
@@ -198,6 +200,8 @@ def force_inject(target_path: Path, ide_dir: str) -> bool:
 
     v1.4+：按 NUCLEUS-BEGIN / NUCLEUS-END 显式边界全量剥离；
     旧版（无标记）：走 LEGACY_NUCLEUS_RE 启发式兜底并告警。
+    v1.7+（GAP-2 A+）：正文只归一化开头（不再 strip 尾部）；写入前做「正文零变化」校验 +
+    自动备份到 {ide_dir}/temp —— 保证手工维护过的正文不会被 --force 意外改写。
     """
     if not TEMPLATE_PATH.exists():
         safe_print(f"[FAIL] Template not found: {TEMPLATE_PATH}")
@@ -219,9 +223,29 @@ def force_inject(target_path: Path, ide_dir: str) -> bool:
         if mode == "legacy":
             safe_print(f"[WARN] Legacy nucleus (no NUCLEUS-BEGIN marker) stripped "
                        f"heuristically — please eyeball {target_path.name}.")
-        # 清掉剥离后残留的分隔线，再按 inject_nucleus() 的统一格式（微核 + '---' + 正文）拼回
-        clean = LEADING_SEP_RE.sub("", clean.strip())
-        new_content = nucleus_content + "\n\n---\n\n" + clean if clean else nucleus_content
+        # ★ A+（GAP-2）：正文保护 —— 只归一化**开头**（去空白 + 前置分隔线），
+        #   尾部与内部原样保留（旧版 clean.strip() 会改动正文首尾空白）
+        body = LEADING_SEP_RE.sub("", clean.lstrip())
+        new_content = nucleus_content + "\n\n---\n\n" + body if body else nucleus_content
+
+        # ★ A+：正文零变化校验 —— 对新内容重新剥离微核，正文须与 body 完全一致
+        recheck, re_removed, _ = strip_nucleus(new_content)
+        recheck_body = LEADING_SEP_RE.sub("", recheck.lstrip())
+        if re_removed != 1 or recheck_body != body:
+            safe_print(f"[FAIL] Body integrity check failed — aborting; "
+                       f"{target_path.name} left untouched.")
+            return False
+
+        # ★ A+：写入前自动备份（优先 {ide_dir}/temp，回退同目录）
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        temp_dir = Path(ide_dir) / "temp"
+        backup_dir = temp_dir if temp_dir.is_dir() else target_path.parent
+        try:
+            backup = backup_dir / (target_path.name + f".bak-force-{ts}")
+            shutil.copy2(target_path, backup)
+            safe_print(f"[INFO] Backup: {backup}（确认无误后可删）")
+        except Exception as e:
+            safe_print(f"[WARN] Backup failed ({e}); continue without backup.")
     else:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         new_content = nucleus_content

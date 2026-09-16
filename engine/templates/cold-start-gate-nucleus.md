@@ -1,17 +1,7 @@
-<!-- NUCLEUS-BEGIN v1.6 -->
-<!-- cold-start-gate-nucleus v1.6 · 规则源 gate-protocol.md · 注入 setup-gate.py --ide {codebuddy|claude-code|cursor}
-     v1.6 (2026-09-14): ① 04 阶段规则细化 —— 写入放行；**删除/移动类**改为「清单锚定」（FIX-9）：
-                        仅放行 state.yaml 的 delete_allow（＝任务清单 DELETED/ADDED 项）+ 工程豁免，未登记即硬拦；
-                        ② 拦截与放行均留痕 gate-audit.log。
-     v1.5 (2026-09-14): ① 修正 hook 表述 —— PreToolUse 在 CodeBuddy IDE 实测硬拦生效（FIX-5），
-                        微核定位由"唯一防线"改为"hook 不可用时的兜底"；
-                        ② 阶段判据改为以 state.yaml 为准（ACTIVE 的 PHASE 字段可能陈旧，见 FIX-6）；
-                        ③ 移除三个 ASCII 阻断模板，改要点式，模板 94 → 45 行。
-     v1.4 (2026-09-14): 新增 NUCLEUS-BEGIN / NUCLEUS-END 显式边界（修 --force 叠加，FIX-4）。
-     v1.3 (2026-09-14): 修 ide_dir 前导双点 Bug（曾影响 codebuddy / claude-code / cursor 三个 IDE）。
-     v1.2 及更早：变更历史见仓库提交记录。
-     用途：注入目标 IDE 的 MEMORY.md / CLAUDE.md / .cursorrules，提供冷启动门禁兜底。 -->
-<!-- 当 gate-protocol.md 门禁规则更新时，请同步检查本模板 -->
+<!-- NUCLEUS-BEGIN v1.7 -->
+<!-- cold-start-gate-nucleus v1.7 · 规则源 gate-protocol.md · 注入 setup-gate.py --ide {codebuddy|claude-code|cursor}
+     v1.7 要点：04 阶段写入放行；删除/移动类走「清单锚定」（仅 state.yaml 的 delete_allow + 工程豁免）；拦截/放行均留痕 gate-audit.log；
+     hook 实测硬拦（本微核仅兜底 hook 不可用环境）；阶段判据以 state.yaml 为准；改本模板前先查 gate-protocol.md；历史见仓库提交记录。 -->
 
 ## ★ 修改门禁铁律（最高优先级）
 
