@@ -102,14 +102,14 @@ const WATCHED_TOOLS = [
 const DANGEROUS_CMD_PATTERNS = [
   // ── 文件写入/重定向 ──
   /\b(?:Out-File|Set-Content|Add-Content|Tee-Object)\b/i,       // PowerShell 写入
-  /\b(?:New-Item|ni|mkdir|md)\b/i,                                 // 创建文件/目录
+  /\b(?:New-Item|mkdir)\b/i,                                       // 创建文件/目录（★ FIX-10：ni/md 改命令位判定）
   /[^>]>\s*\S/,                                                    // 输出重定向（排除 >>）
   />>\s*\S/,                                                       // 追加重定向
   // ── 文件删除 ──
-  /\b(?:Remove-Item|ri|rm|del|erase|rmdir|rd)\b/i,               // 删除命令
+  /\b(?:Remove-Item|erase|rmdir|rm|del)\b/i,                     // 删除命令（★ FIX-10：ri/rd 改命令位判定）
   /\bdel\s+/i, /\berase\s+/i,                                      // cmd 删除
   // ── 文件修改/移动 ──
-  /\b(?:Move-Item|mi|mv|move|Rename-Item|rni|ren|rename)\b/i,
+  /\b(?:Move-Item|mv|move|Rename-Item|ren|rename)\b/i,             // ★ FIX-10：mi/rni 改命令位判定
   /\bcopy\s+/i,                                                    // 文件复制
   // ── Git 变更类 ──
   /\bgit\s+(?:commit|push|reset|rebase|merge|cherry-pick|stash)\b/i,
@@ -133,7 +133,11 @@ const SAFE_CMD_PATTERNS = [
 ];
 
 // ── 逃生口 ────────────────────────────────────────────
-if (process.env.GATE_BYPASS === '1' || process.env.GATE_BYPASS === 'true') {
+// ★ 回归测试专用（FIX-10 补）：GATE_TEST_DISABLE_BYPASS=1 时忽略逃口 —— 只会更严格，
+//   不构成绕过通道；用于「逃口标记存在时仍能跑回归」（否则逃口会把所有用例短路放行）。
+const BYPASS_DISABLED_FOR_TEST = process.env.GATE_TEST_DISABLE_BYPASS === '1';
+if (!BYPASS_DISABLED_FOR_TEST
+    && (process.env.GATE_BYPASS === '1' || process.env.GATE_BYPASS === 'true')) {
   auditBypass('GATE_BYPASS_env');
   process.exit(0);
 }
@@ -144,7 +148,7 @@ const GATE_BYPASS_PATHS = [
   join(PROJECT_DIR, '.cursor/hooks/.gate-bypass'),
   join(PROJECT_DIR, '.codex/hooks/.gate-bypass'),
 ];
-if (GATE_BYPASS_PATHS.some(p => existsSync(p))) {
+if (!BYPASS_DISABLED_FOR_TEST && GATE_BYPASS_PATHS.some(p => existsSync(p))) {
   auditBypass('.gate-bypass_file');
   process.exit(0);
 }
@@ -170,10 +174,20 @@ function splitCommandChain(cmd) {
     .filter(Boolean);
 }
 
-/** 单个命令段是否危险（危险模式 或 解释器内联） */
+/**
+ * ★ FIX-10：PowerShell 短别名（ni/md/mi/ri/rd/rni）只在「命令名位置」判定 ——
+ * 避免只读命令里的 `.md` 文件名（`.` 提供词边界）被误判为 mkdir 而整段拦下。
+ * 命令名位置 = 段首，允许 cmd /c、powershell -Command 等包装前缀。
+ */
+const CMD_WRAPPER_PREFIX_RE = /^(?:(?:cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh(?:\.exe)?)\s+(?:\/[a-z]\s+|-\w+\s+)*)/i;
+const SHORT_ALIAS_AT_CMD_POS_RE = /^(?:ni|md|mi|ri|rd|rni)(?=\s|$)/i;
+
+/** 单个命令段是否危险（命令位短别名 或 危险模式 或 解释器内联） */
 function isDangerousSegment(seg) {
-  return DANGEROUS_CMD_PATTERNS.some((p) => p.test(seg))
-      || INTERPRETER_INLINE_PATTERNS.some((p) => p.test(seg));
+  const s = String(seg || '').trim();
+  if (SHORT_ALIAS_AT_CMD_POS_RE.test(s.replace(CMD_WRAPPER_PREFIX_RE, ''))) return true;
+  return DANGEROUS_CMD_PATTERNS.some((p) => p.test(s))
+      || INTERPRETER_INLINE_PATTERNS.some((p) => p.test(s));
 }
 
 let stdinIsTTY = false;
