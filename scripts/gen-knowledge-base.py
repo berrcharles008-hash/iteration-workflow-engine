@@ -382,6 +382,52 @@ def _is_auto_generated(file_path):
 
 # --- L1 generation ---
 
+def _pick_main_vue(vue_files):
+    """Pick the representative .vue file for one module group (generic rules).
+
+    Priority (no project-specific names -- applicable to any Vue project):
+      1. file stem equals its own parent dir name  (order_receive/order_receive.vue)
+      2. stem free of auxiliary words              (render / component / snippet / cell)
+      3. shortest stem, then lexicographic         (stable fallback, never fails)
+    """
+    def _rank(p):
+        stem = p.stem.lower()
+        same_as_dir = (stem == p.parent.name.lower())
+        aux = any(w in stem for w in ("render", "component", "snippet", "cell"))
+        return (0 if same_as_dir else 1, 1 if aux else 0, len(p.stem), p.stem)
+
+    return sorted(vue_files, key=_rank)[0]
+
+
+def _report_module_dir_coverage(config):
+    """Advisory coverage check (check mode only): page dirs vs module_map.
+
+    Generic and config-driven: runs only when a module_map is configured.
+    Reports [WARN] for every top-level page dir missing from the map (the
+    signal that a dir was added/renamed without updating the manifest) and
+    for every map entry whose dir no longer exists. Never changes exit code.
+    """
+    fe_page_dir = config.get("fe_page_dir")
+    module_map = config.get("fe_module_map") or {}
+    if not fe_page_dir or not fe_page_dir.exists() or not module_map:
+        return
+    mapped = set(module_map.keys())
+    actual = sorted(d.name for d in fe_page_dir.iterdir() if d.is_dir())
+    unmapped = [d for d in actual if d not in mapped]
+    missing = sorted(mapped - set(actual))
+    if unmapped:
+        safe_print(f"  [WARN] page dirs not covered by module_map ({len(unmapped)}): "
+                   + ", ".join(unmapped))
+        safe_print("         -> add to frontend_layers.page.module_map, "
+                   "otherwise they fall into 'Shared'")
+    if missing:
+        safe_print(f"  [WARN] module_map entries without matching dir ({len(missing)}): "
+                   + ", ".join(missing))
+        safe_print("         -> remove stale entries from frontend_layers.page.module_map")
+    if not unmapped and not missing:
+        safe_print(f"  [OK] module_map covers all {len(actual)} page dirs")
+
+
 def _scan_l1_modules(config):
     """Scan front-end pages and back-end *Mgr classes for L1.
 
@@ -406,18 +452,25 @@ def _scan_l1_modules(config):
             key = _fe_module_match(rel_path, vue_file.stem, fe_re,
                                    config.get("fe_module_map")) or "Shared"
             grp = groups.setdefault(key, {
-                "name": key, "dir": None, "main_file": None, "file_count": 0})
-            if grp["main_file"] is None:
-                grp["main_file"] = vue_file.name
-                grp["dir"] = str(vue_file.parent.relative_to(
-                    PROJECT_ROOT)).replace("\\", "/")
-                # Legacy layout: a sibling dir named after the module
-                # (e.g. m3/ next to M3Module.vue) also counts.
-                sibling_dir = vue_file.parent / key.lower()
-                if sibling_dir.exists():
-                    grp["file_count"] += sum(
-                        1 for _ in sibling_dir.rglob("*") if _.is_file())
+                "name": key, "dir": None, "main_file": None, "file_count": 0,
+                "_vue": []})
             grp["file_count"] += 1
+            grp["_vue"].append(vue_file)
+
+        # Pick the representative .vue per group (see _pick_main_vue) instead
+        # of "first in scan order" -- a group may hold auxiliary components.
+        for grp in groups.values():
+            main = _pick_main_vue(grp["_vue"])
+            del grp["_vue"]
+            grp["main_file"] = main.name
+            grp["dir"] = str(main.parent.relative_to(
+                PROJECT_ROOT)).replace("\\", "/")
+            # Legacy layout: a sibling dir named after the module
+            # (e.g. m3/ next to M3Module.vue) also counts.
+            sibling_dir = main.parent / grp["name"].lower()
+            if sibling_dir.exists():
+                grp["file_count"] += sum(
+                    1 for _ in sibling_dir.rglob("*") if _.is_file())
         fe_modules = list(groups.values())
         # Sort by M-number (M3 < M4 < ... < M11)
         def _m_sort_key(item):
@@ -636,17 +689,37 @@ def _parse_module_map(raw):
     Generic by design: the manifest carries the project-specific names
     (frontend_layers.page.module_map); this function only knows the
     "dir=Key" wire format. Empty/invalid input -> {} (no behavior change).
+
+    Validation is advisory -- warnings only, never raises; a fully valid map
+    parses exactly as before:
+      * malformed entry (no '=', empty key/value) -> skipped + [WARN]
+      * duplicate dir -> FIRST value kept + [WARN] (was: silent overwrite)
+      * value not shaped like a module key (letters + digits, e.g. M1/S1)
+        -> kept as-is + [WARN]
     """
     mapping = {}
     if not raw:
         return mapping
     for pair in str(raw).split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
         if "=" not in pair:
+            safe_print(f"[WARN] module_map: entry '{pair}' has no '=' -> skipped")
             continue
         key, val = pair.split("=", 1)
         key, val = key.strip(), val.strip()
-        if key and val:
-            mapping[key] = val
+        if not key or not val:
+            safe_print(f"[WARN] module_map: entry '{pair}' has empty key/value -> skipped")
+            continue
+        if key in mapping:
+            safe_print(f"[WARN] module_map: duplicate dir '{key}' "
+                       f"(kept '{mapping[key]}', ignored '{val}')")
+            continue
+        if not re.match(r'^[A-Za-z]+\d+$', val):
+            safe_print(f"[WARN] module_map: value '{val}' for dir '{key}' does not "
+                       f"look like a module key (e.g. M1 / S1) -> kept as-is")
+        mapping[key] = val
     return mapping
 
 
@@ -1209,6 +1282,8 @@ def main():
     if level in ("L1", "all"):
         safe_print("\n--- L1: 项目模块总览 ---")
         generate_l1(config, check_only=args.check, force=args.force)
+        if args.check:
+            _report_module_dir_coverage(config)
 
     if level in ("L2", "all"):
         safe_print("\n--- L2: 模块级 Wiki ---")
