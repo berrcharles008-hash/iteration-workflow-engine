@@ -134,6 +134,7 @@ def load_manifest():
     fe_page_sub = _extract_subblock(fe_block, "page")
     fe_page_dir = _extract_yaml_value(fe_page_sub, "dir")
     fe_page_pattern = _extract_yaml_value(fe_page_sub, "file_pattern")
+    fe_page_module_map = _extract_yaml_value(fe_page_sub, "module_map")
     fe_bll_sub = _extract_subblock(fe_block, "bll")
     fe_bll_dir = _extract_yaml_value(fe_bll_sub, "dir")
 
@@ -166,6 +167,7 @@ def load_manifest():
         "kb_dir": resolve(kb_dir),
         "fe_page_dir": resolve(fe_page_dir) if fe_page_dir else None,
         "fe_page_pattern": fe_page_pattern,
+        "fe_module_map": _parse_module_map(fe_page_module_map),
         "fe_bll_dir": resolve(fe_bll_dir) if fe_bll_dir else None,
         "be_entity_dir": resolve(be_entity_dir) if be_entity_dir else None,
         "be_interface_dir": resolve(be_interface_dir) if be_interface_dir else None,
@@ -401,7 +403,8 @@ def _scan_l1_modules(config):
             if _is_build_artifact(vue_file):
                 continue
             rel_path = str(vue_file.relative_to(PROJECT_ROOT)).replace("\\", "/")
-            key = _fe_module_match(rel_path, vue_file.stem, fe_re) or "Shared"
+            key = _fe_module_match(rel_path, vue_file.stem, fe_re,
+                                   config.get("fe_module_map")) or "Shared"
             grp = groups.setdefault(key, {
                 "name": key, "dir": None, "main_file": None, "file_count": 0})
             if grp["main_file"] is None:
@@ -627,6 +630,26 @@ def _module_anchor_match(class_name, anchors):
     return None
 
 
+def _parse_module_map(raw):
+    """Parse "dir=ModuleKey,dir=ModuleKey" into {dir_name: module_key}.
+
+    Generic by design: the manifest carries the project-specific names
+    (frontend_layers.page.module_map); this function only knows the
+    "dir=Key" wire format. Empty/invalid input -> {} (no behavior change).
+    """
+    mapping = {}
+    if not raw:
+        return mapping
+    for pair in str(raw).split(","):
+        if "=" not in pair:
+            continue
+        key, val = pair.split("=", 1)
+        key, val = key.strip(), val.strip()
+        if key and val:
+            mapping[key] = val
+    return mapping
+
+
 def _build_fe_name_regex(file_pattern):
     """Compile manifest frontend file_pattern into a name-matching regex.
 
@@ -644,19 +667,35 @@ def _build_fe_name_regex(file_pattern):
         return re.compile(r'M\d+Module$')
 
 
-def _fe_module_match(file_path, name, fe_re=None):
+def _fe_module_match(file_path, name, fe_re=None, module_map=None):
     """Match a frontend file to a module key (e.g. M3..M11 / Shared).
 
-    Priority: file name matches configured file_pattern ->
+    Priority: explicit manifest dir->module map (Priority 0) ->
+              file name matches configured file_pattern ->
               dir name m{n}[_suffix] -> shared.
 
     Note (FIX-10): module dirs are often named ``m1_order_receive`` /
     ``m10_quality_report`` (digit followed by a descriptive suffix), so the
     directory regex must NOT require ``/`` or end-of-string right after the
     digits -- it only needs to anchor on the leading ``m``.
+
+    Note (migration): the explicit map comes from
+    ``frontend_layers.page.module_map`` and makes module detection
+    deterministic (no reliance on legacy ``m{n}_`` dir prefixes).
     """
     if fe_re is None:
         fe_re = re.compile(r'M\d+Module$')
+
+    # Priority 0 (NEW): explicit dir -> module map from manifest.
+    # Deterministic: relies on configuration, not on path naming conventions.
+    # NOTE: local var ``norm`` is used by this branch only; the branches
+    # below keep using ``file_path`` verbatim (zero side effects).
+    if module_map:
+        norm = str(file_path).replace("\\", "/")
+        for part in norm.split("/"):
+            if part in module_map:
+                return module_map[part]
+
     if fe_re.match(name):
         # Key: strip conventional suffix for stable cross-layer naming
         return re.sub(r'Module$', '', name)
@@ -727,7 +766,7 @@ def _build_l2_groups(config):
     fe_mod_map = {}
     fe_shared = []
     for v in fe_vue + fe_js:
-        key = _fe_module_match(v["path"], v["name"], fe_re)
+        key = _fe_module_match(v["path"], v["name"], fe_re, config.get("fe_module_map"))
         if key:
             fe_mod_map.setdefault(key, []).append(v)
         else:
