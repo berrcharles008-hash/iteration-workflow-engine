@@ -12,6 +12,7 @@
 # v2.2.0 — 039迭代：新增 Step 0前置依赖检查 + IDE目录自动创建 + -NoBackup 备份开关
 # v2.3.0 — GAP-4/B：新增 Step 4b —— CodeBuddy settings.json 的 PreToolUse 幂等注册
 #          （hook 文件存在 ≠ 被 IDE 执行；缺注册即静默失效，故安装时自动补齐 / 保守合并）
+# v2.3.1 — GAP-4/加固②：新增 Step 7b —— MEMORY.md 注入配额自检（余量 <10% 预警 / 超限告警）
 # ============================================================
 
 param(
@@ -108,6 +109,11 @@ if ($DryRun) {
     if ($DetectedIde -in @("codebuddy","claude-code","cursor")) {
         Write-Host "  Step 7 (冷启动微核):"
         Write-Host "    > python scripts\setup-gate.py --ide $DetectedIde"
+        Write-Host ""
+    }
+    if ($DetectedIde -eq "codebuddy") {
+        Write-Host "  Step 7b (注入配额自检):"
+        Write-Host "    > python scripts\memory_quota.py .codebuddy\memory\MEMORY.md（余量 <10% 预警）"
         Write-Host ""
     }
     Write-Host "  Step 8 (门禁自检):"
@@ -432,6 +438,21 @@ if ($DetectedIde -in $nucleusSupported) {
     }
 } else {
     Write-Host "  ⏭  Skipped（${DetectedIde}: prompt-level gate only）"
+}
+
+# ── Step 7b: 工作记忆注入配额自检（GAP-4/加固②）────
+# 判据：注入文件超 8000 码元时 IDE 从头部截断 ⇒ **尾部内容静默丢失**（铁律/环境/偏好首当其冲）。
+Write-Host "[Step 7b/8] Memory injection quota..."
+$quotaScript = "$EngineDir\scripts\memory_quota.py"
+if ($DetectedIde -eq "codebuddy" -and $pythonCmd -and (Test-Path $quotaScript)) {
+    & $pythonCmd $quotaScript ".codebuddy\memory\MEMORY.md"
+    switch ($LASTEXITCODE) {
+        1 { Write-Host "  ❌ Over budget — tail will be truncated. Slim MEMORY.md now." }
+        2 { Write-Host "  ⚠  Margin below 10% — plan a slimming pass soon." }
+        default { Write-Host "  ✅ Quota OK" }
+    }
+} elseif ($DetectedIde -eq "codebuddy") {
+    Write-Host "  ⏭  Skipped（memory_quota.py / Python unavailable）"
 }
 
 # ── Step 8: 门禁自检 ──────────────────────────

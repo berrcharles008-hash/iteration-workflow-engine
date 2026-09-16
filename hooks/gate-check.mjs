@@ -212,6 +212,33 @@ function isDangerousSegment(seg) {
       || INTERPRETER_INLINE_PATTERNS.some((p) => p.test(s));
 }
 
+/**
+ * ★ GAP-4/加固①（2026-09-16）：逃生口「自建」判定 —— 段内是否在**创建** .gate-bypass 标记。
+ * 背景：`fsutil file createnew .codebuddy\hooks\.gate-bypass 0` 不命中任何危险模式
+ *       （既有通道，A/B 落地即用），Agent 可据此自行开启逃生口 ⇒ 门禁被静默绕过。
+ * 语义边界：只匹配「创建/写入」；「删除标记」不受此判定约束 —— 标记存在时上游逃生口检查
+ *       已 exit(0) 放行，本判定根本不会被触达。
+ * 与 DANGEROUS_CMD_PATTERNS 的区别：本判定**绝对拦截**（不经阶段门禁）⇒ 04 阶段同样拒绝。
+ */
+const BYPASS_CREATE_PATTERNS = [
+  /\bfsutil\s+file\s+createnew\b[^\n]*\.gate-bypass/i,                        // fsutil 建文件（已知通道）
+  /(?:^|\s)>{1,2}\s*[^\n]*\.gate-bypass/i,                                    // 重定向写入：> / >>
+  /\b(?:copy|Copy-Item|xcopy|robocopy|tee|Tee-Object)\b[^\n]*\.gate-bypass/i,
+  /\b(?:New-Item|ni|Set-Content|Add-Content|Out-File|touch)\b[^\n]*\.gate-bypass/i,
+  /\b(?:python|python3|py|node|nodejs|ruby|perl|php)\b[^\n]*\.gate-bypass/i,  // 解释器内联 / 脚本
+];
+
+/**
+ * ★ 判定必须用**整条命令**（而非 splitCommandChain 拆出的段）：
+ *   解释器内联脚本含 `;`（如 `python -c "import os; os.remove('…')"`）会被拆段，
+ *   导致 "python" 与 ".gate-bypass" 分居两段 ⇒ 逐段判定**漏检**（FIX-9d 同源教训）。
+ *   故模式内用 `[^\n]*` 允许跨段，只在**同一条命令行内**关联。
+ */
+function isBypassCreateCommand(cmd) {
+  const s = String(cmd || '');
+  return BYPASS_CREATE_PATTERNS.some((p) => p.test(s));
+}
+
 let stdinIsTTY = false;
 const input = await new Promise((resolve) => {
   let data = '';
@@ -271,6 +298,18 @@ if (toolName === 'execute_command' || toolName === 'Bash') {
   // cd / echo / dir 等安全前缀时，后续的 del / Remove-Item / 重定向 /
   // 解释器内联（node -e、python -c）被整条放行。
   const segments = splitCommandChain(cmd);
+
+  // ★ GAP-4/加固①（2026-09-16）：逃生口「自建」绝对拦截 —— 任何阶段一律拒绝（含 04）。
+  //   逃生口是「人开的闸」；Agent 自建即等于自行解除门禁，故不走阶段门禁、直接 block。
+  if (isBypassCreateCommand(cmd)) {
+    audit('BLOCK', `[BYPASS-CREATE] ${cmd.substring(0, 140)}`);
+    block(
+      '检测到「创建逃生口标记」的命令（.gate-bypass）。',
+      `命令: ${cmd.substring(0, 80)}`,
+      '逃生口只能由用户手动开启：请用户创建标记文件，或由用户设置 GATE_BYPASS=1。'
+    );
+  }
+
   const dangerSeg = segments.find((seg) => isDangerousSegment(seg));
 
   // ★ FIX-9：删除/移动类段先走「清单锚定」校验（04 阶段不再无条件放行删除）
