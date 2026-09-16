@@ -123,6 +123,13 @@ complexity_adjustments:
     to: "🔴"
     reason: "存储过程改造涉及 3 个 GTT 临时表和 1 个 PROC 重写，超出中等范围"
     adjusted_at: "2026-06-25T14:00"
+# ★ 可选字段（2026-09-16 新增，04 阶段 Step 5.6 回填）：实际复算等级，仅记录与校准用
+# 不改变 complexity；★ 不在 §3.3 必填清单内（缺失不视为校验失败）
+complexity_actual: "🟡"
+complexity_actual_factors:
+  - id: "new_api"
+    score: 2
+complexity_actual_note: "04 实际新增 4 个文件、1 个接口，与 03 复评一致"
 current_phase: "04"         # "01" ~ "07"
 phase_status: "in_progress" # 当前阶段状态：in_progress | completed | blocked
 

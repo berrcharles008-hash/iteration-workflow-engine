@@ -191,6 +191,8 @@ M 阶段完成后，重新按阶段顺序推进至 N 阶段（如 04→05）
 > `affected_files` 3-5 个**只值 1 分**、`new_module` 只值 1 分、`new_db_table` 只值 2 分，单靠它们**均不足以跨到下一等级**。
 > **累计总分才是唯一判据**；典型组合列与评分冲突时，**一律以评分为准**。
 
+> ★ **硬下限兜底**（2026-09-16）：评分仍是唯一判据，但命中 `new_db_table` / `ddl_change` / `database_logic_change` / `new_api` / `cross_module_impact` **任一**因素时，等级**不得低于 🟡**（只提升不降低；用户可覆盖，但 Agent 须告知"将跳过 03 交叉审查等 🟡 强制项"的后果）。详见 [complexity-scoring.md](complexity-scoring.md) §1.2.1。**本表典型组合数值不变**。
+
 > 各等级在各阶段的执行方式差异，详见 [complexity-scoring.md](complexity-scoring.md) 三、各等级下各阶段的执行模板。
 
 ---
