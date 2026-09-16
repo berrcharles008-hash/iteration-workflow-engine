@@ -10,6 +10,8 @@
 #               Step 4 从 hooks/gate-check.mjs 单源复制（非各 IDE 独立副本）
 # v2.1.0 — 038迭代：新增 Step 5 ACTIVE初始化 + Step 6模板注入验证 + Step 7多IDE冷启动微核
 # v2.2.0 — 039迭代：新增 Step 0前置依赖检查 + IDE目录自动创建 + -NoBackup 备份开关
+# v2.3.0 — GAP-4/B：新增 Step 4b —— CodeBuddy settings.json 的 PreToolUse 幂等注册
+#          （hook 文件存在 ≠ 被 IDE 执行；缺注册即静默失效，故安装时自动补齐 / 保守合并）
 # ============================================================
 
 param(
@@ -87,6 +89,9 @@ if ($DryRun) {
         Write-Host "    + hooks\gate-check.mjs → $HookTarget\"
         if ($DetectedIde -eq "claude-code" -or $DetectedIde -eq "codebuddy") {
             Write-Host "    （RUNTIME_DIR 三元表达式运行时自动检测，无需路径替换）"
+        }
+        if ($DetectedIde -eq "codebuddy") {
+            Write-Host "    * .codebuddy\settings.json 注册 PreToolUse（幂等；缺注册 = Hook 静默失效）"
         }
     } else {
         Write-Host "    （generic 模式仅 prompt 层门禁，无 Hook）"
@@ -273,6 +278,72 @@ if ($HookTarget) {
     Write-Host "  ✅ $DetectedIde Hook installed to $HookTarget"
 } else {
     Write-Host "  ⚠  Generic mode: no Hook available（prompt-level gate only）"
+}
+
+# ── Step 4b: Hook 注册（CodeBuddy settings.json，幂等）────
+# 门禁 Hook 仅"文件存在"不会被 IDE 触发：CodeBuddy 还须在 .codebuddy/settings.json 的
+# hooks.PreToolUse 中注册命令。缺此注册 = Hook 静默失效（GAP-4 诊断三）。
+# 策略：已注册 → 跳过；文件不存在 → 创建；存在其他配置 → 先备份再保守合并（失败则提示手工）。
+if ($DetectedIde -eq "codebuddy" -and $HookTarget) {
+    $settingsPath = ".codebuddy\settings.json"
+    $hookCmd = "node .codebuddy/hooks/gate-check.mjs"
+    $alreadyRegistered = $false
+    if (Test-Path $settingsPath) {
+        if ((Get-Content $settingsPath -Raw -Encoding UTF8) -match 'gate-check\.mjs') {
+            $alreadyRegistered = $true
+        }
+    }
+    if ($alreadyRegistered) {
+        Write-Host "  ✅ Gate hook already registered in settings.json"
+    } elseif (Test-Path $settingsPath) {
+        $backup = "$settingsPath.bak-$(Get-Date -Format yyyyMMdd-HHmmss)"
+        Copy-Item $settingsPath $backup -Force
+        try {
+            $json = Get-Content $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $entry = [PSCustomObject]@{
+                matcher = ".*"
+                hooks   = @([PSCustomObject]@{ type = "command"; command = $hookCmd; timeout = 15 })
+            }
+            if ($null -eq $json.hooks) {
+                $json | Add-Member -NotePropertyName hooks -NotePropertyValue ([PSCustomObject]@{ PreToolUse = @($entry) }) -Force
+            } elseif ($null -eq $json.hooks.PreToolUse) {
+                $json.hooks | Add-Member -NotePropertyName PreToolUse -NotePropertyValue @($entry) -Force
+            } else {
+                $json.hooks.PreToolUse = @($json.hooks.PreToolUse) + $entry
+            }
+            $out = $json | ConvertTo-Json -Depth 20
+            [IO.File]::WriteAllText([IO.Path]::GetFullPath($settingsPath), $out, (New-Object System.Text.UTF8Encoding($false)))
+            Write-Host "  ✅ Gate hook merged into settings.json（backup: $backup）"
+        } catch {
+            Write-Host "  ❌ Failed to merge settings.json: $_"
+            Write-Host "     Manual fix: add hooks.PreToolUse -> $hookCmd"
+            Write-Host "     Backup kept at: $backup"
+        }
+    } else {
+        New-Item -ItemType Directory -Force -Path ".codebuddy" | Out-Null
+        $template = @'
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .codebuddy/hooks/gate-check.mjs",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
+'@
+        [IO.File]::WriteAllText([IO.Path]::GetFullPath($settingsPath), $template, (New-Object System.Text.UTF8Encoding($false)))
+        Write-Host "  ✅ settings.json created with gate hook registration"
+    }
+} elseif ($HookTarget) {
+    Write-Host "  ⏭  Hook registration skipped（$DetectedIde uses a different registration mechanism）"
 }
 
 # ── Step 5: ACTIVE 状态初始化 ─────────────────
