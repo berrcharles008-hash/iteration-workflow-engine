@@ -135,6 +135,29 @@ Agent 准备修改文件
 
 ---
 
+### 逃生口自建拦截（★ GAP-4/加固① · 2026-09-16）
+
+> 原则：**逃生口（`.gate-bypass`）只能由用户手动开启，Agent 不得自建。**
+
+**触发**：Bash 命令文本命中「创建 `.gate-bypass`」的写入语义 ——
+`fsutil file createnew` ／ 重定向（`>` `>>`）／ `copy`·`Copy-Item`·`xcopy`·`robocopy`·`tee` ／
+`New-Item`·`ni`·`Set-Content`·`Add-Content`·`Out-File`·`touch` ／ 解释器与脚本（`python`·`node`·`ruby`·`perl`·`php`）。
+
+**判定粒度**：★ 用**整条命令**（而非 `splitCommandChain` 拆出的段）—— 内联脚本含 `;` 会被拆段，
+导致 "python" 与 ".gate-bypass" 分居两段而**漏检**（FIX-9d 同源教训）；模式内以 `[^\n]*` 允许跨段关联。
+
+**强度**：**绝对拦截** —— 不经阶段门禁（**04 阶段同样拒绝**，因 04 的「写入放行」≠ 可自建逃生口）；
+命中即写 `gate-audit.log` 的 `BLOCK [BYPASS-CREATE] …` 并输出阻断框。
+与 `DANGEROUS_CMD_PATTERNS` 的区别：后者仅「触发门禁」、放行与否交阶段判定；本判定**直接 block**。
+
+**不受影响**：① **删除**标记 —— 标记存在时上游逃生口检查已 `exit(0)` 放行，本判定不会被触达
+（标记不存在时删除会被拦，属无害）；② **只读查询**（如 `git check-ignore -v .gate-bypass`）—— 不匹配创建语义。
+
+**已知代价（如实声明）**：元层维护（改 `skills/` 等非豁免路径）时 **Agent 无法自行开闸**，
+须由用户手动创建标记 —— 此即「人开的闸」的设计意图，非缺陷。
+
+---
+
 ### 兜底分支：ACTIVE=none 但 state.yaml 显示 07 待执行
 
 **触发条件**：`ACTIVE Line 1 = "none"` + 存在 `state.yaml` 文件 `iteration_status=completed` 且 `current_phase="07"`（或 `iteration_status=in_progress` 且 `current_phase="07"`）
@@ -455,6 +478,9 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
   `ACTIVE=none` 与 00/05/06/07 阶段同样放行（依据：记忆维护属元层，≠ 业务迭代；
   且系统级要求「每次完成任务必须写记忆」）。范围**严格限定** `{IDE}/memory/`：
   `{IDE}/temp/`、`{IDE}/skills/`、`{IDE}/hooks/` **不在此列**（元层改动仍走逃生口）。
+- ⛔ **创建逃生口标记（`.gate-bypass`）**（GAP-4/加固① · 2026-09-16）—— **不在豁免范围**：
+  由 §一「逃生口自建拦截」**绝对拒绝**（任何阶段，含 04）。逃生口须由**用户手动开启**；
+  **删除**标记不受此限（标记存在时上游逃生口检查已放行）。
 
 ---
 
@@ -494,4 +520,4 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
 
 ---
 
-**最后更新**：2026-09-14（FIX-9：04 阶段删除/移动类操作「清单锚定」校验 + ALWAYS_ALLOW 收紧为段前缀匹配 + 拦截留痕）
+**最后更新**：2026-09-16（GAP-4/加固①：新增「逃生口自建拦截」—— 创建 `.gate-bypass` 的命令在任何阶段**绝对拒绝**，判定用**整条命令**（跨 `;` 不拆）；FIX-11 元层豁免见 §一注记 / §四）
