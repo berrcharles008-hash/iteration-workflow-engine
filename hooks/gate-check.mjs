@@ -94,10 +94,10 @@ const EXEMPT_PATHS = [
  *   05 → docs/iterations/                                          （测试报告）
  *   06 → docs/iterations/ · docs/knowledge-base/ · requirements/**\/*.md · feasibility/**\/*.md
  *        （上线记录 / 知识库刷新 / spec 活文档回写；★ mdDirs 限 .md，不放行同目录其它文件）
- *   07 → docs/iterations/                                          （回顾报告）
+ *   07 → docs/iterations/ · project/lessons-learned.md             （回顾报告 / 模式沉淀）
  *
  * 明确仍拦（fail-closed）：00/none 全部、业务区（back-end/ front-end/ sql/ …）、
- * 05/07 的 requirements/、06 的 requirements 非 .md 文件、以及所有 Bash 命令。
+ * 05/07 的 requirements/、06 的 requirements 非 .md 文件、07 的 project/ 其它文件、以及所有 Bash 命令。
  */
 const STAGE_EXEMPT_PATHS = {
   '05': { dirs: ['docs/iterations/'] },
@@ -105,7 +105,10 @@ const STAGE_EXEMPT_PATHS = {
     dirs: ['docs/iterations/', 'docs/knowledge-base/'],
     mdDirs: ['requirements/', 'feasibility/'],
   },
-  '07': { dirs: ['docs/iterations/'] },
+  // ★ FIX-16（2026-09-17）：07 回顾的「模式沉淀」为强制本职动作（phase-07 step-3/step-5，
+  //   AP-1/AP-4 明禁"仅报告声称"）⇒ 放行写 project/lessons-learned.md。
+  //   判定走 files 精确后缀（自动跨 IDE 前缀），不放行 project/ 下其它文件。
+  '07': { dirs: ['docs/iterations/'], files: ['skills/iteration-workflow/project/lessons-learned.md'] },
 };
 
 /**
@@ -119,6 +122,7 @@ function matchStageExempt(phase, relPath) {
   if (!raw || raw.startsWith('[')) return null;
   const p = raw.replace(/\\/g, '/').replace(/^\/+/, '');
   const hit = (pat) => p.startsWith(pat) || p.includes('/' + pat);
+  for (const f of rule.files || []) if (p === f || p.endsWith('/' + f)) return f;
   for (const d of rule.dirs || []) if (hit(d)) return d;
   if (/\.md$/i.test(p)) {
     for (const d of rule.mdDirs || []) if (hit(d)) return d;

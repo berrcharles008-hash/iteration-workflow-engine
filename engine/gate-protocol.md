@@ -85,6 +85,10 @@ Agent 准备修改文件
 > ★ **FIX-12②（2026-09-17）**：**05/06/07 阶段的「本职文档产出」**（测试报告 / 上线记录 + **spec 活文档** / 回顾报告）
 > 亦不再拦 —— 按 `STAGE_EXEMPT_PATHS` 阶段化放行，业务代码与命令**仍拦**；见 §四 门禁豁免。
 > 实现：`hooks/gate-check.mjs` 的 `matchStageExempt()`（★ 排除 Bash 伪路径 `[CMD] …`；放行写 `STAGE_ALLOW` 审计）。
+>
+> ★ **FIX-16（2026-09-17）**：07 阶段另放行写 **`project/lessons-learned.md`（模式库）** ——
+> phase-07 step-3/step-5 为**强制本职动作**（AP-1/AP-4 明禁"仅报告声称"），原实现漏放行 ⇒ 每次回顾须人工开闸。
+> 实现：`STAGE_EXEMPT_PATHS['07'].files`（精确后缀匹配、自动跨 IDE 前缀；`project/` 其它文件仍拦）。
 
 ### 04 阶段的删除类操作校验（★ FIX-9 · 2026-09-14 用户定）
 
@@ -490,9 +494,9 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
   **05** → `docs/iterations/`（测试报告）；
   **06** → `docs/iterations/` · `docs/knowledge-base/` · `requirements/**/*.md` · `feasibility/**/*.md`
   （上线记录 / 知识库刷新 / **spec 活文档更新**，phase-06 强制项）；
-  **07** → `docs/iterations/`（回顾报告）。
+  **07** → `docs/iterations/`（回顾报告）· `{IDE}/skills/iteration-workflow/project/lessons-learned.md`（**模式库写入**，FIX-16）；
   **仍拦（fail-closed）**：`ACTIVE=none` 全部、业务区（`back-end/` `front-end/` `sql/` …）、
-  05/07 的 `requirements/`、06 的 `requirements` 非 `.md` 文件、**所有 Bash 命令**（伪路径不享豁免）。
+  05/07 的 `requirements/`、06 的 `requirements` 非 `.md` 文件、07 的 `project/` 其它文件、**所有 Bash 命令**（伪路径不享豁免）。
   实现：`hooks/gate-check.mjs` 的 `STAGE_EXEMPT_PATHS` + `matchStageExempt()`；放行写 `STAGE_ALLOW` 审计。
 - ⛔ **创建逃生口标记（`.gate-bypass`）**（GAP-4/加固① · 2026-09-16）—— **不在豁免范围**：
   由 §一「逃生口自建拦截」**绝对拒绝**（任何阶段，含 04）。逃生口须由**用户手动开启**；
@@ -536,8 +540,11 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
 
 ---
 
-**最后更新**：2026-09-17（**FIX-13：§四 豁免表表述订正** —— 原第 3 条「修改 `.codebuddy/skills/`」缺阶段限定，
+**最后更新**：2026-09-17（**FIX-16：07 阶段放行模式库写入** —— `project/lessons-learned.md` 属迭代回顾的**强制本职动作**
+（phase-07 step-3/step-5；AP-1/AP-4 明禁"仅报告声称"），原实现漏放行 ⇒ 每次回顾须人工开闸；现按 `STAGE_EXEMPT_PATHS['07'].files`
+精确放行（跨 IDE 前缀；`project/` 其它文件仍拦）。
+历史：**FIX-13：§四 豁免表表述订正** —— 原第 3 条「修改 `.codebuddy/skills/`」缺阶段限定，
 第 5 条却写「`{IDE}/skills/` 不在此列」，两条自相矛盾；现统一为 `{IDE}/skills/iteration-workflow/`
 **仅 01-03 阶段放行**（`EXEMPT_PATHS`），与 memory 的「与阶段无关」豁免性质区分；以 `hooks/gate-check.mjs` 实现为准。
-历史：2026-09-17 **FIX-12②** 05/06/07 阶段化文档豁免 + `STAGE_ALLOW` 审计（门禁回归 `71/71`，BASE 0 失败）；
+再往前：2026-09-17 **FIX-12②** 05/06/07 阶段化文档豁免 + `STAGE_ALLOW` 审计（门禁回归 `71/71`，BASE 0 失败）；
 2026-09-16 GAP-4/加固① 逃生口自建拦截 + FIX-11 元层豁免）
