@@ -283,6 +283,8 @@ Step 1.6 L1 自动生成时：
 > 事故案例：2026-06-30-007 迭代03阶段，Agent 修复 P2（统一命名 EstimateCount）后未验证引用点，
 > 导致数据属性 `estimateCount` 与方法 `estimateCount()` 同名（P9），直到下一轮评审才被发现。
 
+> **版式纪律**：产出文档须遵循 `engine/doc-style-guide.md`（代码骨架/SQL/审查处置记录进附录，正文只留签名与结论）；生成后自检 `python scripts/doc_lint.py <文件>`（ERROR 必修）。
+
 **交付标准**：三层自主审查通过 + 4项评审检查通过 + 修复验证通过 + 方案覆盖所有改动点 + 前后端对齐 + 用户确认"方案通过"
 
 ### ★ step-3-rescore：复杂度复评（03 必经步骤）

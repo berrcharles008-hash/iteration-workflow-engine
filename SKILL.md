@@ -37,6 +37,7 @@ config:
 1. 读 engine/startup-protocol.md Step A-D（通用启动流程）
 2. 读 engine/startup-protocol-step-e.md Step E（每日工作日志）
 3. 模板路径：按启动协议 §模板解析优先级 解析（先 project/templates/ 后 engine/templates/）
+4. 文档版式：engine/doc-style-guide.md（01~07 阶段产出统一遵循；生成后跑 scripts/doc_lint.py 自检）
 ```
 
 ## ★ 第一优先级：轻量查询快速退出
