@@ -81,6 +81,10 @@ Agent 准备修改文件
 > ★ **FIX-11（2026-09-16）**：上述决策树中**所有 BLOCK 分支均不适用于 `{IDE}/memory/` 下的工作记忆写入/维护** ——
 > 工作记忆属元层（≠ 业务迭代），与迭代状态无关，任何阶段（含 `ACTIVE=none` 与 00/05/06/07）一律放行；见 §四 门禁豁免。
 > 实现：`hooks/gate-check.mjs` 的 `isMetaWriteExempt()`（范围严格限定 `{IDE}/memory/`，不含 temp/skills/hooks）。
+>
+> ★ **FIX-12②（2026-09-17）**：**05/06/07 阶段的「本职文档产出」**（测试报告 / 上线记录 + **spec 活文档** / 回顾报告）
+> 亦不再拦 —— 按 `STAGE_EXEMPT_PATHS` 阶段化放行，业务代码与命令**仍拦**；见 §四 门禁豁免。
+> 实现：`hooks/gate-check.mjs` 的 `matchStageExempt()`（★ 排除 Bash 伪路径 `[CMD] …`；放行写 `STAGE_ALLOW` 审计）。
 
 ### 04 阶段的删除类操作校验（★ FIX-9 · 2026-09-14 用户定）
 
@@ -478,6 +482,16 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
   `ACTIVE=none` 与 00/05/06/07 阶段同样放行（依据：记忆维护属元层，≠ 业务迭代；
   且系统级要求「每次完成任务必须写记忆」）。范围**严格限定** `{IDE}/memory/`：
   `{IDE}/temp/`、`{IDE}/skills/`、`{IDE}/hooks/` **不在此列**（元层改动仍走逃生口）。
+- ★ **05/06/07 阶段的「本职文档产出」**（FIX-12② · 2026-09-17）—— **阶段化最小授权**：
+  原实现仅在 01-03 分支做 `EXEMPT_PATHS` 判定，05/06/07 走裸 block，与本节「创建迭代文档目录和文档文件」矛盾
+  （实证：06/07 每次归档均需人工开逃生口）。现按阶段放行 ——
+  **05** → `docs/iterations/`（测试报告）；
+  **06** → `docs/iterations/` · `docs/knowledge-base/` · `requirements/**/*.md` · `feasibility/**/*.md`
+  （上线记录 / 知识库刷新 / **spec 活文档更新**，phase-06 强制项）；
+  **07** → `docs/iterations/`（回顾报告）。
+  **仍拦（fail-closed）**：`ACTIVE=none` 全部、业务区（`back-end/` `front-end/` `sql/` …）、
+  05/07 的 `requirements/`、06 的 `requirements` 非 `.md` 文件、**所有 Bash 命令**（伪路径不享豁免）。
+  实现：`hooks/gate-check.mjs` 的 `STAGE_EXEMPT_PATHS` + `matchStageExempt()`；放行写 `STAGE_ALLOW` 审计。
 - ⛔ **创建逃生口标记（`.gate-bypass`）**（GAP-4/加固① · 2026-09-16）—— **不在豁免范围**：
   由 §一「逃生口自建拦截」**绝对拒绝**（任何阶段，含 04）。逃生口须由**用户手动开启**；
   **删除**标记不受此限（标记存在时上游逃生口检查已放行）。
@@ -520,4 +534,5 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
 
 ---
 
-**最后更新**：2026-09-16（GAP-4/加固①：新增「逃生口自建拦截」—— 创建 `.gate-bypass` 的命令在任何阶段**绝对拒绝**，判定用**整条命令**（跨 `;` 不拆）；FIX-11 元层豁免见 §一注记 / §四）
+**最后更新**：2026-09-17（**FIX-12②：05/06/07 阶段化文档豁免** —— 本职文档产出放行 + `STAGE_ALLOW` 审计；
+门禁回归 `71/71`（BASE 0 失败）；见 §一决策树注记 / §四。历史：2026-09-16 GAP-4/加固① 逃生口自建拦截 + FIX-11 元层豁免）

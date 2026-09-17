@@ -84,6 +84,49 @@ const EXEMPT_PATHS = [
 ];
 
 /**
+ * ★ FIX-12②（2026-09-17）：05/06/07 阶段化文档豁免 —— 各阶段的「本职文档产出」放行 + 审计留痕。
+ *
+ * 依据：phase-05/06/07 均强制产出迭代文档；phase-06 更强制「spec 活文档更新（SPECS_DIR）」+ 知识库刷新。
+ * 原实现仅在 01-03 分支做 EXEMPT_PATHS 判定，05/06/07 走裸 block ⇒ 与 SSOT §四 豁免表不一致，
+ * 导致每次归档都需人工开逃生口（2026-09-17 实证：06/07 各需开闸一次）。
+ *
+ * 最小授权（仅文档路径，绝不含业务代码）：
+ *   05 → docs/iterations/                                          （测试报告）
+ *   06 → docs/iterations/ · docs/knowledge-base/ · requirements/**\/*.md · feasibility/**\/*.md
+ *        （上线记录 / 知识库刷新 / spec 活文档回写；★ mdDirs 限 .md，不放行同目录其它文件）
+ *   07 → docs/iterations/                                          （回顾报告）
+ *
+ * 明确仍拦（fail-closed）：00/none 全部、业务区（back-end/ front-end/ sql/ …）、
+ * 05/07 的 requirements/、06 的 requirements 非 .md 文件、以及所有 Bash 命令。
+ */
+const STAGE_EXEMPT_PATHS = {
+  '05': { dirs: ['docs/iterations/'] },
+  '06': {
+    dirs: ['docs/iterations/', 'docs/knowledge-base/'],
+    mdDirs: ['requirements/', 'feasibility/'],
+  },
+  '07': { dirs: ['docs/iterations/'] },
+};
+
+/**
+ * 阶段化文档豁免判定：命中返回命中的模式串（供审计），未命中返回 null。
+ * ★ 排除 Bash 伪路径（`[CMD] …`）—— 命令不享受本豁免，仍由原阶段分支拦截。
+ */
+function matchStageExempt(phase, relPath) {
+  const rule = STAGE_EXEMPT_PATHS[String(phase)];
+  if (!rule) return null;
+  const raw = String(relPath || '');
+  if (!raw || raw.startsWith('[')) return null;
+  const p = raw.replace(/\\/g, '/').replace(/^\/+/, '');
+  const hit = (pat) => p.startsWith(pat) || p.includes('/' + pat);
+  for (const d of rule.dirs || []) if (hit(d)) return d;
+  if (/\.md$/i.test(p)) {
+    for (const d of rule.mdDirs || []) if (hit(d)) return d;
+  }
+  return null;
+}
+
+/**
  * ★ FIX-11（2026-09-16）元层写入豁免：工作记忆目录 —— 与迭代状态无关。
  * 依据：① 系统级要求「每次完成任务必须写记忆」；② 元层原则（记忆维护 ≠ 业务迭代）；
  *      ③ 与 01-03 的 EXEMPT_PATHS、SSOT 删除豁免清单中的 {IDE}/memory/ 对齐。
@@ -402,6 +445,14 @@ async function gateCheck(fsPath) {
   // ── 第4关：阶段判断 ─────────────────────────────────────
   // 04 阶段：放行全部写入（开发窗口）
   if (currentPhase === '04') {
+    process.exit(0);
+  }
+
+  // ★ FIX-12②（2026-09-17）：05/06/07 阶段化文档豁免（本职产出放行 + STAGE_ALLOW 审计留痕）。
+  //   置于 01-03 分支之前：三阶段互斥，无重叠风险；未命中者继续走下方各分支（fail-closed）。
+  const stagePattern = matchStageExempt(currentPhase, fsPath);
+  if (stagePattern) {
+    audit('STAGE_ALLOW', `[${currentPhase}] ${fsPath} (pattern=${stagePattern})`);
     process.exit(0);
   }
 
