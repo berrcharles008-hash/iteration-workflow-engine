@@ -1,5 +1,10 @@
 # 上线记录
 
+<!-- 填写纪律（SSOT：engine/doc-style-guide.md）
+     ① 部署步骤用编号列表 + 命令代码块，不塞表格单元格；每步行尾记状态与时间
+     ② 结构增强：>200 行加 `## 目录`；引用写相对链接（SSOT §7）
+     ③ 生成后自检：python scripts/doc_lint.py <本文件> -->
+
 | 项 | 值 |
 |:--|:--|
 | 迭代 ID | `YYYY-MM-DD-NNN-{名称}` |
@@ -65,12 +70,19 @@
 
 ### 2.3 部署步骤执行记录
 
-| 步骤 | 操作描述 | 执行人 | 时间 | 结果 |
-|:----:|---------|--------|------|:----:|
-| 1 | 停止 IIS 应用程序池 | | | ⬜ |
-| 2 | 备份现有文件到 {backup_dir}/{ITERATION_ID}/ | | | ⬜ |
-| 3 | 部署新文件到 {customer_app_dir} | | | ⬜ |
-| 4 | 启动 IIS 应用程序池 | | | ⬜ |
+> 步骤用编号列表；命令放代码块（不塞表格单元格）；行尾记状态 / 时间 / 执行人。
+
+1. 停止 IIS 应用程序池 ⬜
+   ```powershell
+   appcmd stop apppool /apppool.name:{app_pool}
+   ```
+2. 备份现有文件到 `{backup_dir}/{ITERATION_ID}/` ⬜
+3. 部署新文件到 `{customer_app_dir}` ⬜
+4. 启动 IIS 应用程序池 ⬜
+   ```powershell
+   appcmd start apppool /apppool.name:{app_pool}
+   ```
+5. 部署后验证（见 §2.4） ⬜
 
 ### 2.4 部署后验证
 

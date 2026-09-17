@@ -1,9 +1,10 @@
 # 01-需求记录 · {迭代名称}
 
-<!-- 填写纪律（版式 SSOT：engine/doc-style-guide.md）
+<!-- 填写纪律（SSOT：engine/doc-style-guide.md）
      ① 表格列 ≤6、单元格 ≤60 字；超长内容改"小标题 + 缩进列表"（见规范 §5）
      ② 正文只写当前生效结论；过程痕迹（"XX 阶段修正""已修订"）进附录 A/B
-     ③ 生成后自检：python scripts/doc_lint.py <本文件>（ERROR 必修） -->
+     ③ 结构增强：>200 行加 `## 目录`；引用写相对链接；图示用 Mermaid（SSOT §7）
+     ④ 生成后自检：python scripts/doc_lint.py <本文件> -->
 
 | 项 | 值 |
 |:--|:--|
@@ -47,8 +48,14 @@
 
 ### 2.2 数据流（现状）
 
-```
-前端 … → /webapi/{WebApi}/{Action} → BLL … → DB …
+> 用 Mermaid 画（SSOT §7.4）；节点 ≤25 个，标注实际落点（路由/方法名）。
+
+```mermaid
+flowchart LR
+    UI["前端页面"] --> NET["net 层"]
+    NET --> API["WebApi /webapi/{WebApi}/{Action}"]
+    API --> BLL["BLL"]
+    BLL --> DB[("DB")]
 ```
 
 ### 2.3 关键文件
