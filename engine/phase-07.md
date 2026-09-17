@@ -137,7 +137,7 @@ self_evolve:
 
 > **版式纪律**：产出文档须遵循 `engine/doc-style-guide.md`（模式条目用"编号 + 要点列表"，不塞表格）；生成后自检 `python scripts/doc_lint.py <文件>`（ERROR 必修）。
 
-**交付标准**：回顾报告完成，模式库已实际写入，ACTIVE 释放，用户确认"回顾完成"
+**交付标准**：回顾报告完成，模式库已实际写入，ACTIVE 释放，用户确认"回顾完成"；**文档版式自检 ERROR 0**（`python scripts/doc_lint.py <文档>`）
 
 ### ★ 流程变更说明
 
