@@ -35,6 +35,15 @@ CODE_WARN, CODE_ERR = 40, 80           # D5 单个代码块行数
 MAX_COLS = 6                           # D6 表格列数
 META_HEAD_LINES = 12                   # D7 文档头元信息块扫描范围
 SUMMARY_HEAD_LINES = 60                # D8 结论摘要所在范围
+TOC_MIN_LINES = 200                    # D9 超过该行数须有目录
+TOC_SCAN_LINES = 80                    # D9 目录须出现在前 N 行
+
+MERMAID_KINDS = {                      # D12 已知 Mermaid 图表类型
+    'flowchart', 'graph', 'sequencediagram', 'classdiagram', 'statediagram',
+    'erdiagram', 'gantt', 'pie', 'journey', 'gitgraph', 'mindmap', 'timeline',
+    'quadrantchart', 'xychart-beta', 'block-beta', 'sankey-beta',
+    'requirementdiagram', 'c4context',
+}
 
 # ── 字符类 ────────────────────────────────────────────────
 FENCE_RE = re.compile(r'^\s*(?:```|~~~)')
@@ -45,6 +54,10 @@ EMOJI_RE = re.compile('[\U0001F000-\U0001FAFF]')
 EMOJI_ALLOW = set('✅⬜⏳⚠❌🔴🟡🟢🔵\ufe0f\u200d')
 SEP_CELL_RE = re.compile(r'^[:\-\s]+$')
 ALLOW_RE = re.compile(r'<!--\s*doc-lint:\s*allow\s*([\dD,\s]+?)\s*-->')
+LINK_TARGET_RE = re.compile(r'\]\(([^)\s]+)\)')            # D10 相对链接目标
+FN_REF_RE = re.compile(r'\[\^([^\]]+)\](?!:)')              # D11 脚注引用
+FN_DEF_RE = re.compile(r'^\s*\[\^([^\]]+)\]:', re.M)        # D11 脚注定义
+ASCII_ART_RE = re.compile('[\u2500-\u257F\u2190-\u21FF\u25B2\u25BC\u21C4]')   # D13 制表符/箭头图
 
 RULES = ('D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8')
 
@@ -70,6 +83,11 @@ def split_cells(line):
 def strip_links(s):
     """单元格长度按"显示文本"计：Markdown 链接去掉 URL 部分。"""
     return LINK_RE.sub(r'\1', s)
+
+
+def is_produced_doc(path):
+    """D10/D11 只检查真实产出文档（docs/iterations/）——模板与规范中的示例链接/脚注不适用。"""
+    return '/iterations/' in path.replace('\\', '/').lower()
 
 
 def is_iter_doc(path):
@@ -106,6 +124,7 @@ def check_file(path, max_per_rule=8):
     total_lines = len(lines)
     in_code = False
     code_start = 0
+    fence_lang = ''
     table_cols = None
 
     for idx, ln in enumerate(raw, start=1):
@@ -118,10 +137,24 @@ def check_file(path, max_per_rule=8):
                 elif span > CODE_WARN:
                     findings.append(Finding('WARN', 'D5', code_start,
                                             '代码块 %d 行（>%d）' % (span, CODE_WARN)))
+                block = raw[code_start:idx - 1]
+                if fence_lang == 'mermaid':
+                    first = next((x.strip() for x in block
+                                  if x.strip() and not x.strip().startswith('%%')), '')
+                    kind = first.split()[0].lower() if first else ''
+                    if kind not in MERMAID_KINDS:
+                        findings.append(Finding('WARN', 'D12', code_start,
+                                                'Mermaid 图表类型未知：%r（见 doc-style-guide §7.4）' % first[:40]))
+                else:
+                    art = [x for x in block if ASCII_ART_RE.search(x)]
+                    if len(art) >= 3:
+                        findings.append(Finding('WARN', 'D13', code_start,
+                                                '疑似制表符 ASCII 图（%d 行）— 建议改 Mermaid' % len(art)))
                 in_code = False
             else:
                 in_code = True
                 code_start = idx
+                fence_lang = ln.strip().lstrip('`~').strip().lower()
             continue
         if in_code:
             continue
@@ -134,6 +167,18 @@ def check_file(path, max_per_rule=8):
             if ch not in EMOJI_ALLOW:
                 findings.append(Finding('WARN', 'D4', idx, '白名单外符号 %r — 见规范 §二' % ch))
                 break
+
+        # D10 相对链接有效性（.md 目标须存在；仅真实产出文档）
+        for m in (LINK_TARGET_RE.finditer(ln) if is_produced_doc(path) else []):
+            tgt = m.group(1)
+            if tgt.startswith(('http://', 'https://', 'mailto:', '#')):
+                continue
+            file_part = tgt.split('#')[0]
+            if not file_part.lower().endswith('.md') or '{{' in file_part or '<' in file_part:
+                continue
+            target = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(path)), file_part))
+            if not os.path.exists(target):
+                findings.append(Finding('ERROR', 'D10', idx, '相对链接目标不存在：%s' % tgt))
 
         if TABLE_ROW_RE.match(ln):
             cells = split_cells(ln)
@@ -168,6 +213,21 @@ def check_file(path, max_per_rule=8):
         findings.append(Finding('WARN', 'D3', 0,
                                 '粗体 %d 处 / %d 行（>1:10）— 只标结论/数字/风险'
                                 % (bold_pairs, total_lines)))
+
+    # D11 脚注配对（仅真实产出文档）
+    if is_produced_doc(path):
+        refs = set(FN_REF_RE.findall(text))
+        defs = set(m.group(1) for m in FN_DEF_RE.finditer(text))
+        for r in sorted(refs - defs):
+            findings.append(Finding('ERROR', 'D11', 0, '脚注 [^%s] 被引用但未定义' % r))
+        for d in sorted(defs - refs):
+            findings.append(Finding('WARN', 'D11', 0, '脚注 [^%s] 已定义但未被引用' % d))
+
+    # D9 长文档目录（仅真实产出文档；模板骨架不要求）
+    if (is_produced_doc(path) and total_lines > TOC_MIN_LINES
+            and '## 目录' not in '\n'.join(raw[:TOC_SCAN_LINES])):
+        findings.append(Finding('WARN', 'D9', 0,
+                                '文档 %d 行（>%d）缺 "## 目录"（TOC）' % (total_lines, TOC_MIN_LINES)))
 
     if is_iter_doc(path):
         head = '\n'.join(raw[:META_HEAD_LINES])
