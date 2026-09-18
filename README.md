@@ -50,6 +50,7 @@ sj-iteration-workflow-engine/
 │   ├── phase-steps.md               ← 各阶段步骤清单
 │   ├── phase-01.md ~ phase-07.md    ← 各阶段详细定义
 │   ├── cross-review-protocol.md     ← 独立 Agent 交叉审查
+│   ├── context-discipline.md        ← 上下文纪律（定点读 · 反全文入上下文）
 │   ├── multi-story-workflow.md      ← 多 Story 并行模式
 │   ├── naming-conflict-check.md     ← 命名冲突预检
 │   ├── team-agent-strategy.md       ← Team Agent 并行决策
@@ -197,6 +198,7 @@ sj-iteration-workflow-engine/
 │   ├── phase-steps.md               ← Phase step checklist (SSOT)
 │   ├── phase-01.md ~ phase-07.md    ← Phase detailed definitions
 │   ├── cross-review-protocol.md     ← Cross-review protocol
+│   ├── context-discipline.md        ← Context discipline (targeted reads)
 │   ├── multi-story-workflow.md      ← Multi-story parallel mode
 │   ├── naming-conflict-check.md     ← Naming conflict pre-check
 │   ├── team-agent-strategy.md       ← Team Agent strategy

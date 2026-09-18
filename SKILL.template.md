@@ -13,7 +13,8 @@ config:
   specs_dir: references/specs/
   specs_fallback_dirs:
     - .codebuddy/specs/
-  # 活文档知识库根目录（L1/L2/L3 自动生成，由 scripts/gen-knowledge-base.py 维护）
+  # 活文档知识库根目录（L1/L2/L3 自动生成）
+  # 读取路径: {kb_dir}/{l1_file}, {kb_dir}/{l2_dir}/, {kb_dir}/{l3_file}
   kb_dir: docs/knowledge-base/
   l1_file: L1-overview.md
   l2_dir: L2-modules/
@@ -36,7 +37,24 @@ config:
 1. 读 engine/startup-protocol.md Step A-D（通用启动流程）
 2. 读 engine/startup-protocol-step-e.md Step E（每日工作日志）
 3. 模板路径：按启动协议 §模板解析优先级 解析（先 project/templates/ 后 engine/templates/）
+4. 文档版式：engine/doc-style-guide.md（01~07 阶段产出统一遵循；生成后跑 scripts/doc_lint.py 自检）
 ```
+
+## ★ 上下文纪律（定点读 · 反全文入上下文）
+
+> **"读什么"由启动协议规定；"读多少"由本条约束。** 读入内容会**逐轮重放**，故大文件一律定点读。
+> 完整细则与各阶段应用要点见 `engine/context-discipline.md`。
+
+| # | 对象 | 纪律 |
+|:--:|------|------|
+| 1 | 规格/计划类（`requirements/`、`03-技术方案.md`、任务清单） | 先 `search_content` 定位 → 再 `read_file offset/limit` 只读命中区间 |
+| 2 | 状态文件（`state.yaml`） | 只读 `current_phase` / `phase_steps` / `tasks_*` 区间（~50 行），禁全文回读 |
+| 3 | 源码 | 仅在"即将编辑 / 落盘前核对"时读，只读待替换片段，禁预读整个类文件 |
+| 4 | 引擎文件 | 只读**当前步骤**涉及的文件，禁"预读全套" |
+| 5 | 大产物（>300 行） | 要求产出方给"摘要 + diff 片段" |
+
+**自检指标**：单轮 `read_file` 合计 **≤ 500 行**（跨阶段整段重读等例外须注明理由）。
+**兜底**：`read_file` 报 "File too large" ⇒ 直接转 `search_content` + `offset/limit`，**禁**换工具硬读全文。
 
 ## ★ 第一优先级：轻量查询快速退出
 
@@ -55,6 +73,7 @@ config:
 | 进入阶段/开始迭代 | 重量 | 全量加载 | — |
 | 修改代码/审查代码 | 重量 | 全量加载 | — |
 | 分析需求 | 重量 | 全量加载 | — |
+| 初始化知识库/gen-kb | 中等 | project.manifest.yaml、`gen-knowledge-base.py --check` | 核心协议文件 |
 
 ## ★ 门禁规则（一句话摘要）
 
@@ -111,5 +130,7 @@ Agent 准备调用写入类工具时 → **必须先读 `engine/gate-protocol.md
 12. **★ 独立Agent交叉审查（自审+互审双保险）**：🔴 复杂级 02/03/04 阶段强制启动独立 Agent 交叉审查；🟡 中等级 03/04 强制、02 可选。主 Agent 在需要时先启动独立 Agent，再立即执行自审。详见 `engine/cross-review-protocol.md`。
 13. **★ 外部模型审查路由（v2.0.0）**：🔴 复杂级的 02 阶段强制使用，03/04 阶段优先使用。详见 `engine/cross-review-protocol.md` §八。
 14. **★ 每个阶段必须有独立目录产出**：复杂度只决定内容详细程度，不决定文件位置。🟢 简单：独立文件，内容极简（02 ~200字 / 03 ~300字 / 07 精简三段式）；🟡🔴：独立文件，标准/完整内容。
+15. **★ 知识库自动兜底**：`{{KB_DIR}}` 下 L1/L2/L3 由 `scripts/gen-knowledge-base.py` 维护（`--check` 检测缺失/过时，`--force` 刷新）。01 前置步骤与 step-1.6-dir-diff 发现缺失/过时时**自动刷新**（不等待用户确认）；03 step-1.2 读取 L2 前做新鲜度校验。人工编辑文件（`auto-generated: false`）永不被覆盖。
+16. **★ 上下文纪律（定点读）**：大文件禁全文入上下文 —— 先定位后定点读、状态文件只读关键区间、源码只读待改片段、单轮 `read_file` ≤ 500 行。详见 `engine/context-discipline.md`。
 
 > 完整流程定义见 `engine/workflow-engine.md`，门禁规则见 `engine/gate-protocol.md`。
