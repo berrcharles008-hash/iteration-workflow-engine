@@ -23,9 +23,11 @@
  * 退出码：0=放行  2=阻止（阻塞错误，工具不执行）
  *
  * 变更历史：FIX-7 段级危险判定 ｜ FIX-8 工具名规范化 ｜ FIX-9 删除类清单锚定 + ALWAYS_ALLOW 收紧 + 拦截留痕
+ *           ｜ FIX-12①（2026-09-18）时效逃生口（ttlMinutes/expire）+ 放行可见
+ *           ｜ FIX-23 + FIX-24（2026-09-20）01-03 放行 docs/knowledge-base/ ＋ Bash 伪路径不享路径豁免
  */
 
-import { readFileSync, existsSync, appendFileSync } from 'fs';
+import { readFileSync, existsSync, appendFileSync, statSync } from 'fs';
 import { join } from 'path';
 
 // ── 配置 ──────────────────────────────────────────────
@@ -79,6 +81,11 @@ const EXEMPT_PATHS = [
   '.cursor/skills/iteration-workflow/',
   '.codex/skills/iteration-workflow/',
   'docs/iterations/',
+  // ★ FIX-23（2026-09-20）：知识库为纯生成物（gen-knowledge-base.py 产出，非业务代码）。
+  //   phase-01 前置步骤/step-1.6 要求"过时即刷新"，而该目录原不在放行表 ⇒ Agent 用 Write/Edit
+  //   维护知识库时与门禁互斥（消除口径冲突；脚本执行本就可跑，见 gate-protocol.md §四）。
+  //   放行口径与 06 阶段 STAGE_EXEMPT_PATHS['06'].dirs 一致。Bash 命令仍不享本豁免（FIX-24）。
+  'docs/knowledge-base/',
   '.codebuddy/memory/',
   '.claude/memory/',
 ];
@@ -217,9 +224,42 @@ const GATE_BYPASS_PATHS = [
   join(PROJECT_DIR, '.cursor/hooks/.gate-bypass'),
   join(PROJECT_DIR, '.codex/hooks/.gate-bypass'),
 ];
-if (!BYPASS_DISABLED_FOR_TEST && GATE_BYPASS_PATHS.some(p => existsSync(p))) {
-  auditBypass('.gate-bypass_file');
-  process.exit(0);
+/** ★ FIX-12①（2026-09-18）时效逃生口：标记内容可写 `ttlMinutes=N`（按文件 mtime 起算）
+ *  或 `expire=ISO8601`；过期即视为不存在（记 BYPASS_EXPIRED）—— 避免“忘了删 ⇒ 永久放行”。
+ *  空标记（0 字节，历史惯用）保持“永久有效”以兼容既有用法。 */
+function bypassFileState() {
+  for (const p of GATE_BYPASS_PATHS) {
+    if (!existsSync(p)) continue;
+    let raw = '';
+    try { raw = String(readFileSync(p, 'utf-8') || '').trim(); } catch { /* 读失败按空处理 */ }
+    if (!raw) return { path: p, active: true, until: null, mode: 'forever(empty)' };
+    let until = null;
+    try {
+      const exp = raw.match(/expire\s*[=:]\s*([0-9T:+\-.Zz ]{8,})/i);
+      const ttl = raw.match(/ttl\s*(?:minutes?)?\s*[=:]\s*(\d+)/i);
+      if (exp) until = Date.parse(exp[1].trim().replace(' ', 'T'));
+      else if (ttl) until = statSync(p).mtimeMs + Number(ttl[1]) * 60000;
+    } catch { until = null; }
+    if (until && Date.now() > until) return { path: p, active: false, until, mode: 'expired' };
+    return { path: p, active: true, until, mode: until ? 'ttl' : 'forever' };
+  }
+  return null;
+}
+
+if (!BYPASS_DISABLED_FOR_TEST) {
+  const bp = bypassFileState();
+  if (bp && bp.active) {
+    auditBypass('.gate-bypass_file ' + bp.mode + (bp.until ? ' until=' + new Date(bp.until).toISOString() : ''));
+    // ★ FIX-12① 放行可见（b）：每次工具调用都在 stderr 提示“当前处于开闸态”
+    process.stderr.write('[gate] WARNING: bypass marker ACTIVE: ' + bp.path
+      + (bp.until ? ' (until ' + new Date(bp.until).toISOString() + ')' : ' (forever, empty marker)')
+      + ' -- delete it right after meta maintenance.' + '\n');
+    process.exit(0);
+  }
+  if (bp && !bp.active) {
+    audit('BYPASS_EXPIRED', bp.path + ' mode=' + bp.mode);
+    process.stderr.write('[gate] NOTE: bypass marker EXPIRED -> treated as inactive (rebuild it to open).' + '\n');
+  }
 }
 
 // ── 读取 stdin ────────────────────────────────────────
@@ -462,13 +502,19 @@ async function gateCheck(fsPath) {
 
   // 01-03 阶段：窄放行——仅豁免目录可写
   // execute_command 无文件路径，不会被 EXEMPT_PATHS 放行（预期行为）
+  // ★ FIX-24（2026-09-20）：Bash 伪路径（`[CMD] …`）**不享**路径豁免。
+  //   原实现用 `includes('/' + pattern)` 兜"绝对路径 / IDE 前缀"，但缺少 `[` 守卫 ⇒
+  //   命令文本里只要出现 `/docs/knowledge-base/` 之类的片段就整车放行（可被路径穿越规避）。
+  //   现与 05/06/07 的 matchStageExempt 守卫口径对齐。
   if (currentPhase === '01' || currentPhase === '02' || currentPhase === '03') {
-    for (const pattern of EXEMPT_PATHS) {
-      if (fsPath.startsWith(pattern)) {
-        process.exit(0);
-      }
-      if (fsPath.includes('/' + pattern)) {
-        process.exit(0);
+    const isPseudoPath = String(fsPath || '').startsWith('[');
+    if (!isPseudoPath) {
+      for (const pattern of EXEMPT_PATHS) {
+        if (fsPath.startsWith(pattern) || fsPath.includes('/' + pattern)) {
+          // ★ FIX-23 配套：放行留痕（与 05/06/07 的 STAGE_ALLOW 对齐，便于事后回溯）
+          audit('EXEMPT_ALLOW', `[${currentPhase}] ${fsPath} (pattern=${pattern})`);
+          process.exit(0);
+        }
       }
     }
     block(

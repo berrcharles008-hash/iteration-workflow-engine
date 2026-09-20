@@ -22,6 +22,17 @@ Usage:
   Stale:   exists but content differs from current code (added/removed files,
            new classes) -> refresh with --force
 
+Content fingerprint (★ 2026-09-20):
+  The Stale checks above compare *sets* only (module names / file paths /
+  class names) -- changes inside existing files are invisible to them.
+  A per-file (mtime_ns, size) fingerprint of the scanned .vue/.js/.cs files
+  (same directories as the L2 scan; page companion .ts/.less are NOT covered)
+  is cached in runtime/kb-fingerprint.json and reported by --check.
+  It is a filesystem fingerprint, not a content hash: touch/rebuild gives a
+  false positive; same-nanosecond rewrite of identical length a false negative.
+  Baseline is rebuilt only by a FULL run (--level all, no --module) that
+  actually wrote KB files -- partial refreshes keep the previous baseline.
+
 Coverage rules (decision F):
   auto-generated: true  -> refreshable via --force
   auto-generated: false -> manually edited, NEVER overwritten
@@ -30,6 +41,7 @@ Coverage rules (decision F):
 import os
 import re
 import sys
+import json
 import argparse
 import datetime
 from pathlib import Path
@@ -632,6 +644,7 @@ def generate_l1(config, check_only=False, force=False):
 
     l1_path.parent.mkdir(parents=True, exist_ok=True)
     l1_path.write_text(output, encoding="utf-8")
+    _inc_written()
     safe_print(f"  [OK] L1 生成: {l1_path}（前端 {len(fe_modules)} 模块, 后端 {len(be_modules)} 模块）")
     return True
 
@@ -1015,6 +1028,7 @@ def generate_l2(config, check_only=False, force=False, module_filter=None):
 
         mod_file.parent.mkdir(parents=True, exist_ok=True)
         mod_file.write_text(out, encoding="utf-8")
+        _inc_written()
         generated += 1
 
     safe_print(f"  [OK] L2 生成: {l2_dir}（{generated} 个模块文件）")
@@ -1224,9 +1238,175 @@ def generate_l3(config, check_only=False, force=False):
 
     l3_path.parent.mkdir(parents=True, exist_ok=True)
     l3_path.write_text("\n".join(lines), encoding="utf-8")
+    _inc_written()
     safe_print(f"  [OK] L3 生成: {l3_path}"
                f"（业务术语 {len(biz_mapped)} 个, 技术模式 {len(tech_mapped)} 个, "
                f"待补充 {len(unmapped)} 个）")
+    return True
+
+
+# --- Content fingerprint (★ stale detection beyond file-set diff) ---
+#
+# Why: the *_detect_stale_* checks above only compare *sets*
+# (module names / file paths / class names). Iterations that only change code
+# *inside* existing files (method signatures, interfaces, columns) are reported
+# as "up to date" forever -- the KB then silently drifts from reality.
+# The fingerprint records (mtime, size) per scanned file, so any content change
+# becomes visible to --check.
+
+FINGERPRINT_VERSION = 1
+
+# ★ 本次运行实际写入的 KB 文件数 —— 指纹基线只在「确有写入 + 全量运行」时重建；
+#   否则一次空跑（全部 SKIP）会用当前代码状态覆盖基线，抹掉"待刷新"信号。
+_WRITTEN_KB_FILES = 0
+
+
+def _inc_written(n=1):
+    global _WRITTEN_KB_FILES
+    _WRITTEN_KB_FILES += n
+
+
+def _fingerprint_path():
+    """Cache location: runtime/ (gate ALWAYS_ALLOW) -- writable in any phase."""
+    if MANIFEST_ROOT is None:
+        return None
+    return MANIFEST_ROOT / "runtime" / "kb-fingerprint.json"
+
+
+def _collect_fingerprint_files(config):
+    """Files covered by the L1/L2/L3 scans (os.stat only -- no content read).
+
+    Robustness: unreadable dirs (rglob) and paths outside the project root
+    (relative_to) are skipped with a single warning instead of raising.
+    """
+    dirs = []
+    for key in ("fe_page_dir", "fe_bll_dir", "be_bll_dir"):
+        d = config.get(key)
+        if d and d.exists():
+            dirs.append(d)
+    dirs.extend(_backend_extra_dirs(config))
+    pats = (".vue", ".js", ".cs")
+    seen = set()
+    files = []
+    warned = False
+    for d in dirs:
+        try:
+            candidates = sorted(d.rglob("*"))
+        except OSError as e:
+            safe_print(f"  [WARN] 指纹采集跳过不可读目录 {d}: {e}")
+            continue
+        for f in candidates:
+            try:
+                if not f.is_file() or f.suffix.lower() not in pats:
+                    continue
+                if _is_build_artifact(f):
+                    continue
+                rel = str(f.relative_to(PROJECT_ROOT)).replace("\\", "/")
+            except (OSError, ValueError) as e:
+                if not warned:
+                    safe_print(f"  [WARN] 指纹采集跳过越界/不可读项（示例 {f}: {e}）")
+                    warned = True
+                continue
+            if rel in seen:
+                continue
+            seen.add(rel)
+            files.append((rel, f))
+    return files
+
+
+def _compute_fingerprint(config):
+    fp = {}
+    for rel, f in _collect_fingerprint_files(config):
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        # ★ nanosecond mtime: int(st.st_mtime) truncates to seconds and would miss
+        #   rewrites of identical length within the same second.
+        fp[rel] = [int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))), st.st_size]
+    return fp
+
+
+def _load_fingerprint():
+    """Return (files, state); state in {'ok', 'missing', 'invalid'}.
+
+    'invalid' (corrupt JSON / version mismatch) is reported to the user rather
+    than being silently presented as a first run.
+    """
+    p = _fingerprint_path()
+    if not p or not p.exists():
+        return None, "missing"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None, "invalid"
+    if not isinstance(data, dict) or data.get("version") != FINGERPRINT_VERSION:
+        return None, "invalid"
+    files = data.get("files")
+    return (files, "ok") if isinstance(files, dict) else (None, "invalid")
+
+
+def _save_fingerprint(config):
+    p = _fingerprint_path()
+    if not p:
+        return False
+    payload = {
+        "version": FINGERPRINT_VERSION,
+        "generated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "files": _compute_fingerprint(config),
+    }
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return True
+    except Exception as e:
+        safe_print(f"  [WARN] 指纹写入失败: {e}")
+        return False
+
+
+def _diff_fingerprint(config):
+    """Compare current files vs cached fingerprint.
+
+    Returns (added, removed, changed, state). Malformed cache values are treated
+    as "changed" (never raise -- --check must stay read-only and safe).
+    """
+    current = _compute_fingerprint(config)
+    cached, state = _load_fingerprint()
+    if state != "ok":
+        return None, None, None, state
+    cur_keys, old_keys = set(current), set(cached)
+    added = sorted(cur_keys - old_keys)
+    removed = sorted(old_keys - cur_keys)
+    changed = []
+    for k in sorted(cur_keys & old_keys):
+        old = cached.get(k)
+        if not (isinstance(old, (list, tuple)) and len(old) == 2):
+            changed.append(k)
+            continue
+        if list(current[k]) != list(old):
+            changed.append(k)
+    return added, removed, changed, state
+
+
+def _report_fingerprint(config):
+    """Print the fingerprint diff (check mode). Returns True when changed."""
+    added, removed, changed, state = _diff_fingerprint(config)
+    if state == "missing":
+        safe_print("  [INFO] 文件指纹：无基线（首次全量生成后自动建立），跳过比对")
+        return False
+    if state == "invalid":
+        safe_print("  [WARN] 文件指纹基线无效（文件损坏或版本不符）⇒ 已跳过比对，"
+                   "请执行一次全量生成以重建")
+        return False
+    total = len(added) + len(removed) + len(changed)
+    if total == 0:
+        safe_print("  [INFO] 文件指纹：与上次全量刷新一致（mtime_ns + size 无变化）")
+        return False
+    safe_print(f"  [INFO] 文件指纹：{total} 处变更"
+               f"（+{len(added)} 新增 / -{len(removed)} 删除 / ~{len(changed)} 修改）")
+    for p in (removed + changed + added)[:5]:
+        safe_print(f"         ~ {p}")
+    safe_print("         → 刷新: python scripts/gen-knowledge-base.py --level all --force")
     return True
 
 
@@ -1294,12 +1474,33 @@ def main():
         safe_print("\n--- L3: 术语映射表 ---")
         generate_l3(config, check_only=args.check, force=args.force)
 
+    # ★ 文件指纹：检出"既有文件被改动"（集合比对之外的第二信号）
+    #   check：仅报告（不写文件）；生成：仅在**确有写入**且为**全量**时重建基线。
+    fp_changed = False
+    full_run = (args.level == "all") and not args.module
+    if args.check:
+        safe_print("\n--- 文件指纹（mtime_ns + size 变更检测）---")
+        if full_run:
+            fp_changed = _report_fingerprint(config)
+        else:
+            safe_print("  [INFO] 部分检查（--level / --module）⇒ 跳过指纹比对，避免越界提示")
+    else:
+        safe_print("\n--- 文件指纹 ---")
+        if _WRITTEN_KB_FILES <= 0:
+            safe_print("  [SKIP] 本次未写入任何知识库文件 ⇒ 指纹基线保持不变（不掩盖待刷新信号）")
+        elif not full_run:
+            safe_print("  [SKIP] 部分刷新（--level / --module）⇒ 指纹基线保持不变，待全量刷新重建")
+        elif _save_fingerprint(config):
+            safe_print("  [OK] 指纹基线已更新: runtime/kb-fingerprint.json")
+
     safe_print("\n" + "=" * 60)
     if args.check:
         safe_print("[CHECK] 检查完成。缺失/过时的文件可用以下命令刷新：")
         safe_print("  python scripts/gen-knowledge-base.py                    # 生成缺失的")
         safe_print("  python scripts/gen-knowledge-base.py --force            # 刷新过时的(auto-generated)")
         safe_print("  python scripts/gen-knowledge-base.py --level L2 --force --module Xxx  # 单模块刷新")
+        if fp_changed:
+            safe_print("  ★ 文件指纹检出变更 ⇒ 即使 L1/L2/L3 报「最新」，也应执行全量 --force 重建")
     else:
         safe_print("[DONE] 生成完成。")
         safe_print("  - 自动生成段可被 --force 覆盖刷新")

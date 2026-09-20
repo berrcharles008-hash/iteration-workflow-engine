@@ -4,7 +4,12 @@
 1. **step-0-init-state**（仅新迭代首次进入时执行）：创建 `runtime/{ITERATION_ID}.state.yaml` + 写入 `runtime/ACTIVE` + 创建迭代目录结构 + 更新 README 迭代清单。详见 `phase-steps.md` §阶段一步骤清单。
 2. 读取 `{{SPECS_DIR}}/` 下的项目上下文文件清单（详见 `project/context-conventions.md` → 一、项目上下文文件清单）获取项目上下文 + 读取 `{{KB_DIR}}/` 下的 L1/L2/L3 知识库。
    - 知识库**不存在** → 执行 `python scripts/gen-knowledge-base.py` 生成
-   - 知识库**过时** → 先执行 `python scripts/gen-knowledge-base.py --check` 检测，若有"过时/缺失"项则执行 `--force` 自动刷新（`auto-generated: false` 的人工编辑文件不会被覆盖），再读取
+   - 知识库**过时** → 执行 `python scripts/gen-knowledge-base.py --check` 检测（**只读，任何阶段可跑**）
+     - ★ **FIX-23（2026-09-20）**：`docs/knowledge-base/` 已加入 01-03 放行表 ⇒ 本阶段**可**刷新知识库。
+     - 检出"过时/缺失"时的处置：**直接 `--force` 刷新**（`python …` 命令按纯读放行、脚本内写文件不经门禁，
+       ★ 2026-09-20 实测：03 阶段 `--check` 正常执行）
+     - 若 Bash 被判为危险命令而拦 ⇒ 提示用户开逃生口，或留待 **06 阶段** `step-2-5-kb-refresh`（无条件 `--force`）刷新
+     - 刷新后仍应就关键改动点**实地核实**，不把 L1/L2 当唯一事实源
 
 **目标**：明确需求范围、梳理现状、识别痛点、产出需求文档。
 
@@ -43,14 +48,22 @@
    - `+` 新增模块（目录存在但 L1 未收录）→ 提醒用户执行 gen-l1 更新
    - `-` 删除模块（L1 收录但目录不存在）→ 标记待清理
    - `~` 目录变化（模块名相同但文件数或子目录变化）→ 提醒 L2 wiki 可能过时
-4. **★ 自动刷新知识库**（发现任一差异时强制执行）：
+4. **★ 知识库陈旧处置**（发现任一差异时执行）：
    ```
-   python scripts/gen-knowledge-base.py --check          # 确认过时范围
-   python scripts/gen-knowledge-base.py --force          # 自动刷新（含缺失的新模块）
+   python scripts/gen-knowledge-base.py --check          # 确认过时范围（含文件指纹比对）
+   python scripts/gen-knowledge-base.py --force          # 刷新（01-03 已放行 docs/knowledge-base/ · FIX-23）
    # 或精准刷新：--level L2 --force --module {变化模块名}
    ```
-   - 自动执行，**不需等待用户确认**：`auto-generated: false` 的人工编辑内容不会被覆盖
-   - 刷新后继续后续步骤（01 step-2 及 03 阶段读到的即为最新知识库）
+   - ★ **FIX-23（2026-09-20）**：`docs/knowledge-base/` 已加入 01-03 放行表 ⇒ "发现差异即自动刷新、
+     不需用户确认"**恢复可执行**。
+   - **01/02/03 阶段的动作**：`--check` → 有差异即 `--force` 刷新（`python` 命令按纯读放行；
+     脚本内部写文件不经门禁 ★ 实测 03 阶段可跑）。
+   - ★ **与 04 / 06 的口径区别（勿混）**：01-03 刷新的定位是「**读前兜底**」—— 有**消费者**
+     （01/03 探索随即要读 L1/L2），刷完立即被读，投入合理；04 末代码未经验证且**无消费者**
+     （05/06 不读 L1/L2）⇒ 04 **禁止**刷新（见 `phase-04.md` §知识库刷新）。**最终态一律以 06
+     `step-2-5-kb-refresh` 的无条件刷新为准**，01-03 的中间态不得当作"最终产物映射"。
+   - 若 Bash 被判危险命令而拦 ⇒ 提示用户开逃生口，或留待 **06** 无条件刷新。
+   - 刷新后本轮探索仍应就关键改动点实地核实，**不把 L1/L2 当唯一事实源**。
 
 **L1 覆盖规则**（决议F）：
 - `auto-generated: true` → 可被 gen-l1 自动覆盖更新

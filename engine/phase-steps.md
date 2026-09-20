@@ -113,10 +113,11 @@
 | step-1.2-backup-capture | 捕获客户服务器备份基线 | ✅ | `deploy-config.yaml` 中 `stage2_manual.enabled==true` |
 | step-1.5-deploy-stage2 | 生成客户部署清单 + 指导执行 | ✅ | `step-1.status=="completed"` 且 `stage2_manual.enabled==true` |
 | step-2-spec-update | Spec活文档更新 | ✅ | 始终 |
+| step-2-5-kb-refresh | 知识库刷新（无条件 `--force`，代码已为最终态） | ✅ | 始终 |
 | step-3-archive | 迭代状态归档（推进到07） | ✅ | 始终 |
 | step-4-archive-check | 归档检查：检查 `10-临时/` 是否清空，未清空则分类移出 | ✅ | 始终 |
 
-> **依赖链**：step-1 → (enabled? → step-1.2 → step-1.5) → step-2 → step-3 → step-4
+> **依赖链**：step-1 → (enabled? → step-1.2 → step-1.5) → step-2 → **step-2-5** → step-3 → step-4
 > 
 > **step-1.2-backup-capture 执行要求**：
 > 1. 从 step-1 的构建输出目录捕获文件清单 + 内容快照
@@ -173,3 +174,4 @@
 | 2026-07-18 | 1.2 | 02 阶段 step-1x-review 升级：🔴 复杂级强制（外部模型优先），🟡 可选。`step-1x-cross-review` 更名为 `step-1x-review` 以反映外部模型路由优先级 |
 | 2026-07-19 | 1.3 | 补充步骤编号约定文档；合并项目侧补充步骤到各阶段表格 |
 | 2026-07-23 | 1.4 | F05: 06 阶段新增 step-1.2-backup-capture + step-1.5-deploy-stage2，客户部署清单结构化 |
+| 2026-09-20 | 1.5 | 06 阶段新增 **step-2-5-kb-refresh**（知识库无条件刷新，位于 spec 回写后 / 归档前）—— 刷新点由"04 末"迁至此处（代码已过 05 测试 = 最终态）；依赖链同步更新。详见 `phase-06.md` §step-2-5-kb-refresh |

@@ -31,9 +31,25 @@
 - REMOVED 条目 → 移除行
 - 更新每个 spec 文件头部的"最后更新"日期和迭代编号
 
-> ★ 若本次迭代新增/删除模块或类，同步刷新知识库：
-> `python scripts/gen-knowledge-base.py --force`（仅覆盖 auto-generated: true 的文件，
-> 人工编辑的 L2 wiki 与 L3 术语不会被覆盖）。
+### ★ step-2-5-kb-refresh：知识库刷新（✅ 强制，**无条件**）
+
+> **决策（2026-09-20）**：刷新点由"04 末"改为**本步骤**，且**去掉原"若新增/删除模块或类"的前置条件**。
+>
+> **理由**：04 末代码未经 05 测试 ⇒ 刷出的是"未验证中间态"（详见 `phase-04.md` §知识库刷新：不在 04 阶段执行）。
+> 06 位于 05 测试通过之后，代码即**最终态**；且 06 门禁已放行 `docs/knowledge-base/`（FIX-12②），无需开闸。
+
+**执行时机**：step-2-spec-update（Spec 活文档回写）之后、**step-3-archive 之前**。
+
+```bash
+python scripts/gen-knowledge-base.py --check     # ① 先看陈旧范围（含内容指纹比对）
+python scripts/gen-knowledge-base.py --force     # ② 无条件全量刷新
+```
+
+- **无条件执行**：不因"本迭代无模块/类增删"而跳过（`--force` 会重写 `generated_at`，使知识库始终标注最近一次刷新的时点）
+- 仅覆盖 `auto-generated: true` 的文件；`auto-generated: false` 的人工编辑段（L2 业务语义 / L3 术语补充）不会被覆盖
+- `--check` 若报"最新"仍须执行 `--force`（保证时间戳与最终态对齐）
+- 门禁：06 阶段放行 `docs/knowledge-base/`；Bash 走命令风险分级（`python …` 按纯读放行，★ 2026-09-20 实测可执行）
+  ⇒ 若被判危险命令而拦，按 `gate-protocol.md` 逃生口流程处理
 
 ### 对话摘要写入
 
@@ -68,6 +84,7 @@
 |--------|---------|:--:|---------|
 | step-1-deploy-stage1 | 发布到开发测试服务器 | ✅ | 始终 |
 | step-2-spec-update | Spec活文档更新 | ✅ | 始终 |
+| step-2-5-kb-refresh | 知识库刷新（无条件 `--force`，代码已为最终态） | ✅ | 始终 |
 | step-3-archive | 迭代状态归档（推进到07） | ✅ | 始终 |
 | step-4-archive-check | 归档检查：检查 `10-临时/` 是否清空，未清空则分类移出 | ✅ | 始终 |
 | 3.5 | ★ 归档完成自检 | ✅ | step-3-archive 写入完成后立即执行，三项全通过 |

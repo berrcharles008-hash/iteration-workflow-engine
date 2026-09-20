@@ -164,6 +164,19 @@ Agent 准备修改文件
 **已知代价（如实声明）**：元层维护（改 `skills/` 等非豁免路径）时 **Agent 无法自行开闸**，
 须由用户手动创建标记 —— 此即「人开的闸」的设计意图，非缺陷。
 
+### 时效逃生口与放行可见（★ FIX-12① · 2026-09-18）
+
+> 问题：标记"用完即删"纯靠人工纪律 —— 曾发生遗忘导致**跨 ~18h 静默全放行**（`gate-audit.log` 有痕但无人察觉）。
+
+**规则**：
+
+1. **时效**：标记内容可写 `ttlMinutes=N`（按文件 mtime 起算）或 `expire=ISO8601`；到期后 hook 视为**不存在**
+   （记 `BYPASS_EXPIRED`）⇒ 忘记删除也不会永久放行。**空标记（0 字节）保持"永久有效"** —— 兼容既有开闸习惯。
+2. **放行可见**：因标记放行时，hook 向 **stderr** 输出 `WARNING: bypass marker ACTIVE …`（含路径与到期时间），促使当场收口。
+3. **收尾检查**：微核逃生口行已补「**收尾必检：标记已删**」。
+
+**审计分类**：`BYPASS reason=.gate-bypass_file forever(empty)` ／ `… ttl until=<ISO>` ／ `BYPASS_EXPIRED … mode=expired`。
+
 ---
 
 ### 兜底分支：ACTIVE=none 但 state.yaml 显示 07 待执行
@@ -480,6 +493,13 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
 以下操作**不触发**修改门禁：
 - 读取文件（read_file / search_content / search_file）
 - 创建迭代文档目录和文档文件（docs/iterations/ 下的 .md 文件）
+- ★ **写入/刷新 `docs/knowledge-base/`**（FIX-23 · 2026-09-20）—— **01-03 阶段同样放行**：
+  依据 = `phase-01` 前置步骤与 step-1.6 要求"知识库过时时刷新"，但 `docs/knowledge-base/` 原不在
+  `EXEMPT_PATHS` ⇒ Agent 用 Write/Edit 工具维护知识库在 01-03 被拦，**与文档要求互斥**（实证：知识库自 2026-09-16 起停更）。
+  知识库是**纯生成物**（`gen-knowledge-base.py` 产出，非业务代码）⇒ 按最小授权放行该目录。
+  注：脚本执行（`python scripts/gen-knowledge-base.py`）走 Bash 纯读判定、脚本内部写文件不经门禁 ⇒
+  **技术上本就可在 01-03 执行**（★ 2026-09-20 实测通过）；本条放行用于消除"文档要求 vs 门禁"的口径冲突。
+  实现：`EXEMPT_PATHS` 增列 `docs/knowledge-base/`（与 06 阶段 `STAGE_EXEMPT_PATHS` 口径对齐）。
 - 修改 `{IDE}/skills/iteration-workflow/` 下的 Skill 自身文件（**仅 01-03 阶段**，由 `EXEMPT_PATHS` 放行；
   05/06/07 与 `ACTIVE=none` 仍拦，见 §一决策树）
 - 删除/移动类操作命中「删除豁免」清单的（见 §一「04 阶段的删除类操作校验」）
@@ -540,7 +560,18 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
 
 ---
 
-**最后更新**：2026-09-17（**FIX-16：07 阶段放行模式库写入** —— `project/lessons-learned.md` 属迭代回顾的**强制本职动作**
+**最后更新**：2026-09-20（**FIX-23：01-03 阶段放行 `docs/knowledge-base/`** ——
+`phase-01` 前置步骤/step-1.6 要求"知识库过时即刷新"，而该目录原不在 `EXEMPT_PATHS` ⇒ Agent 用 Write/Edit
+维护知识库时与门禁互斥（实证：KB 自 09-16 停更）。知识库为纯生成物非业务代码 ⇒ `EXEMPT_PATHS` 增列放行，
+与 06 阶段 `STAGE_EXEMPT_PATHS` 口径一致。
+★ **更正（同日实测）**：脚本执行走 Bash 纯读判定、脚本内写文件不经门禁 ⇒ **01-03 本就可跑脚本**
+（`--check` 实测通过）；此前"该要求在本阶段不可执行"的表述**过强，已订正**——本条消除的是口径冲突，不是打通执行。
+★ **FIX-24（2026-09-20）：Bash 伪路径不享路径豁免** —— 01-03 分支原用 `fsPath.includes('/' + pattern)`
+兜"绝对路径 / IDE 前缀"，却缺 `[` 守卫 ⇒ 命令文本出现 `/docs/knowledge-base/` 之类片段即整车放行
+（可被路径穿越规避）。现与 05/06/07 的 `matchStageExempt` 守卫（`raw.startsWith('[')`）对齐；
+并为 01-03 放行补 `EXEMPT_ALLOW` 审计留痕（原为静默 `exit(0)`，与 `STAGE_ALLOW` 不对称）。
+门禁回归 **90/90**、BASE 0 失败。
+前次：2026-09-17 **FIX-16：07 阶段放行模式库写入** —— `project/lessons-learned.md` 属迭代回顾的**强制本职动作**
 （phase-07 step-3/step-5；AP-1/AP-4 明禁"仅报告声称"），原实现漏放行 ⇒ 每次回顾须人工开闸；现按 `STAGE_EXEMPT_PATHS['07'].files`
 精确放行（跨 IDE 前缀；`project/` 其它文件仍拦）。
 历史：**FIX-13：§四 豁免表表述订正** —— 原第 3 条「修改 `.codebuddy/skills/`」缺阶段限定，
