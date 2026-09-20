@@ -194,7 +194,7 @@ Agent 必须在 step-1-5-review 完成后，输出以下信息并等待用户确
 |------|------|
 | ✅ 通过 | 继续进入 Step 5 |
 | ❌ 有 error | 停止，修复后重试（最多 3 次） |
-| ⚠️ warning | 记录但不阻塞 |
+| ⚠️ warning | 记录但不阻塞；★ 但**项目若在 `build-verify.yaml` 配置了额外通过判据**（`success_criteria` 或专用判据段），**以项目判据为准**（项目判据可将某类 warning 升格为阻塞） |
 
 输出：**"后端构建验证：{success_criteria} — 通过 ✅"**
 
