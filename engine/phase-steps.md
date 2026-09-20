@@ -12,7 +12,11 @@
 |--------|---------|:--:|---------|
 | step-0-init-state | 创建 state.yaml + 写入 ACTIVE | ✅ | 新迭代（首次进入 01） |
 | step-1-read-specs | 读取Spec活文档获取项目上下文 | ✅ | 始终 |
+| step-1-5 | 模块范围定位（读 L1 总览 + 匹配相关 L2 模块） | ✅ | 始终 |
+| step-1.6-dir-diff | 迭代开始目录对比（scan 后端 BLL + 前端 pages → 对比 L1 模块列表 → 输出 +/-/~ 差异） | — | 始终 |
 | step-2-classify | 判断需求类型（Bug类/功能类），选择对应模板 | ✅ | 始终 |
+| step-2-5 | 闭环追问（5W2H 七维度穷举生成问题清单） | ✅ | 始终 |
+| step-2-6 | 共享语言建立（生成 CONTEXT.md 术语映射快照） | ✅ | 始终 |
 | step-3-output | 生成01-需求记录.md | ✅ | 始终 |
 | step-4-user-confirm | 用户确认需求文档 | ✅ | 始终 |
 
@@ -33,7 +37,7 @@
 | 步骤ID | 步骤名称 | 强制 | 触发条件 |
 |--------|---------|:--:|---------|
 | step-1-review | Agent以reviewer视角审阅，提出问题 | ✅ | 始终 |
-| step-1x-review | 外部模型审查（优先）+ 降级Agent审查 | 🔴 | 🔴（强制）🟡（可选）🟢（跳过） |
+| step-1x-review | 外部模型审查（优先）+ 降级Agent审查 | — | 🔴（应执行）/ 🟡（可选）/ 🟢（跳过）；`mandatory=false` |
 | step-2-user-resolve | 用户逐项确认或驳回问题 | ✅ | 始终 |
 | step-3-output | 生成02-需求评审.md | ✅ | 始终 |
 | step-4-review-gate | 写入评审门禁结果到 state.yaml | ✅ | 始终 |
@@ -53,7 +57,8 @@
 
 | 步骤ID | 步骤名称 | 强制 | 触发条件 |
 |--------|---------|:--:|---------|
-| step-1-explore | 代码探索 | — | 按需 |
+| step-1-explore | 代码探索（含六步定位漏斗子步骤 `step-1.1` ~ `step-1.6`） | — | 按需 |
+| step-3-rescore | 复杂度复评（用探索所得实际文件清单重算；03 **必经**） | ✅ | 始终 |
 | step-2-output | 产出技术方案文档 | ✅ | 始终 |
 | step-3-self-review | 自主审查L1/L2（关键符号验证） | ✅ | 始终 |
 | step-3x-cross-review | 独立Agent交叉审查L1/L2 | ✅ | 🟡🔴 |
@@ -86,6 +91,7 @@
 | step-3-team-code | Team 编码 | — | step-1-6-user-confirm 完成 |
 | step-4-csproj | csproj 注册 | ✅ | 有新增/删除 C# 文件 |
 | step-5-build | 编译验证 | ✅ | 有 C# 变更 |
+| step-5-6-complexity-actual | 复杂度实际值回填（Step 5.6，仅记录不改等级） | ✅ | 始终（🟢 可简写） |
 | step-6-spec | Spec 合规验证 | ✅ | 🔴复杂级 + 有 ADDED 文件 |
 | step-7-code-review | 代码审查 | ✅ | 始终 |
 
@@ -98,6 +104,7 @@
 | 步骤ID | 步骤名称 | 强制 | 触发条件 |
 |--------|---------|:--:|---------|
 | step-0-frontend-build | 前端构建验证 | ✅ | 涉前端变更 |
+| step-0-5 | 合规检查（4 条通用规则：路径一致性 / 双副本同步 / Markdown 结构 / 跨文档引用） | ✅ | 始终 |
 | step-1-generate-cases | 自动生成测试用例 | ✅ | 始终 |
 | step-2-user-review | 用户审核用例 | — | 可选 |
 | step-3-execute | 自动执行【自动】用例 | ✅ | 始终 |
@@ -146,6 +153,7 @@
 | step-1-summary | 迭代总结（做了什么/做对了什么/可改进什么） | ✅ | 精简 | 标准 | 完整 |
 | step-2-issues | 问题清单（本次迭代遇到的问题） | ✅ | 精简 | 标准 | 完整 |
 | step-3-patterns | 模式沉淀（写入 lessons-learned 模式库） | — | 跳过 | 按需 | ✅ |
+| step-3-5-workflow-audit | 工作流一致性审计（`scripts/audit-engine.py`，❌ 登记 TOOLING-TODO） | ✅ | ✅ | ✅ | ✅ |
 | step-4-actions | 行动项（改进措施落实到人） | — | 跳过 | ✅ | ✅ |
 | step-5-lessons | 正向模式提炼 | ✅ | ✅ | ✅ | ✅ |
 | step-6-archive | 回顾归档（更新 state.yaml 完成 07，释放 ACTIVE） | ✅ | ✅ | ✅ | ✅ |
@@ -175,3 +183,5 @@
 | 2026-07-19 | 1.3 | 补充步骤编号约定文档；合并项目侧补充步骤到各阶段表格 |
 | 2026-07-23 | 1.4 | F05: 06 阶段新增 step-1.2-backup-capture + step-1.5-deploy-stage2，客户部署清单结构化 |
 | 2026-09-20 | 1.5 | 06 阶段新增 **step-2-5-kb-refresh**（知识库无条件刷新，位于 spec 回写后 / 归档前）—— 刷新点由"04 末"迁至此处（代码已过 05 测试 = 最终态）；依赖链同步更新。详见 `phase-06.md` §step-2-5-kb-refresh |
+| 2026-09-20 | 1.6 | ★ **02 步骤口径订正（独立审查回流）**：`step-1x-cross-review` → **`step-1x-review`**（与 2026-07-18 v1.2 更名一致）；"强制"列 `🔴` → **`—`**（该列语义 = `mandatory`，而 `mandatory` 的**唯一权威源**是 `complexity-scoring.md` §二，其中 02 = `mandatory=false`；原 `🔴` 与 03/04 交叉审查行的 `✅` 风格亦不一致）。**执行要求（🔴 应执行/🟡 可选/🟢 跳过）改列于"触发条件"列**，与 `mandatory` 两维度分离。联动：`consistency-checklist.md`（02/06 步骤清单）、`complexity-scoring.md`（ID 统一 + 登记 `step-2-5-kb-refresh` + 补"未登记默认 true"规则） |
+| 2026-09-20 | 1.7 | ★ **AUDIT-2 清偿（审计脚本首跑发现）**：补登记长期漏登的 **7 个**步骤 —— 阶段一 `step-1-5`（模块范围定位）· `step-1.6-dir-diff`（目录对比）· `step-2-5`（闭环追问）· `step-2-6`（共享语言）；阶段三 `step-3-rescore`（复杂度复评，03 必经）；阶段四 `step-5-6-complexity-actual`（复杂度实际值回填）；阶段五 `step-0-5`（合规检查）。**根因** = 各 `phase-0X.md` 的步骤表被扩充时未同步本表（本表自称 SSOT 却长期滞后）。联动订正：`phase-05.md`（`step-4-7` → `step-6-spec`）、`phase-04.md`（补 `step-7-code-review` 产出说明）。判据：`python scripts/audit-engine.py` 的 A2 ERR → 0 |

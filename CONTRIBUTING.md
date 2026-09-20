@@ -70,7 +70,12 @@ docs(readme): 更新快速入门指南
 
 ### 5. 引擎自身演进
 
-本引擎遵循自身的七阶段迭代工作流进行演进：
+本引擎**可采用**自身的七阶段迭代工作流进行演进：
+
+> ★ **适用场景（2026-09-20 明确）**：本仓库是**通用模板**，面向外部贡献者 —— 走七阶段是**推荐路径**。
+> 而**下游项目实例**对引擎的维护采用**元层通道**：**不创建迭代、不占用迭代编号、不进 01-07 流程**，
+> 待办登记 `runtime/TOOLING-TODO.md`（见实例侧 `runtime/SESSION-HANDOFF.md`）。
+> 两条通道**目标读者不同，不构成矛盾**。
 
 1. **01-需求分析** — 在 `design/` 目录下产出需求文档
 2. **02-需求评审** — 评审通过后进入下一阶段
@@ -81,6 +86,8 @@ docs(readme): 更新快速入门指南
 7. **07-迭代回顾** — 复盘 + 模式沉淀
 
 贡献者在修改引擎核心协议（`engine/` 下文件）时，建议遵循此流程。
+
+- ★ **硬性前置（2026-09-20 起）**：对本引擎的**任何**修改（含 `engine/`、`scripts/`、`hooks/`、`SKILL.md`、模板）**必须先向用户提交「合理性论证 + 关联影响分析 + 完整方案 + 方案准确性自评」四件套，取得明确确认后方可动手**；完成后必须提供**可观测、可评估**的验证方式与判据（命令 + 期望输出）。其中关联影响分析须**逐个 `read_file` 实证**（禁止只凭全文检索结果断言——检索可能漏报）。
 
 ---
 
@@ -141,7 +148,12 @@ Use [Conventional Commits](https://www.conventionalcommits.org/) format:
 
 ### 5. Engine Self-Evolution
 
-This engine evolves following its own 7-phase iteration workflow. Contributors modifying core protocols (`engine/` files) are encouraged to follow this process.
+This engine **may** evolve following its own 7-phase iteration workflow:
+
+> ★ **Scope (clarified 2026-09-20)**: this repository is the **generic template** for external contributors — the 7-phase path is **recommended** here.
+> **Downstream project instances** maintain the engine via a **meta channel**: no iteration is created, no iteration ID is consumed, and the 01-07 flow is skipped; pending items are logged in `runtime/TOOLING-TODO.md` (see the instance-side `runtime/SESSION-HANDOFF.md`). The two paths target different audiences and are **not in conflict**.
+
+- ★ **Hard prerequisite (since 2026-09-20)**: ANY change to this engine (including `engine/`, `scripts/`, `hooks/`, `SKILL.md`, templates) MUST first be submitted to the user as a **four-part package** — (1) rationale backed by real failure cases, (2) impact analysis over all linked files, **verified by reading each file individually** (never rely on search results alone — they can miss matches), (3) complete per-file plan (current → target → reason), (4) self-assessment of the plan's weak points — and may only be executed **after explicit user confirmation**. Afterwards, an **observable and assessable** verification method (command + expected output) must be provided.
 
 ---
 

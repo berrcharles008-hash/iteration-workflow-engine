@@ -1,69 +1,57 @@
-# 自修改安全协议
+# 引擎演进安全协议（Engine Evolution Safety）
 
-> 当迭代工作流修改自身的核心文件时，自动快照 + 变更影响声明 + 回滚路径。
-> 解决新 clone 项目无 SVN/git 历史时的回滚困境。
+> **本文件 = 引擎自身修改纪律的唯一载体**：① 前置审批（四件套）→ ② 执行安全（快照 / 影响声明 / 回滚）→ ③ 收口验证（三个脚本 + 回流）。
+> 关联：审计维度 = `engine/consistency-checklist.md`｜门禁 = `engine/gate-protocol.md`｜元层待办 = `runtime/TOOLING-TODO.md`
 
 ---
 
-## 一、核心文件清单
+## 一、适用范围与核心文件
 
-以下文件被认定为"核心文件"，修改时必须执行快照：
+**任何**对本引擎的修改都在本协议范围内：`engine/**` · `scripts/**` · `hooks/**` · `SKILL.md` · `SKILL.template.md` · `engine/templates/**` · 根级文档。
 
-| 文件 | 路径（相对于 Skill 根目录） | 角色 |
+**核心文件**（改动需执行 §三 的快照与影响声明）：
+
+| 文件 | 路径（相对 Skill 根） | 角色 |
 |------|------|------|
-| gate-check.mjs | `hooks/gate-check.mjs`（`.claude/hooks/` 或 `.codebuddy/hooks/` 取决于 AI 工具，由环境变量自动检测） | L3 物理拦截层 |
+| gate-check.mjs | `hooks/gate-check.mjs`（`.claude/hooks/` 或 `.codebuddy/hooks/`，随宿主） | L3 物理拦截层 |
 | gate-protocol.md | `engine/gate-protocol.md` | 门禁规则唯一真相源 |
 | state-protocol.md | `engine/state-protocol.md` | 状态文件读写规则 |
 | SKILL.md | `SKILL.md` | Skill 入口 + 路由表 + 门禁摘要 |
 
-> 此清单可随引擎演进扩展。新增核心文件时，同步更新本清单。
+> ★ **以 `scripts/audit-engine.py` 的 `CORE_FILES` 常量为准**（本表仅为可读副本，避免双源漂移）。
+> ★ 原 §一 的手工清单已废止 —— 实测（2026-09-19/20）实改 **12+ 个**引擎文件**无一命中**旧清单 ⇒ 快照从未被触发过。
 
 ---
 
-## 二、修改前快照规则
+## 二、★ 前置：四件套（硬性前置，2026-09-20 用户立法）
 
-### 2.1 自动快照
+**禁止「先改后报」。** 任何修改前必须先提交：
 
-Agent 在任何迭代中修改上述核心文件时，**修改前**必须先执行：
+| # | 内容 | 要求 |
+|:--:|------|------|
+| ① | **合理性论证** | 须举**真实失效案例**或结构性证据（举不出 = 臆测，当场作废） |
+| ② | **关联影响分析** | 列全联动文件与残留引用；★ **逐个 `read_file` 实证** —— 禁止只凭全文检索断言（实证其会漏报） |
+| ③ | **完整方案** | 逐文件「现值 → 改为 → 理由」 |
+| ④ | **方案准确性自评** | 自证薄弱点 / 不确定项 |
 
-```
-1. 创建快照目录（如不存在）：
-   runtime/snapshots/
+⇒ **等用户明确确认后方可动手**。改完必须给出**可观测、可评估**的验证方式与判据（命令 + 期望输出）。
 
-2. 复制当前版本到快照：
-   cp 目标文件 runtime/snapshots/{YYYY-MM-DD}-{filename}.bak
-```
-
-**示例**：
-```bash
-# 修改 gate-check.mjs 前（备份两处，auto-detect 自动选择运行方对应的路径）
-mkdir -p runtime/snapshots/
-cp .claude/hooks/gate-check.mjs runtime/snapshots/2026-07-23-gate-check.mjs.claude.bak
-cp .codebuddy/hooks/gate-check.mjs runtime/snapshots/2026-07-23-gate-check.mjs.codebuddy.bak
-```
-
-### 2.2 快照命名规范
-
-```
-{YYYY-MM-DD}-{相对路径转文件名}.bak
-```
-
-路径中的 `/` 和 `\` 替换为 `-`：
-- `.claude/hooks/gate-check.mjs` → `gate-check.mjs.claude.bak`
-- `.codebuddy/hooks/gate-check.mjs` → `gate-check.mjs.codebuddy.bak`
-- `engine/gate-protocol.md` → `gate-protocol.md.bak`
-
-### 2.3 快照保留策略
-
-- 快照文件不自动清理
-- 同一文件多次修改产生多个时间戳快照，按日期区分
-- 建议在迭代回顾（07 阶段）时手动清理测试通过后不再需要的旧快照
+> **来由实证**（2026-09-20）：P0 因跳过 ①② 直接改 ⇒ 把"应执行"误当 `mandatory` 强制 + 漏扫 2 处联动。
 
 ---
 
-## 三、变更影响声明
+## 三、执行安全（核心文件）
 
-修改核心文件时，Agent 必须同步输出变更影响声明（格式参考 F13 机制）：
+### 3.1 修改前快照
+
+```
+1. 创建快照目录（如不存在）：runtime/snapshots/
+2. 复制当前版本：cp <核心文件> runtime/snapshots/{YYYY-MM-DD}-{文件名}.bak
+```
+
+命名规范：路径中的 `/`、`\` 替换为 `-`（例：`engine/gate-protocol.md` → `gate-protocol.md.bak`）。快照不自动清理，07 阶段可清理已验证无用的旧快照。
+
+### 3.2 变更影响声明
 
 ```
 ╔═══════════════════════════════════════════════════════╗
@@ -79,35 +67,44 @@ cp .codebuddy/hooks/gate-check.mjs runtime/snapshots/2026-07-23-gate-check.mjs.c
 ╚═══════════════════════════════════════════════════════╝
 ```
 
-用户确认后继续执行修改。
-
----
-
-## 四、回滚步骤
-
-### 4.1 从快照恢复
+### 3.3 回滚
 
 ```bash
-# 1. 恢复文件（根据运行方选择对应的快照）
-cp runtime/snapshots/2026-07-23-gate-check.mjs.claude.bak .claude/hooks/gate-check.mjs
-cp runtime/snapshots/2026-07-23-gate-check.mjs.codebuddy.bak .codebuddy/hooks/gate-check.mjs
-
-# 2. 清理 state.yaml 中该次变更的步骤标记
-#    编辑 runtime/{ITERATION_ID}.state.yaml
-#    将对应 phase_steps 中涉及核心文件变更的步骤重置为 pending
-
-# 3. 运行回归测试验证
+# 1. 从快照恢复（按宿主选对应快照）
+cp runtime/snapshots/{YYYY-MM-DD}-{文件}.bak <目标路径>
+# 2. 复位 state.yaml 中该次变更涉及的步骤为 pending
+# 3. 跑回归验证
 node scripts/run-gate-tests.mjs
 ```
 
-### 4.2 无快照时的恢复
-
-如果快照文件丢失（如 `runtime/` 目录被清理），可从以下来源恢复：
-- SVN 历史：`svn cat -r {PREV} 目标文件@`
-- Git 历史：`git show HEAD~1:目标文件`
-- 其他项目副本的 engine/ 目录（确认版本一致）
-- 最后手段：重新从引擎源拉取该文件的原始版本
+无快照时的恢复来源：`git show HEAD~1:<文件>` · 源仓库副本 · 其他项目实例的 `engine/`（须确认版本一致）。
 
 ---
 
-> **变更记录（2026-07-23 S4.2）**：新增自修改安全协议，定义核心文件快照机制、变更影响声明模板和回滚路径。
+## 四、★ 收口验证（改完必跑，缺一不可）
+
+| # | 命令 | 期望判据 |
+|:--:|------|------|
+| 1 | `python scripts/audit-engine.py` | **ERR 0**（WARN 需登记 `runtime/TOOLING-TODO.md`） |
+| 2 | `python scripts/validate-template-coverage.py --skill-dir .` | `ERR:0` |
+| 3 | `node scripts/run-gate-tests.mjs` | BASE 0 失败 / FIX 全过 |
+| 4 | 回流水位 | `audit-engine.py --src <源仓库>`；不一致 ⇒ **登记 `AUDIT-n`**（回流无自动化机制，须人工） |
+
+> **收口结果写入** `runtime/TOOLING-TODO.md` 对应工单的「实施记录」；无对应工单 ⇒ **新建 `AUDIT-n`**。
+
+---
+
+## 五、逃生口纪律
+
+- 改 `hooks/**` 等**不在** `EXEMPT_PATHS` 内的文件时，需用户**手动**开闸：`{IDE}/hooks/.gate-bypass`（或 `GATE_BYPASS=1`）。
+- ★ **01-03 阶段改 `{IDE}/skills/iteration-workflow/**` 无需开闸**（`EXEMPT_PATHS` 放行；见 `gate-protocol.md` §四）。
+- 逃生口**用完即删**；**收尾必检：标记已删**（2026-09-20 曾发生"空标记遗留 ⇒ 门禁长期全放行"）。
+
+---
+
+## 变更记录
+
+| 日期 | 变更 |
+|------|------|
+| 2026-07-23 | 初版：核心文件快照 + 变更影响声明 + 回滚路径（解决新 clone 项目无版本历史时的回滚困境） |
+| 2026-09-20 | ★ **与「先批后改」合并为本协议**：四件套升为 §二**硬性前置**；核心文件清单改为"以 `audit-engine.py` 的 `CORE_FILES` 为准"（旧 4 文件手工清单实测裸奔 59 天、从未触发）；新增 **§四 收口验证**（3 脚本 + 回流水位）；新增 **§五 逃生口纪律**（含 01-03 免开闸口径） |

@@ -22,6 +22,8 @@
 | step-6-spec | Spec 合规验证 | ✅ | 🔴复杂级 + 有 ADDED 文件 |
 | step-7-code-review | 代码审查 | ✅ | 始终 |
 
+> **step-7-code-review 产出**：`04-代码审查报告.md`（可并入 `04-开发任务清单.md` 附录；标准命名见 `workflow-engine.md` §标准文件命名）。
+
 > ⚠️ **步骤序号 ≠ 执行顺序**：step-1-5x 排在 step-1-5 之后仅为编号有序。实际执行时互审与自审**同时启动**（见 Step 1.5x 并行约定）。
 >
 > 进入阶段时，Agent 根据实际触发条件选择性写入 phase_steps（如无 SQL 变更则 step-0-* 设为 `not_applicable`）。

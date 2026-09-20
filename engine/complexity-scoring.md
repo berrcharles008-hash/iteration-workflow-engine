@@ -134,9 +134,16 @@ thresholds:
 | step-1-task-list | 任务清单生成 | mandatory=true | mandatory=true | mandatory=true |
 | step-1-review | 需求评审 | mandatory=false | mandatory=true | mandatory=true |
 | step-2-output | 技术方案 | mandatory=false | mandatory=true | mandatory=true |
-| step-1x-cross-review | 需求格式完整性检查（交叉审查） | N/A | mandatory=false | mandatory=false |
+| step-1x-review | 需求格式完整性检查（交叉审查） | N/A | mandatory=false | mandatory=false |
 | step-3x-cross-review | 技术方案L1/L2交叉审查 | N/A | mandatory=true | mandatory=true |
 | step-1-5x-cross-review | 任务清单交叉审查 | N/A | mandatory=true | mandatory=true |
+| step-2-5-kb-refresh | 知识库刷新（06 归档前无条件） | mandatory=true | mandatory=true | mandatory=true |
+
+> ★ **步骤 ID 以 `phase-steps.md` 为准**（本表原写 `step-1x-cross-review`，与 2026-07-18 v1.2 更名后的
+> `step-1x-review` 不一致，已统一）。
+>
+> ★ **本表未登记的步骤默认 `mandatory=true`**（本表仅显式登记"需按复杂度区分或需特别声明"的步骤；
+> 未登记 = 各等级一律强制）。新增步骤若需 `mandatory=false`，**必须在此登记**，否则按默认强制执行。
 
 > **N/A 含义**：该步骤在对应复杂度下不适用，Agent 初始化时设为 `status: not_applicable`。
 > **mandatory=false 含义**：该步骤可选，Agent 提示但不阻塞。
