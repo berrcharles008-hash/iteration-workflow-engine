@@ -39,6 +39,29 @@ const RUNTIME_DIR = process.env.GATE_TEST_RUNTIME_DIR
     ? join(PROJECT_DIR, '.claude/skills/iteration-workflow/runtime')
     : join(PROJECT_DIR, '.codebuddy/skills/iteration-workflow/runtime'));
 
+// ── ★GATE-1①（2026-09-20）：调用留痕 —— 让「静默放行」变成可对账的事实 ──
+//   背景：实测 2 次删除类调用既无 block 也无 allow 留痕（`deleteGate` 的审计同样缺失）
+//   ⇒ 无法事后判定「hook 未触发」还是「早退静默放行」。本行在**读取 stdin 之前**留痕，
+//   故超时 / 被 kill / 空 stdin 等早退路径**同样**留下证据。
+//   对账判据：count(HOOK_ENTER) == count(allow) + count(BLOCK) + count(BYPASS)（差值 = 0 ⇒ 无幽灵调用）
+if (!process.argv.includes('--stop-check')) {
+  audit('HOOK_ENTER', `pid=${process.pid} ppid=${process.ppid} tty=${process.stdin.isTTY === true} argv=${process.argv.slice(1).join(' ')}`);
+}
+
+// ── ★GATE-1①（2026-09-20）：exit 留痕 —— 注册点必须在**逃生口分支之前** ──
+//   原因：逃生口分支直接 `process.exit(0)` 早退；注册点若在其后 ⇒ 逃生口生效期间
+//   **零事件留痕**（实测：HOOK_ENTER 有、HOOK_EXIT 全无）。
+//   安全：处理器体全部包 try/catch —— `toolName` 此刻可能仍在 TDZ，抛出即被吞，行为不变。
+process.on('exit', (code) => {
+  try {
+    if (!process.argv.includes('--stop-check')) {
+      let _t = '';
+      try { _t = toolName || '(unset)'; } catch (e) { _t = '(tdz)'; }
+      audit('HOOK_EXIT', `code=${code} tool=${_t}`);
+    }
+  } catch { /* 留痕失败不影响判定 */ }
+});
+
 /** 任何阶段都无条件放行的目录段（状态维护）；★ FIX-9：由 includes() 子串匹配收紧为段前缀匹配 */
 const ALWAYS_ALLOW_SEGMENTS = ['/skills/iteration-workflow/runtime/'];
 
@@ -446,6 +469,7 @@ const input = await new Promise((resolve) => {
 
 // ── 空输入处理 ────────────────────────────────────────
 if (!input || !input.trim()) {
+  audit('HOOK_NO_STDIN', `isTTY=${stdinIsTTY}`);      // ★GATE-1①：静默放行路径补留痕（行为不变）
   if (stdinIsTTY) {
     // TTY 无 pipe 输入：正常情况，放行
     process.exit(0);
