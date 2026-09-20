@@ -83,12 +83,16 @@ node scripts/run-gate-tests.mjs
 
 ## 四、★ 收口验证（改完必跑，缺一不可）
 
+> ★ **执行前提（2026-09-20 实测补充）**：下表命令**一律从项目根执行**（IDE 终端的默认 CWD）。
+> 原行 1~3 写成 `scripts/…` 相对路径、行 2 写 `--skill-dir .` —— 二者都**默认 CWD = skill 根**，
+> 从项目根照抄执行必崩（实测：`FileNotFoundError: .\engine\startup-protocol.md`）。
+
 | # | 命令 | 期望判据 |
 |:--:|------|------|
-| 1 | `python scripts/audit-engine.py` | **ERR 0**（WARN 需登记 `runtime/TOOLING-TODO.md`） |
-| 2 | `python scripts/validate-template-coverage.py --skill-dir .` | `ERR:0` |
-| 3 | `node scripts/run-gate-tests.mjs` | BASE 0 失败 / FIX 全过 |
-| 4 | 回流水位 | `audit-engine.py --src <源仓库>`；不一致 ⇒ **登记 `AUDIT-n`**（回流无自动化机制，须人工） |
+| 1 | `python .codebuddy/skills/iteration-workflow/scripts/audit-engine.py` | **ERR 0**（WARN 需登记 `runtime/TOOLING-TODO.md`） |
+| 2 | `python .codebuddy/skills/iteration-workflow/scripts/validate-template-coverage.py --skill-dir .codebuddy/skills/iteration-workflow` | `ERR:0` |
+| 3 | `node .codebuddy/skills/iteration-workflow/scripts/run-gate-tests.mjs` | BASE 0 失败 / FIX 全过 |
+| 4 | 回流水位 | `python .codebuddy/skills/iteration-workflow/scripts/audit-engine.py --src <源仓库>`；不一致 ⇒ **登记 `AUDIT-n`**（回流无自动化机制，须人工） |
 
 > **收口结果写入** `runtime/TOOLING-TODO.md` 对应工单的「实施记录」；无对应工单 ⇒ **新建 `AUDIT-n`**。
 

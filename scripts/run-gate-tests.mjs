@@ -193,6 +193,45 @@ const TESTS = [
     tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/test.js',
     expectExit: 0, expectBlock: false
   },
+
+  // ── Phase CONC（★CONC-1 多会话写者互斥）──────────────────────────────
+  // phase 一律 04（全放行）⇒ 任何拦截只可能来自 CONC 保护本身（隔离变量）。
+  // 声明文件在 $RUNTIME_DIR 内跨用例持久 ⇒ 顺序敏感，勿重排、勿并行。
+  // CONC-1 会话A 首次写 → 放行 + 登记声明
+  {
+    id: 'CONC-1', name: '会话A首次写 → 放行（登记声明）',
+    phase: '04', active: true, sid: 'sidAAAAAAAAAAAAAAAA',
+    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/conc-test.js',
+    expectExit: 0, expectBlock: false
+  },
+  // CONC-2 同会话再写同文件 → 放行（不拦自己）
+  {
+    id: 'CONC-2', name: '同会话再写同文件 → 放行（不拦自己）',
+    phase: '04', active: true, sid: 'sidAAAAAAAAAAAAAAAA',
+    tool: 'replace_in_file', file: 'front-end/my-app-upgrade/src/conc-test.js',
+    expectExit: 0, expectBlock: false
+  },
+  // CONC-3 他会话写同文件 → 阻止（拦一次）
+  {
+    id: 'CONC-3', name: '他会话写同文件 → 阻止（拦一次）',
+    phase: '04', active: true, sid: 'sidBBBBBBBBBBBBBBBB',
+    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/conc-test.js',
+    expectExit: 2, expectBlock: true
+  },
+  // CONC-4 他会话重试同文件 → 放行（「拦一次」语义，防对方崩溃后死锁）
+  {
+    id: 'CONC-4', name: '他会话重试同文件 → 放行（拦一次语义）',
+    phase: '04', active: true, sid: 'sidBBBBBBBBBBBBBBBB',
+    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/conc-test.js',
+    expectExit: 0, expectBlock: false
+  },
+  // CONC-5 第三方会话 + CONC_LOCK=0 → 关闭保护，放行
+  {
+    id: 'CONC-5', name: 'CONC_LOCK=0 → 关闭保护放行',
+    phase: '04', active: true, sid: 'sidCCCCCCCCCCCCCCCC', env: { CONC_LOCK: '0' },
+    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/conc-test.js',
+    expectExit: 0, expectBlock: false
+  },
 ];
 
 // ── 工具函数 ──────────────────────────────────────────
@@ -250,15 +289,25 @@ function cleanupBypassFile(testCase) {
 function runHook(testCase) {
   const stdinInput = testCase.stdin !== undefined
     ? testCase.stdin 
-    : JSON.stringify({
-        tool_name: testCase.tool || 'write_to_file',
-        tool_input: { filePath: join(PROJECT_DIR, testCase.file).replace(/\\/g, '/') }
-      });
+    : JSON.stringify(Object.assign(
+        {
+          tool_name: testCase.tool || 'write_to_file',
+          tool_input: { filePath: join(PROJECT_DIR, testCase.file).replace(/\\/g, '/') }
+        },
+        // ★CONC-1：按用例注入会话标识（2026-09-20 探针实证 stdin 含 session_id）
+        testCase.sid ? { session_id: testCase.sid } : {}
+      ));
 
   const env = {
     ...process.env,
     GATE_TEST_RUNTIME_DIR: RUNTIME_DIR,
   };
+  // ★CONC-1：会话标识须可判定 —— 指定 sid 时同步设 env（双源一致）；
+  //   未指定时**清空继承值**，避免真实会话 id 泄漏进沙箱用例（保证可复现）。
+  if (testCase.sid) env.CODEBUDDY_SESSION_ID = testCase.sid;
+  else { delete env.CODEBUDDY_SESSION_ID; delete env.CLAUDE_SESSION_ID; }
+  // ★CONC-1：按用例注入额外环境变量（如 CONC_LOCK=0 关闭保护）
+  if (testCase.env) Object.assign(env, testCase.env);
   // hook 的项目根优先级：CODEBUDDY_PROJECT_DIR > CLAUDE_PROJECT_DIR > cwd。
   // 旧代码写入的是 COBUDDY_PROJECT_DIR（少一个 E），hook 不识别，等于从未传递；
   // 这里显式设置目标变量并清除另一个，避免外部环境变量抢占优先级。

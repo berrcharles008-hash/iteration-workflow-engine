@@ -27,8 +27,8 @@
  *           ｜ FIX-23 + FIX-24（2026-09-20）01-03 放行 docs/knowledge-base/ ＋ Bash 伪路径不享路径豁免
  */
 
-import { readFileSync, existsSync, appendFileSync, statSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, existsSync, appendFileSync, statSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
 
 // ── 配置 ──────────────────────────────────────────────
 const PROJECT_DIR = process.env.CODEBUDDY_PROJECT_DIR
@@ -157,6 +157,110 @@ function isMetaWriteExempt(relPath) {
   if (!raw || raw.startsWith('[')) return false;
   const p = raw.replace(/\\/g, '/').replace(/^\/+/, '');
   return META_WRITE_EXEMPT_PATHS.some((x) => p.startsWith(x) || p.includes('/' + x));
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// ★ CONC-1（2026-09-20 用户批准）多会话写者互斥（软锁 · fail-open）
+//   背景：同一工作区可同时打开多个 IDE 会话（2026-09-20 实证：5 秒内观测到
+//   两个不同 session_id 同时调用本 hook）。追加式编辑冲突只会「old_str 失配」，
+//   但**整文件重写（Write）会静默吞掉对方改动**（2026-08-19 有真实案底）。
+//   设计：写类调用按 (session_id, 文件) 登记声明；他会话在 TTL 内命中 ⇒ **拦一次**
+//        并提示先重读；同 (sid, 文件) 在 GRACE 内再试 ⇒ 放行（避免对方崩溃后死锁）。
+//   关闭：env `CONC_LOCK=0|off` 或标记文件 `hooks/.conc-off`。
+//   ★ 与阶段门禁**正交**：本关 fail-open —— 任何自身异常都不得阻断写入。
+//   声明文件：$RUNTIME_DIR/write-claims.jsonl（append-only，读取仅取末 N 行）
+// ─────────────────────────────────────────────────────────────────────────
+const CONC_TTL_MS = 10 * 60 * 1000;      // 声明有效期
+const CONC_GRACE_MS = 5 * 60 * 1000;     // 「拦一次」窗口：同 (sid,路径) 重试即放行
+const CONC_MAX_LINES = 800;              // 读取上限（防文件无限增长拖慢 hook）
+const CONC_WRITE_TOOLS = ['Write', 'Edit', 'write_to_file', 'replace_in_file'];
+const CONC_OFF_MARKERS = ['.codebuddy/hooks/.conc-off', '.claude/hooks/.conc-off'];
+/** 排除「追加式 / 构建产物 / 保护自身存储」——其余一律纳入保护 */
+const CONC_EXCLUDE_RES = [
+  /(?:^|\/)runtime\//,
+  /(?:^|\/)\.codebuddy\/memory\//,
+  /(?:^|\/)\.claude\/memory\//,
+  /(?:^|\/)\.codebuddy\/temp\//,
+  /(?:^|\/)(?:node_modules|dist|obj|bin|\.vs)\//,
+  /\.(?:log|tmp|bak)$/i,
+];
+function concClaimsPath() { return join(RUNTIME_DIR, 'write-claims.jsonl'); }
+/** 会话标识：stdin.session_id ＞ env ＞ transcript_path 中的 convId 段（三源兜底） */
+function resolveSessionId(hi) {
+  try {
+    if (hi && hi.session_id) return String(hi.session_id);
+    if (process.env.CODEBUDDY_SESSION_ID) return String(process.env.CODEBUDDY_SESSION_ID);
+    if (process.env.CLAUDE_SESSION_ID) return String(process.env.CLAUDE_SESSION_ID);
+    const tp = hi && hi.transcript_path ? String(hi.transcript_path).replace(/\\/g, '/') : '';
+    const m = tp.match(/\/([0-9a-f]{16,})\/[^/]*$/i);
+    if (m) return m[1];
+  } catch (e) { /* 取不到 ⇒ 调用方 fail-open */ }
+  return '';
+}
+function concInScope(rel) {
+  const p = String(rel || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!p || p.startsWith('[')) return false;
+  return !CONC_EXCLUDE_RES.some((re) => re.test(p));
+}
+/** 读声明文件 → { w: Map<路径,{sid,ts}>, b: Map<"sid|路径",ts> } */
+function concReadClaims() {
+  const w = new Map();
+  const b = new Map();
+  try {
+    const lines = readFileSync(concClaimsPath(), 'utf-8').split(/\r?\n/).filter(Boolean).slice(-CONC_MAX_LINES);
+    for (const ln of lines) {
+      let r = null;
+      try { r = JSON.parse(ln); } catch (e) { continue; }
+      if (!r || !r.p || !r.s) continue;
+      if (r.k === 'b') b.set(r.s + '|' + r.p, r.t || 0);
+      else w.set(r.p, { sid: r.s, ts: r.t || 0 });
+    }
+  } catch (e) { /* 无文件 / 读失败 ⇒ 视为无声明 */ }
+  return { w, b };
+}
+function concAppend(rec) {
+  try {
+    mkdirSync(dirname(concClaimsPath()), { recursive: true });
+    appendFileSync(concClaimsPath(), JSON.stringify(rec) + '\n', 'utf-8');
+  } catch (e) { /* 登记失败不影响放行 */ }
+}
+/**
+ * 写前检查：他会话在 TTL 内写过同一文件 ⇒ 拦一次并要求重读；
+ * 同会话 / 声明过期 / 本会话已被告知过（GRACE 内重试）⇒ 放行 + 登记/续期声明。
+ */
+async function concLockCheck(rel, tool) {
+  try {
+    if (CONC_WRITE_TOOLS.indexOf(String(tool || '')) < 0) return;
+    if (process.env.CONC_LOCK === '0' || process.env.CONC_LOCK === 'off') return;
+    for (const m of CONC_OFF_MARKERS) if (existsSync(join(PROJECT_DIR, m))) return;
+    const p = String(rel || '').replace(/\\/g, '/');
+    if (!concInScope(p)) return;
+    const sid = resolveSessionId(hookInput);
+    if (!sid) { audit('CONC_NO_SID', p); return; }
+    const { w, b } = concReadClaims();
+    const prev = w.get(p);
+    const stale = !prev || (Date.now() - prev.ts) > CONC_TTL_MS;
+    const mine = !!prev && prev.sid === sid;
+    if (!stale && !mine) {
+      if (Date.now() - (b.get(sid + '|' + p) || 0) < CONC_GRACE_MS) {
+        audit('CONC_ALLOW_RETRY', sid.slice(0, 8) + ' ' + p);         // 本会话已被告知过 ⇒ 放行
+      } else {
+        concAppend({ k: 'b', t: Date.now(), s: sid, p, tool: String(tool || '') });
+        audit('CONC_BLOCK', String(sid).slice(0, 8) + ' <- ' + String(prev.sid).slice(0, 8) + ' ' + p);
+        block(
+          '该文件可能正被另一个会话编辑（多会话并发写保护）',
+          '目标: ' + p,
+          '最近写入: ' + Math.round((Date.now() - prev.ts) / 1000) + 's 前 · 会话 ' + String(prev.sid).slice(0, 8),
+          '',
+          '请先 read_file 重读该文件（确认对方改动是否已并入）后再写；',
+          '★ 直接重试一次即放行（本保护只在首次提示时拦截）。',
+          '关闭本保护: CONC_LOCK=0 或创建 hooks/.conc-off'
+        );
+      }
+    }
+    // 放行 ⇒ 登记/续期本次声明（append-only，读取取最新；同一记录流无需额外状态）
+    concAppend({ k: 'w', t: Date.now(), s: sid, p, tool: String(tool || '') });
+  } catch (e) { /* fail-open：保护自身异常不得阻断写入 */ }
 }
 
 /**
@@ -436,6 +540,9 @@ const filePathNorm = filePath.replace(/\\/g, '/');
 const relativePath = filePathNorm.startsWith(projectDirNorm)
   ? filePathNorm.slice(projectDirNorm.length + 1)
   : filePathNorm;
+
+// ── ★CONC-1：多会话写者互斥（软锁；与阶段门禁正交，fail-open）──────────
+await concLockCheck(relativePath, toolName);
 
 // ── 第1关：ALWAYS_ALLOW（★ FIX-9：段前缀匹配，不再子串 includes）────
 if (isAlwaysAllow(relativePath)) {

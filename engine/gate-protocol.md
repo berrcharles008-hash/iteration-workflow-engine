@@ -560,6 +560,28 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
 
 ---
 
+## 七、多会话写者互斥（CONC-1 · 2026-09-20，**fail-open**）
+
+> 触发场景：同一工作区同时打开多个 IDE 会话（2026-09-20 实证：5 秒内观测到两个不同 `session_id` 调用同一 hook）。
+> 缺口：`state-protocol.md` §九 只保护 `state.yaml`；FIX-17e 只防 headless↔IDE；**IDE ⇄ IDE 之间原为零互斥**。
+> 危害：`write_to_file` 全量重写会**静默吞掉对方改动**（2026-08-19 有真实案底：并行编辑吞掉更新注记并需人工补回）。
+
+| 维度 | 规则 |
+|------|------|
+| 存储 | `$RUNTIME_DIR/write-claims.jsonl`（append-only；读取仅取末 800 行） |
+| 键 | `(session_id, 项目相对路径)`；`session_id` 取 stdin `session_id` ＞ `CODEBUDDY_SESSION_ID` ＞ `transcript_path` 的 convId 段（三源兜底） |
+| 范围 | 写类工具（`Write` / `Edit`）**全项目**；白名单排除：`runtime/`、`{IDE}/memory/`、`.codebuddy/temp/`、`node_modules|dist|obj|bin|.vs`、`*.log|tmp|bak` |
+| 拦 | 他会话在 **TTL 10min** 内写过同一文件 ⇒ 阻止（exit 2），提示先 `read_file` 重读 |
+| 放行 | 同会话 · 声明过期 · **同 `(sid,路径)` 在 GRACE 5min 内重试**（「拦一次」语义 —— 防对方会话崩溃后死锁） |
+| 关闭 | `CONC_LOCK=0|off` 或标记文件 `hooks/.conc-off` |
+| ★ 边界 | 与阶段门禁**正交**、**fail-open**（本关自身异常绝不阻断写入）；**不改** `state-protocol.md` §九 |
+
+实现：`hooks/gate-check.mjs` → `concLockCheck()`｜回归：`scripts/run-gate-tests.mjs` 的 `CONC-1~5`。
+
+---
+
+★ **CONC-1（2026-09-20，用户批准）**：新增 §七 多会话写者互斥（软锁 · fail-open）；回归 20/20（含 CONC-1~5）。
+
 **最后更新**：2026-09-20（**FIX-23：01-03 阶段放行 `docs/knowledge-base/`** ——
 `phase-01` 前置步骤/step-1.6 要求"知识库过时即刷新"，而该目录原不在 `EXEMPT_PATHS` ⇒ Agent 用 Write/Edit
 维护知识库时与门禁互斥（实证：KB 自 09-16 停更）。知识库为纯生成物非业务代码 ⇒ `EXEMPT_PATHS` 增列放行，
