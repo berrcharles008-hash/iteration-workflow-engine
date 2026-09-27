@@ -232,6 +232,66 @@ const TESTS = [
     tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/conc-test.js',
     expectExit: 0, expectBlock: false
   },
+
+  // ★ MAINT-3 P-5（2026-09-22）：MEMORY.md 写入侧配额守卫（与迭代阶段无关）
+  {
+    id: 'P5-A', name: 'MEMORY.md 写后估算 8200 → 阻止（超配额）',
+    phase: '', active: false,
+    tool: 'write_to_file', file: '.codebuddy/memory/MEMORY.md',
+    toolInput: { content: 'x'.repeat(8200) },
+    expectExit: 2, expectBlock: true
+  },
+  {
+    id: 'P5-B', name: 'MEMORY.md 写后估算 7300 → 放行（仅告警）',
+    phase: '', active: false,
+    tool: 'write_to_file', file: '.codebuddy/memory/MEMORY.md',
+    toolInput: { content: 'x'.repeat(7300) },
+    expectExit: 0, expectBlock: false
+  },
+  {
+    id: 'P5-C', name: 'MEMORY.md 写后估算 1000 → 放行（常规）',
+    phase: '', active: false,
+    tool: 'write_to_file', file: '.codebuddy/memory/MEMORY.md',
+    toolInput: { content: 'x'.repeat(1000) },
+    expectExit: 0, expectBlock: false
+  },
+  {
+    id: 'P5-D', name: '逃生口优先：超配额 + 开闸 → 放行',
+    phase: '', active: false, gateBypass: true,
+    tool: 'write_to_file', file: '.codebuddy/memory/MEMORY.md',
+    toolInput: { content: 'x'.repeat(8200) },
+    expectExit: 0, expectBlock: false
+  },
+
+  // ★ GATE-5（2026-09-23 用户批准）：外置「项目记忆」目录（~/{IDE}/projects/<slug>/memory/**）
+  //   与迭代阶段无关（FIX-11 同层）；放行面严格限定 memory/ 子目录。
+  {
+    id: 'G5-A', name: '01阶段写外置项目记忆 → 放行（GATE-5 修复点）',
+    phase: '01', active: true,
+    tool: 'write_to_file', file: 'C:/Users/tester/.codebuddy/projects/proj-slug/memory/note.md',
+    toolInput: { content: 'x' },
+    expectExit: 0, expectBlock: false
+  },
+  {
+    id: 'G5-B', name: '01阶段写项目目录非 memory 子目录 → 仍阻止（放行面严格）',
+    phase: '01', active: true,
+    tool: 'write_to_file', file: 'C:/Users/tester/.codebuddy/projects/proj-slug/sessions/transcript.jsonl',
+    toolInput: { content: 'x' },
+    expectExit: 2, expectBlock: true
+  },
+  {
+    id: 'G5-C', name: '无活跃迭代写外置项目记忆 → 放行（元层，与迭代状态无关）',
+    phase: '', active: false,
+    tool: 'write_to_file', file: 'C:/Users/tester/.codebuddy/projects/proj-slug/memory/MEMORY.md',
+    toolInput: { content: 'x' },
+    expectExit: 0, expectBlock: false
+  },
+  {
+    id: 'G5-D', name: '01阶段删外置项目记忆 → 放行（删除豁免同口径）',
+    phase: '01', active: true,
+    tool: 'delete_file', file: 'C:/Users/tester/.codebuddy/projects/proj-slug/memory/old-note.md',
+    expectExit: 0, expectBlock: false
+  },
 ];
 
 // ── 工具函数 ──────────────────────────────────────────
@@ -292,7 +352,11 @@ function runHook(testCase) {
     : JSON.stringify(Object.assign(
         {
           tool_name: testCase.tool || 'write_to_file',
-          tool_input: { filePath: join(PROJECT_DIR, testCase.file).replace(/\\/g, '/') }
+          tool_input: Object.assign(
+            { filePath: join(PROJECT_DIR, testCase.file).replace(/\\/g, '/') },
+            // ★ MAINT-3 P-5（2026-09-22）：配额守卫用例需注入 content / old_str / new_str
+            testCase.toolInput || {}
+          )
         },
         // ★CONC-1：按用例注入会话标识（2026-09-20 探针实证 stdin 含 session_id）
         testCase.sid ? { session_id: testCase.sid } : {}

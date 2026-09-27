@@ -92,7 +92,8 @@ node scripts/run-gate-tests.mjs
 | 1 | `python .codebuddy/skills/iteration-workflow/scripts/audit-engine.py` | **ERR 0**（WARN 需登记 `runtime/TOOLING-TODO.md`） |
 | 2 | `python .codebuddy/skills/iteration-workflow/scripts/validate-template-coverage.py --skill-dir .codebuddy/skills/iteration-workflow` | `ERR:0` |
 | 3 | `node .codebuddy/skills/iteration-workflow/scripts/run-gate-tests.mjs` | BASE 0 失败 / FIX 全过 |
-| 4 | 回流水位 | `python .codebuddy/skills/iteration-workflow/scripts/audit-engine.py --src <源仓库>`；不一致 ⇒ **登记 `AUDIT-n`**（回流无自动化机制，须人工） |
+| 4 | `python .codebuddy/skills/iteration-workflow/scripts/memory_quota.py --index-check` | **新增（MAINT-3 P-4 · 2026-09-22）**：`RESULT: PASS`（errs=0）—— 外置分片索引一致性（§一登记路径 / 分片无孤儿 / 单分片 ≤20KB / `MEMORY.md` 指针可达） |
+| 5 | 回流水位 | `python .codebuddy/skills/iteration-workflow/scripts/audit-engine.py --src <源仓库>`；不一致 ⇒ **登记 `AUDIT-n`**（回流无自动化机制，须人工） |
 
 > **收口结果写入** `runtime/TOOLING-TODO.md` 对应工单的「实施记录」；无对应工单 ⇒ **新建 `AUDIT-n`**。
 
@@ -112,3 +113,5 @@ node scripts/run-gate-tests.mjs
 |------|------|
 | 2026-07-23 | 初版：核心文件快照 + 变更影响声明 + 回滚路径（解决新 clone 项目无版本历史时的回滚困境） |
 | 2026-09-20 | ★ **与「先批后改」合并为本协议**：四件套升为 §二**硬性前置**；核心文件清单改为"以 `audit-engine.py` 的 `CORE_FILES` 为准"（旧 4 文件手工清单实测裸奔 59 天、从未触发）；新增 **§四 收口验证**（3 脚本 + 回流水位）；新增 **§五 逃生口纪律**（含 01-03 免开闸口径） |
+| 2026-09-20 | §四 命令行的 **CWD 前提** 补注 + 三行改为项目根可执行的全路径：原 `--skill-dir .` 从项目根执行必崩（实测 `FileNotFoundError: .\engine\startup-protocol.md`，即按文档照抄 → 收口第 2 项**永远失败**） |
+| 2026-09-23 | ★ **首次按「四件套 + 快照 + 收口」全流程执行元层改造**（工单 `runtime/TOOLING-TODO.md` `DEFECT-1`，**12 文件** = 引擎 8 + 模板 3 + `SKILL.md`）：用户**手动开闸**（PHASE=05）→ 3 个 `CORE_FILES` 快照 → 落盘 → 收口（`audit-engine.py` **ERR 0** · `validate-template-coverage.py` **ERR:0** · `run-gate-tests.mjs` **28/28** · `memory_quota.py --index-check` **PASS**）→ 删标记复核。★ 实测补正：`skills/**` 在 **05-07 阶段同样需开闸**（原 `SESSION-HANDOFF.md` 表述遗漏）⇒ 已同步该页 |

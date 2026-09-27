@@ -94,8 +94,16 @@
 | step-5-6-complexity-actual | 复杂度实际值回填（Step 5.6，仅记录不改等级） | ✅ | 始终（🟢 可简写） |
 | step-6-spec | Spec 合规验证 | ✅ | 🔴复杂级 + 有 ADDED 文件 |
 | step-7-code-review | 代码审查 | ✅ | 始终 |
+| step-fix-1-register | 缺陷登记（写入 `defects[]` + 与 05 报告对账） | — | 存在 `open` 缺陷且 `design_changed=false` |
+| step-fix-2-code | 缺陷修复编码（含 csproj 注册） | — | step-fix-1-register 完成 |
+| step-fix-3-build | 缺陷修复构建验证（涉后端码必须 `/t:Rebuild`；★ 命令禁 `>` / `2>&1` 重定向） | — | step-fix-2-code 完成 |
+| step-fix-4-regress | 失败用例回归（含动作链用例） | — | step-fix-3-build 完成 |
+| step-fix-5-reclose | 缺陷关闭（置 `fixed`）并回 05 | — | step-fix-4-regress 通过 |
 
 > 进入阶段时，Agent 根据实际触发条件选择性写入 phase_steps（如无 SQL 变更则 step-0-* 设为 `not_applicable`）。
+>
+> ★ **缺陷修复窗口（2026-09-23 DEFECT-1 新增）**：`step-fix-1-register` ~ `step-fix-5-reclose` 五步**挂 04 阶段**，仅当「存在 `open` 缺陷且 `design_changed=false`」时写入 `phase_steps`（`mandatory=false`）。收口后回 05，**既有用例结果保留**（见 `state-protocol.md` §5.3）。
+> ★ **禁止**再自造游离步骤块 —— 历史 `phase_steps_04_d1fix`、`step-d18-*` 均未被本 SSOT 收录，导致审计与一致性检查看不见修复过程。
 
 ---
 

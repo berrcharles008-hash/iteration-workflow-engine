@@ -21,12 +21,19 @@
 | step-5-6-complexity-actual | 复杂度实际值回填（Step 5.6，仅记录不改等级） | ✅ | 始终（🟢 可简写） |
 | step-6-spec | Spec 合规验证 | ✅ | 🔴复杂级 + 有 ADDED 文件 |
 | step-7-code-review | 代码审查 | ✅ | 始终 |
+| step-fix-1-register | 缺陷登记（写入 `defects[]` + 与 05 报告对账） | — | 存在 `open` 缺陷且 `design_changed=false` |
+| step-fix-2-code | 缺陷修复编码（含 csproj 注册） | — | step-fix-1-register 完成 |
+| step-fix-3-build | 缺陷修复构建验证（涉后端码必须 `/t:Rebuild`） | — | step-fix-2-code 完成 |
+| step-fix-4-regress | 失败用例回归（含动作链用例） | — | step-fix-3-build 完成 |
+| step-fix-5-reclose | 缺陷关闭（置 `fixed`）并回 05 | — | step-fix-4-regress 通过 |
 
 > **step-7-code-review 产出**：`04-代码审查报告.md`（可并入 `04-开发任务清单.md` 附录；标准命名见 `workflow-engine.md` §标准文件命名）。
 
 > ⚠️ **步骤序号 ≠ 执行顺序**：step-1-5x 排在 step-1-5 之后仅为编号有序。实际执行时互审与自审**同时启动**（见 Step 1.5x 并行约定）。
 >
 > 进入阶段时，Agent 根据实际触发条件选择性写入 phase_steps（如无 SQL 变更则 step-0-* 设为 `not_applicable`）。
+>
+> ★ **缺陷修复窗口（2026-09-23 DEFECT-1 新增）**：`step-fix-*` 五步**挂本阶段**（04 是唯一免开闸的合法落盘窗口），仅在「存在 `open` 缺陷且 `design_changed=false`」时写入；收口后回 05，既有用例结果保留（`state-protocol.md` §5.3）。**禁止**自造游离步骤块。
 
 ### Step 0：数据库脚本生成与执行（涉 DML/DDL 变更时强制）
 
@@ -143,12 +150,34 @@ Agent 必须在 step-1-5-review 完成后，输出以下信息并等待用户确
 
 ### Step 2：创建 Team 并派发任务
 
+**Step 2.0（★ 2026-09-24 新增，派发前执行）：挂载崩溃监控采样器**
+
+> 崩溃**根因仍未定性**——平台抓的 cpu profile 存在 `%TEMP%\codebuddy-starvat*`，
+> 会被系统清理，事后补查不到。只有编码期间挂着采样器，才可能拿到成因证据。
+
+```powershell
+Start-Process powershell -WindowStyle Hidden -ArgumentList @(
+  '-NoProfile','-ExecutionPolicy','Bypass','-File','tools\eh-monitor.ps1','-DurationMin','180')
+```
+
+- 产物（`.codebuddy/temp/eh-monitor/`）：`samples-<ts>.csv` 进程 CPU/内存曲线、
+  `events-<ts>.log` 结构化事件（HostStarvation / EH 冷启动 / hook 超时 / RSS）、
+  `profiles/` 自动抢救的 cpu profile
+- 提前停止：`New-Item .codebuddy/temp/eh-monitor/.stop -Force`（脚本启动时会清残留标记）
+- **已实测**（2026-09-24 16:07）：该启动命令**不被门禁拦截**；
+  采样显示常驻 40 个 CodeBuddy 进程、合计 **8.5GB** —— 系统级内存压力背景
+- 崩溃发生后：把 `profiles/` 与 `events-*.log` 交给分析方，并回写 `project/lessons-learned.md`
+
 > 派发前读取 `project/agent-prompt-examples.md`，按模板组装 Agent prompt。
 > 并行决策算法见 `engine/team-agent-strategy.md`。
-> ★ Team Agent 仅生成代码不写入文件，写入由主 Agent 统一执行。
+> ★ Team Agent 仅生成**业务代码**不写入业务文件，写入由主 Agent 统一执行。
+> ★ **崩溃防护强制**（宿主终止会导致成员与回传产出一并丢失）：
+>   同批并行 ≤3、单成员上下文 ≤15 万 token、每个成员 prompt 必含【产出落盘】段
+>   （`engine/team-agent-strategy.md` §二维度五 / §七）；宿主终止后走 §八 崩溃恢复协议。
 
-1. 根据任务依赖图，按分组批量 task 派发 Team Agent
-2. 每个 Team Agent 完成代码生成后，输出代码内容（不调用 write_file/replace_in_file）
+1. 根据任务依赖图，按分组批量 task 派发 Team Agent（同批 ≤3）
+2. 每个 Team Agent 每完成一个文件，**先增量落盘**到 `.codebuddy/temp/team-out/<成员名>.md`，
+   再输出代码内容（不调用 write_file/replace_in_file 写业务文件）
 3. 主 Agent 收集所有 Agent 输出，生成统一变更预览
 
 ### Step 2.5：批量变更预览与确认（★ 强制）
@@ -168,6 +197,17 @@ Agent 必须在 step-1-5-review 完成后，输出以下信息并等待用户确
 ```
 
 **交付标准**：用户明确确认后，主 Agent 批量写入所有文件（此后的完整性校验/编译验证等继续按现有流程执行）。
+
+> ★ **主 Agent 批量写入必须原子写**（2026-09-24 新增）
+>
+> **起因**：宿主可能在写入过程中异常终止，半截文件会被后续编译/校验当作"已完成"而漏改，
+> 且崩溃恢复时无法判定完整性。
+>
+> **写法**（逐个文件）：`写入 <目标>.tmp` → `Move-Item <目标>.tmp <目标> -Force`，
+> 全部完成后核对无 `.tmp` 残留。
+>
+> **实测**（2026-09-24）：`.codebuddy/temp/**` 与业务目录（`tools/`）下的
+> `Move-Item` / `Copy-Item` / `Remove-Item *.tmp|*.bak` **均未被门禁拦截**，可直接用。
 
 ### Step 3：Agent 完成后更新清单
 
@@ -257,4 +297,40 @@ complexity_actual_note: "04 实际新增 4 个文件、1 个接口，与 03 复�
 
 **04 阶段唯一动作**：在任务清单收尾时确认 `ADDED`/`DELETED` 项已如实登记（供 06 刷新时对照），**不执行** `gen-knowledge-base.py`。
 
+### ★ Step 5.7：崩溃监控数据回收（2026-09-24 新增；仅当 Step 2.0 挂过采样器时执行）
+
+> **为何必做**：宿主崩溃**根因未定性**，平台抓取的 cpu profile 存于 `%TEMP%\codebuddy-starvat*`
+> 且会被系统清理 —— 本轮采样数据是唯一的成因证据来源，编码结束不导出即**证据灭失**。
+
+| 动作 | 命令 / 位置 |
+|------|------------|
+| 停止采样 | `New-Item .codebuddy/temp/eh-monitor/.stop -Force`（脚本到时亦自动退出） |
+| 取回事件日志 | `.codebuddy/temp/eh-monitor/events-*.log`（HostStarvation / EH 冷启动 / hook 超时 / RSS） |
+| 取回资源曲线 | `.codebuddy/temp/eh-monitor/samples-*.csv` |
+| 取回 cpu profile | `.codebuddy/temp/eh-monitor/profiles/`（有则交分析方） |
+| 记录重派开销 | 本轮曾发生宿主终止时：记录「重派耗时 vs 首次耗时」实测值 |
+
+★ 本轮若发生宿主终止：把 `events-*.log` 关键片段 + 重派开销**实测值**回写
+`project/lessons-learned.md`，替换其中的估算口径（避免收益长期停留在估算）。
+
 **交付标准**：所有任务 ✅ 完成，无 🔴 阻塞级审查问题，用户确认"开发完成"；**清单状态列已回填 + 版式自检 ERROR 0**（`python scripts/doc_lint.py <清单>`）
+
+---
+
+### ★ Step F：缺陷修复窗口（2026-09-23 DEFECT-1 新增；按需触发）
+
+> **触发**：05 发现缺陷，且 `defects[]` 该条 `design_changed=false`（L1 实现缺陷 —— 03 技术方案仍成立）。
+> **为何挂 04**：04 是唯一**免开闸**的合法落盘窗口（`gate-protocol.md` §一：`current_phase == "04"` ⇒ 写入全放行）；
+> 05 阶段 `STAGE_EXEMPT_PATHS['05']` 仅放行 `docs/iterations/`，源码/工程文件写入会被拦。**选项甲已定：不新增放行面。**
+
+**五步（SSOT = `phase-steps.md`）**：
+
+| 步骤 | 动作 | 关键要求 |
+|------|------|---------|
+| step-fix-1-register | 缺陷登记 | 写入 `defects[]`（`id` / `severity` / `root_cause_level: "L1"` / `design_changed: false`）；★ 与 05 报告「缺陷记录」节按 id 对账 |
+| step-fix-2-code | 修复编码 | 含 `.csproj` 的 Compile Include 注册；改动文件须落在 03 方案 / 04 清单**已列范围**内 |
+| step-fix-3-build | 构建验证 | 涉后端码必须 `/t:Rebuild`（增量 Build 抓不到 CS1591/CS1573）；命令**禁 `>` / `2>&1` 重定向**（会命中危险段回落门禁） |
+| step-fix-4-regress | 回归 | 失败用例 + 其动作链用例；★ 既有用例结果**不回改**，新增用例**续接编号** |
+| step-fix-5-reclose | 缺陷关闭 | `defects[].status="fixed"` + `fixed_at` + `verified_by`；回 05 —— 三-C 会拦「仍有 `open` 缺陷时推进 06」 |
+
+**禁止**：① 自造游离步骤块（历史 `phase_steps_04_d1fix`、`step-d18-*` 未被 SSOT 收录 ⇒ 审计看不见）；② 在 05 就地改码（除非用户手动开闸，且须在 `defects[].gate_window` 留痕）；③ L2 / L3 缺陷走本窗口（必须按判据回退 03 / 01）。

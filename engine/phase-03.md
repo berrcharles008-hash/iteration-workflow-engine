@@ -23,6 +23,8 @@
 | step-1.5 | **验证确认**：读取最终改动点→确认方案 | `read_file` 最终修改目标文件 | — | ~5K |
 | step-1.6 | **知识库缓存**：L1 缺失/过时自动刷新（★多项目：遍历 `ALL_FRONTEND_ROOTS` + `ALL_BACKEND_ROOTS`，在L1模块表中标注归属项目） | 执行 `python scripts/gen-knowledge-base.py --level L1 --force` 刷新 `{{KB_DIR}}/L1-overview.md` | 跳过 | ~3K |
 
+> ★ **条件下沉注记（2026-09-25 SLIM-1 C-2）**：触发条件 = **step-1.2 完成后的候选清单去重文件数 >8，或触发多项目遍历**（默认仍走漏斗本体，其设计初衷即省 token）；触发时 step-1.3~1.4 交 code-explorer 子代理执行（探索参数 max_turns ≤2）。回报 = 锚点表（仅复用 `cross-review-protocol.md` §三-A 的**表格格式**，方向相反：锚点由子 Agent 产出；其派发核验规则不适用），第 4 列内容为「职责/签名 1 行摘要」（防只回位置引发二次探索）。step-1.5 验证仍由主 Agent 亲自读最终改动点。
+
 **策略模式回退规则**：
 ```
 Step 1.1: {{KB_DIR}}/L1-overview.md 存在？→ 读 L1 : 读 specs 4 文件

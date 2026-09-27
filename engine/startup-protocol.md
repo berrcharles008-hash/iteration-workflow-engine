@@ -27,110 +27,24 @@
 ## Step A.5：本地配置文件自检
 
 > 解决首次 clone 后 `project/lessons-learned.md` 和 `project/review-models.json` 缺失的问题。
-> 通过引擎自检 → 提示用户 → 从模板自动创建，避免开发者翻阅文档才知道要建什么。
->
-> P-045：冷启动门禁微核存在于 `MEMORY.md`（项目文件），Skill 安装到新项目时静默缺失。
-> 本步增加第三项自检，覆盖 CodeBuddy IDE 环境下的微核注入。
+> P-045：冷启动门禁微核存在于 `MEMORY.md`（项目文件），Skill 安装到新项目时静默缺失；本步第三项自检覆盖 CodeBuddy IDE 环境下的微核注入。
 
-自检在 Step A 完成之后、Step B 之前执行。
+自检在 Step A 完成之后、Step B 之前执行。**自检目标（3 项）**：
+1. `project/lessons-learned.md` —— 项目级模式库
+2. `project/review-models.json` —— 外部审查模型 API 配置
+3. `.codebuddy/memory/MEMORY.md` [CodeBuddy IDE 专属] —— 冷启动门禁微核；★ 环境判断以 `.codebuddy/memory/` 目录存在性为准（非 CodeBuddy IDE → 静默跳过，Hook 层已提供硬拦截）；文件已存在但微核版本过旧 → 提示更新
 
-### 检查逻辑
-
-```
-目标文件列表：
-  1. {PROJECT_ROOT}/.claude/skills/iteration-workflow/project/lessons-learned.md
-  2. {PROJECT_ROOT}/.claude/skills/iteration-workflow/project/review-models.json
-  3. {PROJECT_ROOT}/.codebuddy/memory/MEMORY.md ← [仅 CodeBuddy IDE]
-
-遍历目标文件：
-  ├── 文件存在 → ✅ 跳过，继续下一个
-  └── 文件不存在 → 加入"待创建"列表
-
-第 3 项（MEMORY.md）特殊处理：
-  └── 先判断环境：.codebuddy/memory/ 目录是否存在？
-      ├── 否 → 非 CodeBuddy IDE（Claude Code CLI 等）
-      │         → 静默跳过（Hook 层已提供硬拦截）
-      └── 是 → CodeBuddy IDE → 执行正常检测
-                ├── 文件存在 → 检查是否含微核段（版本标记）
-                │   ├── 已含且版本匹配 → ✅ 静默通过
-                │   └── 不含或版本过旧 → 加入"待注入"列表
-                └── 文件不存在 → 加入"待创建并注入"列表
-
-待创建列表为空？
-  ├── 是 → 静默通过，继续 Step B
-  └── 否 → 输出提示框，询问用户：
-```
-
-### 提示框模板
-
-```
-╔══════════════════════════════════════════════════════════════╗
-║  检测到以下本地文件尚未创建：                                ║
-║                                                              ║
-║  ① project/lessons-learned.md                               ║
-║     ── 项目级模式库，记录事故复盘经验沉淀                    ║
-║  ② project/review-models.json                               ║
-║     ── 外部审查模型 API 配置                                 ║
-║  ③ .codebuddy/memory/MEMORY.md [CodeBuddy IDE 专属]         ║
-║     ── 冷启动门禁微核，保护无 Hook 环境下的代码修改          ║
-║                                                              ║
-║  是否现在创建默认模板？[Y/n]                                 ║
-║  （创建后请根据项目实际调整内容，文件不纳入 Git 跟踪）       ║
-║  跳过不阻塞流程，后续可随时手动创建                          ║
-╚══════════════════════════════════════════════════════════════╝
-```
-
-**微核过期提示**（当 MEMORY.md 已存在但微核版本过旧时）：
-
-```
-╔══════════════════════════════════════════════════════════════╗
-║  ⚠️  冷启动门禁微核版本过旧                                  ║
-║                                                              ║
-║  当前版本: {old_version}  模板版本: {new_version}            ║
-║  门禁规则可能已更新，建议同步微核段。                        ║
-║                                                              ║
-║  是否更新微核到最新版本？[Y/n]                               ║
-║  （跳过不阻塞流程，但可能缺少最新的门禁保护）                ║
-╚══════════════════════════════════════════════════════════════╝
-```
-
-### 用户响应处理
-
-**用户确认（Y）**：
-1. 检查 `engine/templates/project-lessons-learned.example.md` 是否存在
-   - 存在 → 复制到 `project/lessons-learned.md`
-   - 不存在 → 提示跳过（引擎模板缺失，需手动创建）
-2. 检查 `engine/templates/review-models.example.json` 是否存在
-   - 存在 → 复制到 `project/review-models.json`
-   - 不存在 → 提示跳过（引擎模板缺失，需手动创建）
-3. **[P-045 新增]** 检查 `engine/templates/cold-start-gate-nucleus.md` 是否存在
-   - 仅当环境为 CodeBuddy IDE 时执行
-   - MEMORY.md 不存在 → 创建 MEMORY.md 并写入微核模板内容
-   - MEMORY.md 存在但无微核 → 追加微核段到文件顶部（保留原有内容）
-   - 微核版本过旧 → 替换旧版微核段（保留其他内容不变）
-   - 模板不存在 → 提示"引擎模板缺失，请运行 setup-gate.py 手动注入"
-4. 输出结果摘要：
-   ```
-   ✅ project/lessons-learned.md 已创建
-   ✅ project/review-models.json 已创建
-   ✅ .codebuddy/memory/MEMORY.md 冷启动微核已注入
-   ⚠ 请根据项目实际编辑内容后使用
-   ```
-5. 继续 Step B
-
-**用户拒绝（N）**：
-- 跳过自检，继续 Step B
-- **下次 Skill 加载仍会检测缺失文件**（不设永久跳过标记）
+**触发时机**：检测到缺失文件**或微核版本过旧**时 → 按 `engine/startup-protocol-step-a5.md`（检查逻辑 / 提示框模板×2 / 用户响应处理）执行。
 
 ### 与 Step A 的关系
 
 | 步骤 | 用途 | 触发条件 |
 |:----:|------|---------|
 | Step A | 加载项目配置 | 每次 Skill 加载 |
-| **Step A.5** | **创建缺失的本地文件** | **文件不存在时（初次使用）** |
+| **Step A.5** | **创建缺失的本地文件** | **文件不存在或微核过旧时（初次使用）** |
 | Step B | 恢复迭代状态 | 每次 Skill 加载 |
 
-> Step A.5 是**自检向导**，不是门禁。用户拒绝后不阻塞流程，后续仍可手动创建。
+> Step A.5 是**自检向导**，不是门禁。用户拒绝后不阻塞流程，下次加载仍会检测，后续仍可手动创建。
 > 第 3 项（冷启动微核）也可通过 `python scripts/setup-gate.py` 独立执行。
 
 ---
@@ -356,6 +270,7 @@ Agent 根据复杂度选择了 Lite 模板（文件名从映射表获取，如 "
 | `project/build-verify.yaml` | 构建验证命令 | 04 阶段 Step 4.6 或 05 阶段 Step 0 |
 | `project/agent-prompt-examples.md` | Agent prompt 示例 | 04 阶段 Team Agent 派发前 |
 | `engine/startup-protocol-step-e.md` | 每日工作日志写入 | 对话结束前 |
+| `engine/startup-protocol-step-a5.md` | Step A.5 本地文件自检详情 | 检测到缺失文件或微核版本过旧时 |
 | `engine/gate-protocol.md` | 修改门禁协议 + 影响等级 + 回滚方案模板 | SKILL.md 门禁摘要（已摘要，按需深入） |
 | `engine/naming-conflict-check.md` | 命名冲突预检规则 | 03 方案输出前（自主审查 L1） |
 | `engine/delta-marking.md` | 代码改动 Delta 标记体系 | 03 阶段（标注 ADDED/MODIFIED） |
@@ -364,3 +279,22 @@ Agent 根据复杂度选择了 Lite 模板（文件名从映射表获取，如 "
 | `project/coding-conventions.md` | 项目编码规范（L5 层级） | 04 阶段编码 + 代码审查时 |
 | `project/code-review-rules.md` | 代码审查规则矩阵 | 04 阶段 Step 5（代码审查时） |
 | 阶段文档模板（`engine/templates/` 或 `project/templates/`） | 模板文件，优先级见 §模板解析优先级 | 各阶段产出文档时 |
+
+### ★ 引擎大文件定点读映射
+
+> 本节 = SKILL.md 上下文纪律 #4 的节级细化；『读多少』总纲仍以 `engine/context-discipline.md` 为准。
+
+1. **以下 6 文件（穷举：state-protocol 920 / gate-protocol 610 / cross-review-protocol 474 / phase-03 343 / phase-04 336 / complexity-scoring 330）非冷启动场景禁全文整读**；SKILL.md 与本文件（startup-protocol）因每次会话冷启动必读**不适用**本规则；本规则对象=引擎文件，与 SKILL.md 纪律 #5「大产物」同名不同义不串用。
+2. 按下表场景只读对应节（**锚 = 目标文件内真实标题字符串逐字 grep**，如「一、修改门禁协议」「三-A. 锚点包」，不用 §N 转写、不用行号；执行时**显式 UTF-8 读取**防 GBK 误判缺失）。
+3. 未列场景：先 grep 该文件标题定位相关大节定点读，确需全文才走例外并注明理由。
+
+**场景映射表（6 文件全覆盖）**：
+
+- **gate-protocol**：写入类工具调用前→「一、修改门禁协议」+「自修改影响声明」（本场景即 context-discipline §五-1「决策树读全」的边界：**读全 = 该整节 ~198 行，非 610 行全文**，为禁整读规则的显式豁免）；04 阶段删除类→「04 阶段的删除类操作校验」；阶段推进/步骤结清→「三、步骤门禁协议」（三-A/B/C）；迭代新建/废弃/暂停/删除→「二、迭代门禁协议」；门禁豁免→「四、门禁豁免」；逃生口→「一、修改门禁协议」内相关小节；🟡🔴 迭代→「五、影响等级分类」+「六、回滚方案模板」；改引擎自身→「五、影响等级分类」+「自修改影响声明」；多会话互斥→「七、多会话写者互斥」
+- **state-protocol**：写 state 字段→「三、文件格式」对应字段段+「3.3 Schema 强制校验规则」；phase_steps 操作→「八、phase_steps 字段协议」（含 8.3 门禁检查逻辑）；恢复迭代→「四、读取规则」；阶段完成/推进→「二、写入时机」+「3.1 阶段完成历史」；ACTIVE 读写→「六、ACTIVE 指针协议」
+- **cross-review-protocol**：派发 02/03/04 审查→「二、触发时机」+「三-A. 锚点包」+「四、各阶段审查指令模板」对应小节+「五、主 Agent 合并规则」；外部模型路由→「八、外部审查模型路由」对应 8.x
+- **phase-03**：进入阶段→全文读一次；执行漏斗时→当前子步骤段（step-1.x）
+- **phase-04**：进入阶段→全文读一次；缺陷修复→step-fix-* 节
+- **complexity-scoring**：新迭代 Step C→「一、复杂度评估算法」（含 1.2 评分映射、1.3 复杂度升降级机制）
+
+> ★ 映射节锚机械核验：`python .codebuddy/skills/iteration-workflow/scripts/check-s1-anchors.py`（逐锚 UTF-8 grep，MISS=exit 1，WARN=跨文件引用不阻断；SLIM-5 ST-4 新增，本行为其 A1 引用豁免依据）。

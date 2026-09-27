@@ -14,6 +14,11 @@
 
 若构建环境不可达，按 `frontend.fallback` 降级处理。
 
+> ★ **执行方式注记（2026-09-25 SLIM-1 C-1）**：本步骤默认下沉 code-explorer 子代理执行 —— prompt 必附 `project/build-verify.yaml` 对应命令（含 msbuild 完整路径等环境事实）+ **禁改源码与文档文件**（依赖安装目录与构建产物 node_modules/dist/bin 等由命令自身写入除外）+ **dev server 启动不下沉（留主 Agent）**+ phase_steps 勾选、defects[] 登记、05 报告写入一律主 Agent + 构建环境不可达的 fallback 降级**决策**留主 Agent（子代理只回报现象）。
+> **回报格式**：exit code + 成功判据逐条 + **逐条覆盖每条失败用例**的错误摘要 ≤50 行；日志文件路径仅当命令自身落盘（如 msbuild `/fl`）或主 Agent 预建路径时提供，否则 stdout 摘要为唯一证据——不回灌全量日志。
+> **降级 fail-open（四态）**：子代理不可用 / 宿主异常 / 回报缺失或截断（视为不可信）/ 单路超时（墙钟上限 **10 分钟**）/ **命令需交互输入** ⇒ 主 Agent 直跑或重派；重跑前按 `team-agent-strategy.md` §八确认命令幂等，禁止假设已完成直接重派；执行方式在 05 报告注明。
+> **并发红线随附**：单批 ≤3 路、单路上下文 ≤15 万 token、探索类 max_turns ≤2（同 `team-agent-strategy.md` §二维度五/§七，引用不复制）。
+
 ### Step 0.5：合规检查（★ 强制）
 
 > 在 step-0-frontend-build（前端构建）之后、step-1-generate-cases（生成测试用例）之前执行。
@@ -67,13 +72,24 @@
 
 先探测环境（文件系统/后端 API/dev server），就绪则执行，不就绪则降级手动并记录原因。
 
+> ★ **执行方式注记（同 Step 0 SLIM-1 C-1 约束）**：自动用例执行默认下沉 code-explorer 子代理（prompt 同附 `build-verify.yaml` 命令与禁改约束 + 同一回报格式 + fail-open 四态）；★ **下沉派发前主 Agent 先验证 dev server/环境进程存活，不存活走既有降级**。
+
 ### Step 4：生成测试报告
 
 输出 `05-测试验证/05-测试验证报告.md`（模板：`phase-05-测试验证报告.md`，🟢简单用 `phase-05-测试报告-lite.md`，优先级见启动协议 §模板解析优先级）。
 
 > **版式纪律**：产出文档须遵循 `engine/doc-style-guide.md`（用例表 ≤6 列、结果证据用列表不用长单元格）；生成后自检 `python scripts/doc_lint.py <文件>`（ERROR 必修）。
 
-**交付标准**：所有自动用例 ✅ 通过或 ⚠️ 跳过（有解释），手动用例 ⏳ 待验证，用户确认"测试通过"；**文档版式自检 ERROR 0**（`python scripts/doc_lint.py <文档>`）
+**缺陷分诊与台账登记（★ 强制 · 2026-09-23 DEFECT-1 新增）**：
+
+> 每条「失败 / 待修复」用例都必须落到缺陷台账 —— 否则 06 推进会被三-C 拦（`gate-protocol.md` §三-C：存在 `open` 缺陷禁止推进）。
+
+1. 逐条登记 `state.yaml` 的 `defects[]`（`id: "D-1"`… / `severity` / `root_cause_level` / `design_changed` —— ★ 后者**须用户确认**）；
+2. 按根因档选通道（判据见 `workflow-engine.md` §缺陷根因判定判据）：**L1** → 回退 04 走 `step-fix-*` 修复窗口；**L2** → 回退 03（先改 03 再改码）；**L3** → 回退 01/02；
+3. 修复后回归：**既有用例结果不回改**，新增用例**续接编号**；
+4. 报告「五、缺陷记录」节与 `defects[]` 按 `D-xx` **双向对账**；未修者转「七、遗留问题」并置 `status: "deferred"` + `defer_reason`（用户裁决）。
+
+**交付标准**：所有自动用例 ✅ 通过或 ⚠️ 跳过（有解释），手动用例 ⏳ 待验证，用户确认"测试通过"；**文档版式自检 ERROR 0**（`python scripts/doc_lint.py <文档>`）；★ 缺陷台账与报告**对账一致**
 
 **动作链覆盖**（2026-09-18 新增；标准版 / 精简版报告**均必填**）：
 

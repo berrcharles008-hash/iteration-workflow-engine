@@ -1,5 +1,7 @@
-<!-- NUCLEUS-BEGIN v1.13 -->
-<!-- cold-start-gate-nucleus v1.13 · SSOT: engine/gate-protocol.md · 钩子失效时的 Prompt 层兜底
+<!-- NUCLEUS-BEGIN v1.14 -->
+<!-- cold-start-gate-nucleus v1.14 · SSOT: engine/gate-protocol.md · 钩子失效时的 Prompt 层兜底
+     v1.14（2026-09-23）：豁免补「外置项目记忆目录」`~/{IDE}/projects/<slug>/memory/`（GATE-5；
+       与 {IDE}/memory/ 同层同性质 —— 项目级记忆落在用户目录，原模式恒不命中 ⇒ 01/02 各误拦 1 次）。
      v1.13（2026-09-20）：01-03 补「可写 Skill 自身文件」（与 hooks 的 EXEMPT_PATHS 对齐；
        原摘要漏写导致 Agent 不必要地开闸 —— 09-20 曾致「逃生口未回收」事故）；补 FIX-23 知识库放行。
      v1.12（2026-09-18）：逃生口时效（ttlMinutes/expire）+ 放行可见；v1.11：07 放行写模式库（FIX-16）；
@@ -12,7 +14,7 @@
 **仅 04 全放行**（删除/移动类另需命中 `delete_allow`）；**01-03** 只许迭代目录 + `{{IDE_DIR}}/skills/iteration-workflow/`（Skill 自身）+ `docs/knowledge-base/`（FIX-23）+ `{{IDE_DIR}}/memory/`；
 **05/06/07** 只许本职文档（05/07 = `docs/iterations/`；06 = `docs/iterations/` · `docs/knowledge-base/` ·
 `requirements|feasibility` 的 `.md`；07 另加 `project/lessons-learned.md`）；其余一律拦（含所有 Bash 命令）。
-豁免：`runtime/` · `{{IDE_DIR}}/memory/`（工作记忆写入/维护与迭代状态无关）· 05/06/07 本职文档（上）。
+豁免：`runtime/` · `{{IDE_DIR}}/memory/` + 外置项目记忆 `~/{{IDE_DIR}}/projects/*/memory/`（工作记忆写入/维护，**与迭代状态无关**）· 05/06/07 本职文档（上）。
 逃生口：`GATE_BYPASS=1` 或 `{{IDE_DIR}}/hooks/.gate-bypass`（**用完即删** + `gate-audit.log` 留痕；
 标记内可写 `ttlMinutes=N` / `expire=ISO` 自动失效，空标记=永久）；**收尾必检：标记已删**。
 完整决策树与阻断话术见 `engine/gate-protocol.md`；hook 生效时为确定性硬拦（Write/Edit/Bash）。

@@ -1156,11 +1156,24 @@ def generate_l3(config, check_only=False, force=False):
         return False
 
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # ★ 2026-09-23：反向入口 —— 与 docs/iterations/INDEX.md 的「代码命名反查见 L3」构成双向指针。
+    #   本页管「业务术语 <-> 代码命名」；需求/评审编号（AC-/CV-/Tn-/D-n-n）的定位见编号反查索引。
+    #   路径按 kb_dir 推导（不写死字面量），与 INDEX.md 的实际落点保持一致。
+    try:
+        _idx_rel = os.path.relpath(
+            (kb_dir.parent / "iterations" / "INDEX.md").resolve(), l3_path.parent.resolve()
+        ).replace(os.sep, "/")
+    except Exception:                                    # noqa: BLE001
+        _idx_rel = "../iterations/INDEX.md"
+
     lines = [
         "# L3 术语映射表 -- 代码命名反查",
         "",
         "> 本文件由 `scripts/gen-knowledge-base.py --level L3` 自动生成（方案B：代码反查）。",
         "> 仅含已实现代码中的术语映射，Spec 中规划但未编码的概念需人工补充。",
+        f"> **编号反查入口**：「需求/评审编号（`AC-` / `CV-` / `Tn-` / `D-n-n`）→ 文件」见 "
+        f"[`{_idx_rel}`]({_idx_rel})（由 `tools/gen_doc_index.py` 生成，含定义候选与引用分布）。",
         "",
         "<!--",
         "auto-generated: true",
@@ -1503,8 +1516,9 @@ def main():
             safe_print("  ★ 文件指纹检出变更 ⇒ 即使 L1/L2/L3 报「最新」，也应执行全量 --force 重建")
     else:
         safe_print("[DONE] 生成完成。")
-        safe_print("  - 自动生成段可被 --force 覆盖刷新")
-        safe_print("  - 人工编辑段（auto-generated: false）不会被覆盖")
+        safe_print("  - auto-generated: true 的文件可被 --force 覆盖刷新")
+        safe_print("  - auto-generated: false 的文件永不覆盖（★ 文件级判定，非分节）")
+        safe_print("    ⇒ 该文件将整体失去自动刷新能力；分节保留人工内容当前不支持")
         safe_print("  - 建议人工补充 L2 业务语义段 + L3 未映射术语")
     safe_print("=" * 60)
     return 0

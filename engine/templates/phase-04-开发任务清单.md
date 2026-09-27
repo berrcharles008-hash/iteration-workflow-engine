@@ -56,6 +56,16 @@
 | 编号 | 类型 | 事项 | 状态 |
 |:--:|:--:|:--|:--:|
 
+### 1.5 阶段五：缺陷修复（DEFECT-FIX）· 仅当存在 `open` 缺陷且 `design_changed=false`
+
+| 编号 | 类型 | 文件 | 状态 |
+|:--:|:--:|:--|:--:|
+| DF-1 | MODIFIED | `{文件}` | ⬜ |
+
+> ★ 缺陷编号须与 `state.yaml` 的 `defects[]` 的 `D-xx` **一一对应** —— 本段是缺陷在任务清单中的**从属视图**，
+> 不改变「任务清单是唯一真相源」：缺陷**状态**的 SSOT 是 `state.yaml`，代码**改动范围**的 SSOT 是本清单。
+> 窗口五步 = `step-fix-1-register` ~ `step-fix-5-reclose`（见 `engine/phase-04.md` §Step F）。
+
 ## 2. 依赖关系
 
 ```mermaid

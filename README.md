@@ -61,6 +61,7 @@ sj-iteration-workflow-engine/
 │   ├── evolution-safety.md          ← 自修改安全协议（快照/回滚）
 │   ├── gate-decision-table.md       ← 门禁决策表
 │   ├── startup-protocol-step-e.md   ← 每日工作日志协议
+│   ├── startup-protocol-step-a5.md  ← Step A.5 自检详情（惰性）
 │   ├── engine-version.template.txt  ← 版本号模板
 │   └── templates/                   ← 阶段文档模板
 │       ├── phase-01-需求记录.md

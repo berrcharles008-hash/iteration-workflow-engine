@@ -78,17 +78,9 @@ Agent 准备修改文件
                     （见下节「04 阶段的删除类操作校验」；未登记即 BLOCK，fail-closed）
 ```
 
-> ★ **FIX-11（2026-09-16）**：上述决策树中**所有 BLOCK 分支均不适用于 `{IDE}/memory/` 下的工作记忆写入/维护** ——
-> 工作记忆属元层（≠ 业务迭代），与迭代状态无关，任何阶段（含 `ACTIVE=none` 与 00/05/06/07）一律放行；见 §四 门禁豁免。
-> 实现：`hooks/gate-check.mjs` 的 `isMetaWriteExempt()`（范围严格限定 `{IDE}/memory/`，不含 temp/skills/hooks）。
->
-> ★ **FIX-12②（2026-09-17）**：**05/06/07 阶段的「本职文档产出」**（测试报告 / 上线记录 + **spec 活文档** / 回顾报告）
-> 亦不再拦 —— 按 `STAGE_EXEMPT_PATHS` 阶段化放行，业务代码与命令**仍拦**；见 §四 门禁豁免。
-> 实现：`hooks/gate-check.mjs` 的 `matchStageExempt()`（★ 排除 Bash 伪路径 `[CMD] …`；放行写 `STAGE_ALLOW` 审计）。
->
-> ★ **FIX-16（2026-09-17）**：07 阶段另放行写 **`project/lessons-learned.md`（模式库）** ——
-> phase-07 step-3/step-5 为**强制本职动作**（AP-1/AP-4 明禁"仅报告声称"），原实现漏放行 ⇒ 每次回顾须人工开闸。
-> 实现：`STAGE_EXEMPT_PATHS['07'].files`（精确后缀匹配、自动跨 IDE 前缀；`project/` 其它文件仍拦）。
+> ★ **FIX-11（2026-09-16）**：上述决策树**不适用** `{IDE}/memory/` 工作记忆写入/维护（与迭代状态无关、任何阶段放行；范围严格限定 memory/，不含 temp/hooks/skills）—— 规则与实现见 §四 门禁豁免 FIX-11 条目（`hooks/gate-check.mjs` `isMetaWriteExempt()`）。
+> ★ **FIX-12②（2026-09-17）**：05/06/07 阶段的「本职文档产出」按 `STAGE_EXEMPT_PATHS` 阶段化放行（业务代码与命令仍拦）—— 规则与实现见 §四 门禁豁免 FIX-12② 条目（`matchStageExempt()`，排除 Bash 伪路径 `[CMD] …`；放行写 `STAGE_ALLOW` 审计）。
+> ★ **FIX-16（2026-09-17）**：07 阶段另放行写 `project/lessons-learned.md`（模式库；`project/` 其它文件仍拦）—— 规则与实现见 §四 门禁豁免 FIX-16 条目（`STAGE_EXEMPT_PATHS['07'].files`，**精确后缀匹配、自动跨 IDE 前缀**）。
 
 ### 04 阶段的删除类操作校验（★ FIX-9 · 2026-09-14 用户定）
 
@@ -141,6 +133,8 @@ Agent 准备修改文件
 故本机制保证的是「**删除必须先登记并经用户确认**」的流程约束 + 可追溯性，非不可绕过；
 最终防线仍为 SVN/git 提交前的人工审阅。
 
+**路径判定增强（GATE-6 · 2026-09-24，现行 hook 行为）**：`extractPathsFromCommand()` 对**同一条命令内**做 shell 变量赋值收集与字面替换（`collectShellAssignments` + `expandShellVars`，支持变量套变量，最多 3 轮）；解析不出的变量**原样保留 ⇒ 仍 fail-closed**（**不扩大放行面**，只消除「能解析却被误拦」的假阳性）；拦截话术追加「门禁只能字面判定，请改写字面路径」。沿革与回归详见 `runtime/gate-protocol-CHANGELOG.md` 及 `runtime/TOOLING-TODO.md` GATE-6 工单。
+
 ---
 
 ### 逃生口自建拦截（★ GAP-4/加固① · 2026-09-16）
@@ -157,6 +151,11 @@ Agent 准备修改文件
 **强度**：**绝对拦截** —— 不经阶段门禁（**04 阶段同样拒绝**，因 04 的「写入放行」≠ 可自建逃生口）；
 命中即写 `gate-audit.log` 的 `BLOCK [BYPASS-CREATE] …` 并输出阻断框。
 与 `DANGEROUS_CMD_PATTERNS` 的区别：后者仅「触发门禁」、放行与否交阶段判定；本判定**直接 block**。
+
+> ★ **FIX-25（2026-09-20 · 用户拍板「档 2」）· 危险段假阳性收窄**：`DANGEROUS_CMD_PATTERNS` 的「输出重定向」模式现行值为 `/[^=>-]>\s*\S/`（`->` 文本箭头 / `=>` JS 箭头 / `>=` 比较符**不是重定向运算符**，不再误拦；实证误拦例与回归对照详见 `runtime/TOOLING-TODO.md` FIX-25 条目）。
+> ★ **同日订正一处对外口径**：`execute_command` **不是阶段禁行** —— 只读命令（跑脚本 / `dir` / `Get-Content` / `git status` 等）在**任何阶段**都放行；只有「危险段」才回落阶段门禁。
+> **残留（登记待裁决）**：`A >= B` 形态仍被判危险（比较符非重定向；工单 = `runtime/TOOLING-TODO.md` FIX-25 条目）。
+> **回归基线**：当前全量 **97/97**（口径：93 = FIX-25 时点回归数，97 = GATE-6 用例并入后当前全量）。
 
 **不受影响**：① **删除**标记 —— 标记存在时上游逃生口检查已 `exit(0)` 放行，本判定不会被触达
 （标记不存在时删除会被拦，属无害）；② **只读查询**（如 `git check-ignore -v .gate-bypass`）—— 不匹配创建语义。
@@ -442,9 +441,17 @@ Agent 准备修改 current_phase（M → M+1）
 Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory: true` 的步骤。
 
 #### 门禁规则
-扫描 phase_steps 中 mandatory=true 的步骤：
-    ├── 全部为 completed 或 skipped → ALLOW
-    └── 存在 pending 的 mandatory 步骤 → 先结清再推进：
+
+★ **第一步（2026-09-23 DEFECT-1 新增）：缺陷台账检查**（`state.yaml` 的 `defects[]`）
+    ├── 无 `defects` 字段 或 无 `status == "open"` 条目 → 通过，继续第二步
+    └── 存在 `status == "open"` 的缺陷 → **BLOCK**，输出处置选项：
+         ① **走 04 修复窗口**（`step-fix-1-register` ~ `-5-reclose`）→ 修完回归、置 `fixed` 后方可推进
+         ② **用户显式 defer** → 置 `status: "deferred"` + 写 `defer_reason`（视为通过，但须在 05 报告「遗留问题」节列出）
+         ③ **判定为 L2 / L3** → 按阶段回退协议退回 03 / 01，**不得**走修复窗口
+        ⚠️ 禁止在存在 open 缺陷时推进 06（防「带未关闭缺陷进上线」）。
+
+★ **第二步：步骤结清检查**
+扫描与阻断算法见 [state-protocol.md](state-protocol.md) §8.3（gate_check 伪代码，含多 Story 聚合）：存在 pending 的 mandatory 步骤 → 阻断，先结清再推进：
          ① 该步骤确已实质完成（如用户已手动发布 = 真实环境验证）
             → 置 status: completed + completed_reason: "{理由}"
          ② 该步骤被有意跳过（如用户确认无需执行）
@@ -456,7 +463,7 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
 | 门禁 | 检查内容 | 触发时机 |
 |------|---------|---------|
 | **三-B** 确认门禁 | 用户是否明确确认（含通过语） | 任何 current_phase 变更时 |
-| **三-C** 结清门禁 | 本阶段强制步骤是否均已 completed/skipped | 任何 current_phase 变更时（含 06→07） |
+| **三-C** 结清门禁 | ① 本阶段强制步骤是否均已 completed/skipped ② `defects[]` 无 `open` 条目（2026-09-23 新增） | 任何 current_phase 变更时（含 06→07） |
 两条门禁都通过，才允许推进阶段。三-B 检查"流程确认"，三-C 检查"步骤结清"。
 
 > **06→07 推进说明**：三-B 确认门禁豁免 06→07（因 06 已含部署确认），但 **三-C 结清门禁正常执行**——必须检查 06 阶段所有 mandatory 步骤（含 step-4-archive-check）均已 completed/skipped，才能推进到 07。两条门禁独立执行，三-C 不受三-B 豁免影响。
@@ -502,12 +509,28 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
   实现：`EXEMPT_PATHS` 增列 `docs/knowledge-base/`（与 06 阶段 `STAGE_EXEMPT_PATHS` 口径对齐）。
 - 修改 `{IDE}/skills/iteration-workflow/` 下的 Skill 自身文件（**仅 01-03 阶段**，由 `EXEMPT_PATHS` 放行；
   05/06/07 与 `ACTIVE=none` 仍拦，见 §一决策树）
+  ★ FIX-24（2026-09-20）：01-03 分支 **Bash 伪路径不享路径豁免**（`[CMD] …` 经 `raw.startsWith('[')` 守卫；放行写 `EXEMPT_ALLOW` 审计留痕）。
 - 删除/移动类操作命中「删除豁免」清单的（见 §一「04 阶段的删除类操作校验」）
 - ★ **写入/修改 `{IDE}/memory/` 下的工作记忆文件**（FIX-11 · 2026-09-16）——**与迭代状态无关**：
   `ACTIVE=none` 与 00/05/06/07 阶段同样放行（依据：记忆维护属元层，≠ 业务迭代；
   且系统级要求「每次完成任务必须写记忆」）。范围**严格限定** `{IDE}/memory/`：
   `{IDE}/temp/`、`{IDE}/hooks/` **不在此列**（元层改动仍走逃生口）；
   `{IDE}/skills/` 另享「仅 01-03 阶段放行」（见上条第 3 项），与本条「与阶段无关」的豁免性质不同。
+- ★ **写入/修改外置「项目记忆」目录**（`~/{IDE}/projects/<slug>/memory/**`；GATE-5 · 2026-09-23）——
+  与上条**同层同性质**（工作记忆维护属元层；`ACTIVE=none` 与 00/05/06/07 同样放行）：
+  CodeBuddy 系 IDE 的**项目级**记忆落在用户目录、不在工作区内 ⇒ 原 `{IDE}/memory/` 模式恒不命中（01/02 阶段各实测 1 次误拦）。
+  范围**严格限定** `projects/<slug>/memory/`：`projects/<slug>/` 下其它内容（会话记录 / 转录）**不在此列**；
+  实现 = `hooks/gate-check.mjs` 的 `META_WRITE_EXEMPT_RE`（写入侧）与 `DELETE_EXEMPT_PATTERNS`（删除侧）。
+- ★ **`{IDE}/memory/MEMORY.md` 的写入侧配额守卫**（MAINT-3 P-5 · 2026-09-22 用户批准）——
+  在 FIX-11 的 memory 豁免**之上**追加的唯一约束：写前估算「写后 UTF-16 码元」，
+  **> 8000 拦一次**（超限会被 IDE 从头部截断、尾部丢失）、**> 7200 仅 stderr 告警**（余量 <10%）。
+  - 实现：`hooks/gate-check.mjs` 的 `memoryQuotaGuard()`（在 `gateCheck()` 的 `isMetaWriteExempt` 分支内调用）；
+    估算口径：`write_to_file`/`Write` 用 `content`；`replace_in_file`/`Edit` 在 `old_str` **唯一命中**时
+    按替换差值计算（含 `\n ⇄ \r\n` 兼容），其余情形 ⇒ **fail-open**（放行 + `MEMORY_QUOTA_SKIP` 留痕）。
+  - 语义：与 FIX-11 同层（**与迭代阶段无关**）；**逃生口优先级更高**（上游已放行）；
+    开关 `MEMORY_QUOTA_GUARD=0`；估算含 ±行尾差异（≈行数），可用 `memory_quota.py` 复核实际值。
+  - 依据：`{IDE}/memory/` 原为**零写入约束**，三次逼近/越限（09-14 丢尾 151 行 / 09-17 余量 4.5% /
+    09-22 距 WARN 线 88 码元）全部靠人工发现 ⇒ `runtime/TOOLING-TODO.md` MAINT-3 P-5。
 - ★ **05/06/07 阶段的「本职文档产出」**（FIX-12② · 2026-09-17）—— **阶段化最小授权**：
   原实现仅在 01-03 分支做 `EXEMPT_PATHS` 判定，05/06/07 走裸 block，与本节「创建迭代文档目录和文档文件」矛盾
   （实证：06/07 每次归档均需人工开逃生口）。现按阶段放行 ——
@@ -576,28 +599,12 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
 | 关闭 | `CONC_LOCK=0|off` 或标记文件 `hooks/.conc-off` |
 | ★ 边界 | 与阶段门禁**正交**、**fail-open**（本关自身异常绝不阻断写入）；**不改** `state-protocol.md` §九 |
 
-实现：`hooks/gate-check.mjs` → `concLockCheck()`｜回归：`scripts/run-gate-tests.mjs` 的 `CONC-1~5`。
+实现：`hooks/gate-check.mjs` → `concLockCheck()`｜回归：`scripts/run-gate-tests.mjs` 的 `CONC-1~5`｜工单：`runtime/TOOLING-TODO.md` → CONC-1。
 
 ---
 
-★ **CONC-1（2026-09-20，用户批准）**：新增 §七 多会话写者互斥（软锁 · fail-open）；回归 20/20（含 CONC-1~5）。
+★ 变更沿革（原文 42 行）已于 2026-09-25 **逐字迁出**至 `runtime/gate-protocol-CHANGELOG.md`（SLIM-2）；工单级详情见 `runtime/TOOLING-TODO.md`。
 
-**最后更新**：2026-09-20（**FIX-23：01-03 阶段放行 `docs/knowledge-base/`** ——
-`phase-01` 前置步骤/step-1.6 要求"知识库过时即刷新"，而该目录原不在 `EXEMPT_PATHS` ⇒ Agent 用 Write/Edit
-维护知识库时与门禁互斥（实证：KB 自 09-16 停更）。知识库为纯生成物非业务代码 ⇒ `EXEMPT_PATHS` 增列放行，
-与 06 阶段 `STAGE_EXEMPT_PATHS` 口径一致。
-★ **更正（同日实测）**：脚本执行走 Bash 纯读判定、脚本内写文件不经门禁 ⇒ **01-03 本就可跑脚本**
-（`--check` 实测通过）；此前"该要求在本阶段不可执行"的表述**过强，已订正**——本条消除的是口径冲突，不是打通执行。
-★ **FIX-24（2026-09-20）：Bash 伪路径不享路径豁免** —— 01-03 分支原用 `fsPath.includes('/' + pattern)`
-兜"绝对路径 / IDE 前缀"，却缺 `[` 守卫 ⇒ 命令文本出现 `/docs/knowledge-base/` 之类片段即整车放行
-（可被路径穿越规避）。现与 05/06/07 的 `matchStageExempt` 守卫（`raw.startsWith('[')`）对齐；
-并为 01-03 放行补 `EXEMPT_ALLOW` 审计留痕（原为静默 `exit(0)`，与 `STAGE_ALLOW` 不对称）。
-门禁回归 **90/90**、BASE 0 失败。
-前次：2026-09-17 **FIX-16：07 阶段放行模式库写入** —— `project/lessons-learned.md` 属迭代回顾的**强制本职动作**
-（phase-07 step-3/step-5；AP-1/AP-4 明禁"仅报告声称"），原实现漏放行 ⇒ 每次回顾须人工开闸；现按 `STAGE_EXEMPT_PATHS['07'].files`
-精确放行（跨 IDE 前缀；`project/` 其它文件仍拦）。
-历史：**FIX-13：§四 豁免表表述订正** —— 原第 3 条「修改 `.codebuddy/skills/`」缺阶段限定，
-第 5 条却写「`{IDE}/skills/` 不在此列」，两条自相矛盾；现统一为 `{IDE}/skills/iteration-workflow/`
-**仅 01-03 阶段放行**（`EXEMPT_PATHS`），与 memory 的「与阶段无关」豁免性质区分；以 `hooks/gate-check.mjs` 实现为准。
-再往前：2026-09-17 **FIX-12②** 05/06/07 阶段化文档豁免 + `STAGE_ALLOW` 审计（门禁回归 `71/71`，BASE 0 失败）；
-2026-09-16 GAP-4/加固① 逃生口自建拦截 + FIX-11 元层豁免）
+**最后更新**：2026-09-25（**SLIM-2：尾部变更沿革迁出 + FIX 叙事压缩**；三道门禁规则本体 §一~§七 行为零变化）。
+
+**前次更新**：2026-09-24 GATE-6（命令内 shell 变量字面展开 —— 规则结论见 §一「路径判定增强（GATE-6）」）。

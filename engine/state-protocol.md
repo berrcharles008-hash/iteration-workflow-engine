@@ -21,8 +21,8 @@ ITERATION_ID 格式：`YYYY-MM-DD-NNN-中文简述`（与 docs/iterations/ 目�
 
 | 事件 | 动作 | ACTIVE 同步 | Line 2 同步 |
 |------|------|:--:|:--:|
-| 新建迭代（01 阶段启动） | 创建文件，写入初始状态（`iteration_status: "in_progress"`, phase: "01", status: "in_progress"），初始化当前阶段的 `phase_steps` | 写入迭代ID | STATUS+PHASE+TASKS+BLOCKERS |
-| 每个阶段完成 | 更新 `current_phase` 和 `phase_status`，初始化新阶段的 `phase_steps` | — | PHASE |
+| 新建迭代（01 阶段启动） | 创建文件，写入初始状态（`iteration_status: "in_progress"`, phase: "01", status: "in_progress"），**写入 `started_at`（当日日期）**【METRICS-AUTO 2026-09-25】，初始化当前阶段的 `phase_steps` | 写入迭代ID | STATUS+PHASE+TASKS+BLOCKERS |
+| 每个阶段完成 | 更新 `current_phase` 和 `phase_status`，初始化新阶段的 `phase_steps`，**追加 `phase_history` 条目：`completed_at` 必须 ISO 带时分（`YYYY-MM-DDTHH:mm` 本地时，允许尾随秒/时区后缀）【PHASE-METRICS 2026-09-25】；跳过的阶段写 `skipped: true` + `skipped_at`（同格式）** | — | PHASE |
 | 每个步骤完成（所有阶段） | 更新 `phase_steps.{step-id}.status` 为 `completed` | — | — |
 | 步骤被跳过 | 更新 `phase_steps.{step-id}.status` 为 `skipped` + 写入 `skip_reason` | — | — |
 | 每个任务完成（04 阶段） | `tasks_completed + 1`，从 `tasks_pending` 移除对应任务 | — | TASKS |
@@ -31,13 +31,15 @@ ITERATION_ID 格式：`YYYY-MM-DD-NNN-中文简述`（与 docs/iterations/ 目�
 | 多 Story：某 Story 全部完成 | `stories[{id}].status` 设为 `"completed"`，写入 `completed_at` | — | — |
 | 多 Story：某 Story 废弃 | `stories[{id}].status` 设为 `"abandoned"`，自动跳过其剩余 `dev_steps`/`tasks` | — | — |
 | 对话结束前（用户发出"结束/下次继续"等信号） | 更新 `last_updated` 时间戳 + 写入 `last_session_summary` | — | — |
-| 06 阶段归档完成 | 将 `iteration_status` 设为 `"completed"`，`current_phase` 推进到 `"07"`，写入 `last_session_summary` | —（不释放） | STATUS+PHASE |
+| 06 阶段归档完成 | 将 `iteration_status` 设为 `"completed"`，`current_phase` 推进到 `"07"`，**写入 `ended_at`（当日日期）**【METRICS-AUTO 2026-09-25】，写入 `last_session_summary` | —（不释放） | STATUS+PHASE |
 | 07 阶段回顾归档完成 | `phase_status` 设为 `"completed"`，保持 `iteration_status: "completed"` | 写入 `"none"` | STATUS=none |
 | 强制跳过（paused） | `phase_status` 设为 `"paused"`，写入 `pause_reason` | 写入 `"none"` | STATUS=none |
-| 迭代废弃/取消 | `iteration_status` 设为 `"abandoned"`，写入 `abandon_reason` 和 `abandoned_at` + `last_session_summary`；`phase_steps` 中所有 `pending` 强制步骤 → `skipped` + `skip_reason: "迭代废弃"`；`tasks_pending` 保留并标注 `tasks_status: "abandoned"`；`phase_status` 保持原值不动 | ACTIVE 写入 `"none"` | STATUS=none |
+| 迭代废弃/取消 | `iteration_status` 设为 `"abandoned"`，写入 `abandon_reason` 和 `abandoned_at` + `last_session_summary`，**补写 `ended_at` = `abandoned_at` 日期**【METRICS-AUTO 2026-09-25】；`phase_steps` 中所有 `pending` 强制步骤 → `skipped` + `skip_reason: "迭代废弃"`；`tasks_pending` 保留并标注 `tasks_status: "abandoned"`；`phase_status` 保持原值不动 | ACTIVE 写入 `"none"` | STATUS=none |
 | 重新打开已完成迭代（回退到 04） | ★ 完整回退协议（见下方 §二-A） | 写入迭代ID | STATUS+PHASE+TASKS+BLOCKERS |
 | 出现阻塞（编译失败/审查不通过） | 向 `blockers` 追加条目 | — | BLOCKERS |
 | 阻塞解除 | 从 `blockers` 移除对应条目 | — | BLOCKERS |
+| 缺陷登记（05 阶段分诊 / 修复窗口开启） | 向 `defects` 追加条目（`status: "open"` + `root_cause_level` + `design_changed`） | —（★ 不进 Line 2，理由见 §三 defects 注） | — |
+| 缺陷关闭（回归通过） | `defects[].status` 置 `"fixed"`，写入 `fixed_at` + `verified_by` | — | — |
 
 > **多 Story 并行 · 04 阶段完成聚合公式（★ 写入时机补充）**：当 state.yaml 含 `stories` 数组且 `current_phase == "04"` 时，04 阶段完成的判定为——**Sprint 级 `phase_steps` 全部结清 AND 所有 `stories[].status ∈ {completed, abandoned}`**。被 `abandoned` 的 Story 不阻塞 Sprint 推进，但其剩余 `dev_steps`/`tasks` 自动视为跳过。
 
@@ -114,6 +116,11 @@ Step 10: 写入后自检（§三.3 校验规则）
 version: 5                      # ★ 并发控制版本号（整数自增），每次写入 +1。用于乐观锁冲突检测
 iteration_id: "2026-06-12-001-体征设备采集映射配置改造"
 iteration_status: "in_progress"  # ★ 迭代整体状态：in_progress | completed | abandoned（06归档时设为completed，07归档后才释放ACTIVE；废弃时设为abandoned）
+# ★ 可选度量字段（2026-09-25 METRICS-AUTO 新增，仿 complexity_actual 先例）：
+# started_at = 01 立项当日日期；ended_at = 06 归档当日日期（废弃时补写 = abandoned_at 日期）
+# 不在 §3.3 必填清单内（缺失不视为校验失败）；缺省视为旧版，度量窗口推导走兜底口径
+started_at: "2026-06-12"
+ended_at: "2026-06-19"
 complexity: "🔴"            # 🟢 简单 | 🟡 中等 | 🔴 复杂
 complexity_original: "🟡"   # ★ 初评复杂度（若被调整过，保留初评值用于追溯）
 # 复杂度升降级记录（无调整时为空数组）
@@ -150,24 +157,11 @@ phase_steps:
     name: "数据库脚本生成"
     status: "completed"       # pending | completed | skipped | not_applicable
     mandatory: true
-  - id: "step-0-sql-review"
-    name: "脚本审查"
-    status: "pending"
-    mandatory: true
-  - id: "step-0-sql-exec"
-    name: "脚本执行"
-    status: "pending"
-    mandatory: true
   - id: "step-1-task-list"
     name: "任务清单生成"
     status: "pending"
     mandatory: true
-# 被跳过的步骤示例：
-# - id: "step-0-sql-gen"
-#   name: "数据库脚本生成"
-#   status: "skipped"
-#   mandatory: true
-#   skip_reason: "本次无数据库变更"
+# 跳过示例：status: "skipped" + skip_reason: "本次无数据库变更"（规则见 §8.4）
 
 # 04 阶段任务进度（其他阶段可留空）
 tasks_total: 12
@@ -207,24 +201,29 @@ stories:
         op: "追加"
         desc: "新增 SaveVitalSignsWithDevice 方法"
     blockers: []
-  - story_id: "STORY-B"
-    title: "监护仪数据采集扩展"
-    status: "in_progress"
-    completed_at: ""
-    dev_steps: []
-    tasks_total: 0
-    tasks_completed: 0
-    tasks_pending: []
-    blockers: []
+  # 多 Story 时逐 Story 追加同构条目
 
 # 阻塞清单（空数组=无阻塞）
 blockers: []
-# 示例有阻塞时：
-# blockers:
-#   - id: "B-1"
-#     type: "compile_error"
-#     desc: "BLL/TriageVitalSignsMgr.cs 第 312 行 using 缺失"
-#     created_at: "2026-06-19T20:00"
+# 有阻塞时示例：- id: "B-1" / type: "compile_error" / desc: "BLL/TriageVitalSignsMgr.cs 第 312 行 using 缺失" / created_at: "2026-06-19T20:00"
+
+# ★ 缺陷台账（2026-09-23 DEFECT-1 新增；空数组 = 无缺陷记录）
+#   用途：缺陷的**跨阶段唯一台账** —— 与 05 报告「五、缺陷记录」节按 id 双向对账。
+#   ★ 与 blockers 的分工：blockers = 阻塞（编译失败 / 审查不通过 / 环境不可达，会挡住阶段推进）；
+#     defects = 缺陷（不必然阻塞，但存在 open 时**禁止推进 06**，见 gate-protocol.md §三-C）。
+#   ★ 为何不进 ACTIVE Line 2：Line 2 格式变更会波及宿主 agent 配置与既有解析；
+#     缺陷状态以本文件为 SSOT，查询读 `defects[]`（缺失 = 无缺陷，向后兼容旧 state.yaml）。
+defects: []
+# 有缺陷时示例（枚举值见 §3.3「枚举值校验」表）：
+# defects:
+#   - id: "D-1"
+#     desc: "列表页保存后首屏空表（$refs 未就绪致回填静默跳过）"
+#     severity: "P1"
+#     root_cause_level: "L1"         # L1 实现缺陷 | L2 方案缺陷（03 需变更）| L3 需求缺陷
+#     design_changed: false          # ★ 登记时由用户确认；true ⇒ 必须走 L2/L3 回退协议，不得走修复窗口
+#     status: "open"
+#     opened_at: "2026-09-23T10:00"
+#     # fixed_at（fixed 时写入）/ fix_files（实际改动文件，审计回溯用；可空）/ verified_by（回归验证人 user/agent）/ gate_window（用户手动开闸就地修复留痕，如 "bypass 10:00~10:40"）——fixed ⇒ fixed_at、L2/L3 ⇒ rollback_checks 见 §3.3 缺陷台账校验，其余详见 phase-04 Step F
 ```
 
 ### 3.1 阶段完成历史（phase_history）
@@ -303,40 +302,10 @@ override 写法：
 
 > **写入校验规则**（阶段推进时强制）：每次从 M 阶段推进到 M+1 阶段时，Agent 必须确认 `phase_history` 包含 `01` 到 `M` 之间的所有阶段（含 skipped 的）。若发现缺失，先补齐再推进。
 
-### 3.3 Schema 强制校验规则（★ 写入时必须执行）
-
-> Agent 每次写入 state.yaml 时，必须在写入完成后立即执行以下校验，确保格式合规。
-
-**必填字段检查**：以下字段必须在 state.yaml 中存在：
-- `version` / `iteration_id` / `iteration_status` / `complexity` / `current_phase` / `phase_status` / `last_updated`
-
-**枚举值校验**：
-
-| 字段 | 允许值 |
-|------|--------|
-| `iteration_status` | `in_progress` / `completed` / `abandoned` |
-| `complexity` | `🟢` / `🟡` / `🔴` |
-| `current_phase` | `"01"` ~ `"07"`（字符串格式） |
-| `phase_status` | `in_progress` / `completed` / `blocked` / `paused` |
-| `phase_steps[].status` | `pending` / `completed` / `skipped` / `not_applicable` |
-| `stories[].status` | `in_progress` / `completed` / `blocked` / `abandoned` |
-| `stories[].dev_steps[].status` | `pending` / `completed` / `skipped` / `not_applicable` |
-
-**多 Story 一致性校验（★ 聚合型）**：
-- 若 state.yaml 含 `stories` 数组，则 `tasks_total` == Σ `stories[].tasks_total`，`tasks_completed` == Σ `stories[].tasks_completed`（top-level 为各 Story 之和，向后兼容旧 reader）
-- `stories[].status == "abandoned"` 时，其 `dev_steps` 中仍为 `pending` 的步骤视为自动跳过，不计入 04 完成门禁
-- **向后兼容**：无 `stories` 字段的旧 state.yaml 按单 Story 处理，现有逻辑零改动
-
-**写入后自检流程**：
-1. `write_to_file` 或 `replace_in_file` 写入 state.yaml
-2. 立即 `read_file` 重新读取验证字段完整性和枚举值合法性
-3. 若校验失败，回退到写入前内容并报告错误
-
-**历史兼容**：已有 `.state.yaml` 不做迁移校验，新写入严格遵守。
-
 ### 3.2 阶段回退检查记录（rollback_checks）
 
-> 当发生阶段回退（N→M, N>M）时，Agent 必须按 `workflow-engine.md` 第122-165行的回退检查协议执行，并将确认结果写入此字段。
+> 当发生阶段回退（N→M, N>M）时，Agent 必须按 `workflow-engine.md` 的「阶段回退文档同步门禁」（第 136-178 行）执行，并将确认结果写入此字段。
+> ★ 2026-09-23 修正引用漂移：原写「第122-165行」，实际内容已移至 136-178 行。
 
 ```yaml
 # 阶段回退检查记录（无回退时为空数组）
@@ -363,6 +332,52 @@ rollback_checks:
 > - `consistency_checks`：M 到 N-1 各阶段文档的确认结果
 > - `needs_update`：该文档是否需要同步更新
 > - `confirmed_by`：确认者（user 表示用户显式确认）
+
+### 3.3 Schema 强制校验规则（★ 写入时必须执行）
+
+> Agent 每次写入 state.yaml 时，必须在写入完成后立即执行以下校验，确保格式合规。
+> ★ 已脚本化（SLIM-4 · 2026-09-25）：写入后执行 `python .codebuddy/skills/iteration-workflow/scripts/validate-state.py`（省略路径 = 经 ACTIVE 解析最新 in_progress state；脚本 ERR ⇒ 按下方自检 3 步回退，WARN 不回退）。
+> 脚本与本文规则不一致时**以本文为准**并登记 AUDIT；★ 双向对账项（05 报告 vs `defects[].id`）不在脚本覆盖内，仍由 Agent 执行 ⇒ **脚本 exit 0 ≠ 本节全过**。
+
+**必填字段检查**：以下字段必须在 state.yaml 中存在：
+- `version` / `iteration_id` / `iteration_status` / `complexity` / `current_phase` / `phase_status` / `last_updated`
+
+> ★ `started_at` / `ended_at` 为可选度量字段（2026-09-25 METRICS-AUTO 新增）：**不在必填清单内**，缺失不视为校验失败；旧版 state 无此字段属正常态（向后兼容，同 §review_gate 先例）。
+
+> ★ `phase_history` 条目存在时，其 `completed_at` / `skipped_at` 须**包含式匹配** `\d{4}-\d{2}-\d{2}T\d{2}:\d{2}`（允许尾随 `:ss` / 时区后缀，禁止全串匹配）【PHASE-METRICS 2026-09-25】；纯日期视为校验 WARN（**不阻断**，兼容历史 12 state 不回溯；实施后新迭代抽查 WARN=0）。`entered_at` 不引入——阶段起点 = 上一**实做**阶段 `completed_at`，首阶段 = `started_at`；skipped 条目不参与阶段窗界链（仅作注记）。
+
+**枚举值校验**：
+
+| 字段 | 允许值 |
+|------|--------|
+| `iteration_status` | `in_progress` / `completed` / `abandoned` |
+| `complexity` | `🟢` / `🟡` / `🔴` |
+| `current_phase` | `"01"` ~ `"07"`（字符串格式） |
+| `phase_status` | `in_progress` / `completed` / `blocked` / `paused` |
+| `phase_steps[].status` | `pending` / `completed` / `skipped` / `not_applicable` |
+| `stories[].status` | `in_progress` / `completed` / `blocked` / `abandoned` |
+| `stories[].dev_steps[].status` | `pending` / `completed` / `skipped` / `not_applicable` |
+| `defects[].status` | `open` / `fixed` / `deferred` |
+| `defects[].severity` | `P0` / `P1` / `P2` |
+| `defects[].root_cause_level` | `L1` / `L2` / `L3` |
+| `defects[].design_changed` | `true` / `false`（布尔） |
+
+**缺陷台账校验（★ 2026-09-23 DEFECT-1 新增）**：
+- `defects` 为**可选字段**（缺失 = 无缺陷，向后兼容旧 state.yaml）；存在时每条须通过上表枚举校验，且 `id` 唯一；
+- `status == "fixed"` ⇒ 必须有 `fixed_at`；`root_cause_level ∈ {L2, L3}` ⇒ 必须有对应阶段的 `rollback_checks` 条目；
+- ★ **双向对账**：05 报告「缺陷记录」节须与 `defects[].id` 一一对应（报告有、台账无 ⇒ 校验失败）。
+
+**多 Story 一致性校验（★ 聚合型）**：
+- 若 state.yaml 含 `stories` 数组，则 `tasks_total` == Σ `stories[].tasks_total`，`tasks_completed` == Σ `stories[].tasks_completed`（top-level 为各 Story 之和，向后兼容旧 reader）
+- `stories[].status == "abandoned"` 时，其 `dev_steps` 中仍为 `pending` 的步骤视为自动跳过，不计入 04 完成门禁
+- **向后兼容**：无 `stories` 字段的旧 state.yaml 按单 Story 处理，现有逻辑零改动
+
+**写入后自检流程**：
+1. `write_to_file` 或 `replace_in_file` 写入 state.yaml
+2. 立即执行校验：**优先跑 `validate-state.py` 脚本**；脚本不可用（PyYAML 缺失等）时降级 `read_file` 人工校验（fail-open）
+3. 若校验失败，回退到写入前内容并报告错误
+
+**历史兼容**：已有 `.state.yaml` 不做迁移校验，新写入严格遵守。
 
 ---
 
@@ -458,12 +473,15 @@ phase_steps 扫描结果：
 
 ### 5.1 生命周期中的阶段回退分支
 
+> ★ **2026-09-23 DEFECT-1 收敛**：本节原写「所有步骤 status 设为 `pending`」，与 §5.2 的「仅重置未完成项、已完成但不适用的改写为 `not_applicable`」**互相冲突** ⇒ 实测执行因此走了第三条路（自造游离步骤块，未进 SSOT）。**重置语义的唯一真相源 = §5.2**。
+
 ```
 阶段回退（N→M, N>M）
     │
     ├── current_phase 更新为 M，phase_status 设为 "in_progress"
-    ├── phase_steps 按 M 阶段的默认步骤清单重新初始化
-    ├── 所有步骤 status 设为 "pending"
+    ├── phase_steps 按 §5.2 规则重置（★ 不是一律置 pending）
+    ├── 因缺陷回退 ⇒ 走 [phase-steps.md](phase-steps.md) 的 step-fix-* 修复窗口并写入 phase_steps
+    ├── 回退前已完成的用例结果**保留**（见 §5.3）
     ├── rollback_checks 记录一致性检查结果
     └── 进入 M 阶段正常流程
 ```
@@ -482,6 +500,19 @@ phase_steps 扫描结果：
   4. 更新 current_phase="M", phase_status="in_progress"
   5. rollback_checks 记录一致性检查结果
 ```
+
+### 5.3 缺陷修复窗口与用例资产保留（★ 2026-09-23 DEFECT-1 新增）
+
+> 依据：真实回退记录（12 条 05→04）显示实践**已在用**「修复窗口」，但步骤 ID 自造、未进 SSOT ⇒ 审计与一致性检查看不见。
+> 选项甲已定为**不新增放行面** ⇒ 本窗口**挂在 04 阶段**（04 是唯一免开闸的合法落盘窗口，见 `gate-protocol.md` §一）。
+
+- **窗口步骤（SSOT = [phase-steps.md](phase-steps.md)）**：`step-fix-1-register` → `-2-code` → `-3-build` → `-4-regress` → `-5-reclose`；
+  ★ **禁止**再用游离自造步骤块（历史 `phase_steps_04_d1fix`、`step-d18-*` 均未被 SSOT 收录）。
+- **收口后回 05**：不回退既有用例结果 —— 新增用例**续接编号**，已跑结果**原样保留**（审计留痕）。
+- **推进拦截**：`defects[]` 存在 `status: "open"` ⇒ 禁止推进 06（见 `gate-protocol.md` §三-C）。
+- **例外通道留痕**：若用户选择手动开闸在 05 就地修复（非协议路径），须在 `defects[].gate_window` 记录窗口时间，并在 05 报告注明"开闸窗口内改码"。
+
+---
 
 > 强制跳过（paused）时，ACTIVE 也写入 `"none"`。重新打开已完成迭代时，ACTIVE 恢复写入迭代ID。
 
@@ -657,6 +688,8 @@ STATUS=none
 | `not_applicable` | 本轮不适用 | 自动跳过（如无SQL变更 step-0-* 均设为 not_applicable） |
 
 ### 8.3 门禁检查逻辑（Agent 伪代码）
+
+> ★ 本伪代码 = gate-protocol.md §三-C「步骤结清门禁」的机械化算法（含多 Story 聚合）；行为契约（处置选项①②③ / defects 第一步 / 06→07 说明）以 gate-protocol.md §三-C 为准。
 
 ```
 function gate_check(state):

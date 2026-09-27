@@ -45,21 +45,51 @@
 |-------|------|
 | 1-2 个 | 不必建 Team，主 Agent 直接 `write_to_file` |
 | 3-5 个 | 建 Team，2-3 Agent 并行 |
-| 6+ 个 | 建 Team，按依赖图最大化并行，生成「任务依赖图」 |
+| 6+ 个 | 建 Team，按依赖图**分批**并行，**每批 ≤3**（受维度五硬约束，不再"最大化并行"） |
+
+### 维度五：宿主承载上限（★ 硬约束，优先级高于维度一~四）
+
+> **实测背景**：CodeBuddy 扩展宿主（Extension Host）在过载时会异常终止
+> （平台注入提示原文：`the CodeBuddy extension host terminated unexpectedly ... its pending
+> tool calls and any team members were stopped`）。终止瞬间**在途任务、待执行工具调用和所有
+> Team 成员一并停止**，成员未回传的产出即丢失。
+> 因此并行度不能只按依赖最大化，必须同时满足下列上限：
+
+| 约束 | 阈值 | 依据（实测） |
+|------|------|------|
+| 同批并行成员数 | **≤ 3** | 09-24 六路并发 15 分钟内崩 3 次；09-23 四路 5 分钟内崩 1 次 |
+| 单成员上下文 | **≤ 15 万 token** | 09-24 14:58 崩溃发生在单会话 15.7 万~28.6 万 token 时 |
+| 单成员 max_turns | 新建 ≤3、追加 ≤8、探索 ≤2 | 见 §七 |
+
+**超阈值处理**（不得硬闯）：
+- 并行成员 > 3 → 拆成多个 Batch 串行派发，**不得**同批派发第 4 个
+- 单成员上下文预计 > 15 万 token → 拆任务；或让成员 `read_file` 精准片段，禁止整仓扫描
 
 ---
 
 ## 三、决策执行流程
+
+> **Step 0（★ 2026-09-24 新增，必做）**：派发前先挂载崩溃监控采样器
+> （命令见 `phase-04.md` Step 2.0：`tools\eh-monitor.ps1`）。
+> 理由：宿主崩溃**根因未定性**，平台抓取的 cpu profile 存于 `%TEMP%\codebuddy-starvat*`
+> 且会被清理，不挂采样器则事后永远拿不到成因证据。
 
 ```
 Step 1: 扫描技术方案，列出所有任务
 Step 2: 标注每个任务：操作类型（新建/追加/替换）、文件是否已知内容
 Step 3: 按 4 个维度计算最优派发方案
 Step 4: 输出「任务依赖图」+「并行分组」→ 强制用户确认
-Step 5: team_create → 按分组批量 task 派发（Team Agent 仅生成代码，不写文件）
+Step 5: team_create → 按分组批量 task 派发（同批 ≤3，见维度五）
+        ★ 每个成员 prompt 必须含【产出落盘】段（见 §七）：成员每完成一个文件即增量落盘
 Step 6: 主 Agent 收集所有 Agent 输出 → 生成统一变更预览
 Step 7: 用户一次确认 → 主 Agent 批量写入所有文件
+Step 8: ★ 若出现「extension host terminated unexpectedly」提示或成员长时间无响应，
+        立即转 §八 崩溃恢复协议；**禁止**假设已完成并直接重派全部任务
 ```
+
+> ⚠️ **Step 5 的结构性风险**：成员"只输出不写文件"意味着产出**仅存在于回传消息中**，
+> 一旦宿主终止即随消息丢失。因此 §七 的落盘要求是**强制补偿措施**——落盘的是产出记录
+> （`.codebuddy/temp/team-out/`），业务代码仍由主 Agent 在 Step 7 统一写入，两者不冲突。
 
 ---
 
@@ -138,4 +168,62 @@ task 参数：
   max_turns: {新建=3, 追加=5~8, 探索=2}
 ```
 
-> 注意：`mode` 不使用 `bypassPermissions` 或 `acceptEdits`。Team Agent 仅输出代码不写入文件，写入由主 Agent 在批量确认后统一执行（见 §三 Step 6-7）。
+> 注意：`mode` 不使用 `bypassPermissions` 或 `acceptEdits`。Team Agent 仅输出**业务代码**不写入业务文件，业务代码写入由主 Agent 在批量确认后统一执行（见 §三 Step 6-7）。
+>
+> **★ 例外：产出记录必须落盘**（宿主崩溃时回传消息会丢失，因此产出不能只存在于消息中）。
+
+### 【产出落盘】段（每个成员 prompt 必含，原样复制）
+
+```
+【产出落盘（★ 强制，防宿主崩溃丢失）】
+每完成 **一个** 文件，立即把该文件的完整产出追加写入：
+    {PROJ}/.codebuddy/temp/team-out/<你的成员名>.md
+原子写（防崩溃产生半截文件）：
+    1) 先写同目录 <成员名>.md.tmp
+    2) 再 rename 覆盖 <成员名>.md
+每段格式：
+~~~
+## <文件相对路径>  操作：新建/修改  +行数
+<代码块：完整内容或 diff>
+- 自检：<本节自检结果>
+~~~
+全部完成后追加完成标记：
+    <!-- TEAM-OUT-COMPLETE files=N -->
+禁止：
+- ❌ 产出只放在回传消息里、不落盘
+- ❌ 全部做完后才一次性写（中途崩溃则全丢）
+- ❌ 写入业务代码目录（业务代码仍由主 Agent 统一写入）
+```
+
+---
+
+## 八、崩溃恢复协议（★ Extension Host 终止后必走）
+
+> 依据平台注入提示原文：
+> "the CodeBuddy extension host terminated unexpectedly, so the in-flight task, its pending
+> tool calls and any team members were stopped. Before continuing, **verify what was actually
+> produced (files on disk / member messages)**, then re-run or reassign whatever is still
+> missing instead of assuming the previous work completed."
+
+**适用触发**（命中任一即进入本协议）：
+- 会话中出现 `extension host terminated unexpectedly` 提示
+- 成员状态停在 `running` 但长时间无新产出、无回传
+- 日志出现 `EH lifecycle — initialize phase begin, 31 components`（= 宿主冷启动，见排查入口）
+
+**恢复步骤**（顺序不可颠倒）：
+
+1. **先核对磁盘，不假设**：读 `.codebuddy/temp/team-out/*.md`，按 `TEAM-OUT-COMPLETE` 标记
+   把成员产出分为「已完成 / 半截 / 未开始」三类
+2. **再核对业务文件**：确认哪些目标文件已在磁盘上产生；半截文件须人工确认能否保留
+3. **只重派未完成部分**：已完成的不重派，半截的从断点续，未开始的按原 prompt 重派
+4. **重派时注入上下文**：把已落盘的 `<成员名>.md` 路径写进新成员 prompt，令其
+   **读文件接续**，而非从零重新读代码
+5. **留痕**：本次「崩溃 → 影响面 → 恢复动作」记入 `project/lessons-learned.md`
+
+**禁止行为**：
+- ❌ 假设上次已完成，直接推进下一步
+- ❌ 不区分状态、重派全部成员（重复消耗 + 引入重复改动）
+- ❌ 把半截文件当完成
+
+**排查入口**：`{IDE}/logs/CodeBuddyIDE/<日期>/<workspace>__<hash>.log`
+关键字：`HostStarvation`（主线程阻塞）、`"rss"`（内存峰值）、`Hook timed out`（门禁超时拦截）。

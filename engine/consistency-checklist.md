@@ -1,8 +1,11 @@
-# Engine 一致性审计规范（v2.0）
+# Engine 一致性审计规范（v2.1）
 
 > ★ **v2.0（2026-09-20）**：明细清单已交由 **`scripts/audit-engine.py`** 执行，本页只写维度、判据与触发点。
 > 旧 v1.x 的手工清单（「12 个 engine 文件」表、`workflow-engine.md` 行号断言、步骤 ID 清单）**已废止**——
 > 行号与文件数类内容必腐；实证：该清单**未被任何加载路径引用**，停摆 40+ 天且前置数据全部失效。
+>
+> ★ **v2.1（2026-09-23）**：新增 **A7 状态字段登记闭环**（**规范维度，脚本尚未实现** ⇒ 收口 / 评审时人工核；
+> 实现登记见 `runtime/TOOLING-TODO.md` `DEFECT-1`）。
 
 ---
 
@@ -16,6 +19,7 @@
 | A4 | 引用存在 | 引擎层反引号内的跨文件引用目标须存在（**收窄为「文件存在」**，不校验锚点 / `§`） | WARN |
 | A5 | 治理文档时效 | a 内容日期 > 7 天；b 自其 mtime 以来 `engine/` 有文件更新（联动）；c **mtime 与内容日期背离 > 3 天**（记账一致性） | WARN |
 | A6 | 回流水位 | 与源仓库逐文件比对（路径缺失 ⇒ SKIP） | WARN |
+| A7 | 状态字段登记闭环（★ 2026-09-23 新增） | `state.yaml` 的顶层字段须在 `state-protocol.md` §三（格式）**且** §3.3（枚举）登记；出现未登记字段 ⇒ WARN。**历史反例**：`delete_allow` 仅见于门禁协议、Schema 未登记 ⇒ 静默漂移（本次 `defects[]` 已按此规则登记） | WARN（★ 脚本未实现，人工核） |
 
 > A5 对象 = `engine/evolution-safety.md` · `engine/consistency-checklist.md` · `runtime/SESSION-HANDOFF.md`（三份元层规范）。
 
@@ -60,3 +64,4 @@ python scripts/audit-engine.py --src <源仓库>  # 追加 A6 回流水位（可
 |------|------|------|
 | 2026-07-12 | 1.0 ~ 1.1 | 初始手工清单（12 大类）；首轮扫描修 11 项 |
 | 2026-09-20 | **2.0** | 手工清单 →「本规范页 + `scripts/audit-engine.py`」（A1~A6）；新增两个挂载点（07 `step-3-5-workflow-audit` + 改 skill 收口） |
+| 2026-09-23 | **2.1** | 新增 **A7 状态字段登记闭环**（规范维度，脚本待实现）；由 `runtime/TOOLING-TODO.md` `DEFECT-1` 驱动（`defects[]` 落地 + `delete_allow` 历史漂移反例） |

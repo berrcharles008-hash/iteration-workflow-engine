@@ -23,12 +23,22 @@
  * 退出码：0=放行  2=阻止（阻塞错误，工具不执行）
  *
  * 变更历史：FIX-7 段级危险判定 ｜ FIX-8 工具名规范化 ｜ FIX-9 删除类清单锚定 + ALWAYS_ALLOW 收紧 + 拦截留痕
- *           ｜ FIX-12①（2026-09-18）时效逃生口（ttlMinutes/expire）+ 放行可见
- *           ｜ FIX-23 + FIX-24（2026-09-20）01-03 放行 docs/knowledge-base/ ＋ Bash 伪路径不享路径豁免
+ *           ｜ FIX-14（2026-09-17）stdin BOM 剥离 + HOOK_RAW_INPUT 留痕 + 拦截话术优化 + QQ 结构化通知
+ *           ｜ MAINT-3 P-5（2026-09-22）MEMORY.md 写入侧配额守卫（memoryQuotaGuard · fail-open）
+ *           ｜ GATE-5（2026-09-23）META_WRITE_EXEMPT 增「外置项目记忆」模式
+ *              （~/{IDE}/projects/<slug>/memory/**；删除豁免同口径；与 FIX-11 同层）
+ *           ｜ GATE-7（2026-09-27 用户批准）豁免表对齐实际产出，消合法写入误拦：
+ *              ① 05 阶段放行 requirements/*.md（规格回写）+ docs/knowledge-base/；
+ *              ② 06 阶段放行 project/lessons-learned.md（模式沉淀提前至 06）；
+ *              ③ 无活跃迭代（none）放行纯文档路径 docs/iterations/ · requirements|feasibility 的 .md
+ *                （立项前需求登记；业务代码仍然全拦）。
+ *              依据：2026-09-14~09-27 gate-audit.log 实测 BLOCK 317 次，05 占 81 次，
+ *              其中 requirements/*.md 22 次 + knowledge-base 33 次均为合法产出。
  */
 
-import { readFileSync, existsSync, appendFileSync, statSync, mkdirSync } from 'fs';
+import { readFileSync, existsSync, appendFileSync, writeFileSync, statSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
+import { spawn } from 'child_process';
 
 // ── 配置 ──────────────────────────────────────────────
 const PROJECT_DIR = process.env.CODEBUDDY_PROJECT_DIR
@@ -48,10 +58,12 @@ if (!process.argv.includes('--stop-check')) {
   audit('HOOK_ENTER', `pid=${process.pid} ppid=${process.ppid} tty=${process.stdin.isTTY === true} argv=${process.argv.slice(1).join(' ')}`);
 }
 
-// ── ★GATE-1①（2026-09-20）：exit 留痕 —— 注册点必须在**逃生口分支之前** ──
-//   原因：逃生口分支直接 `process.exit(0)` 早退；注册点若在其后 ⇒ 逃生口生效期间
-//   **零事件留痕**（实测：HOOK_ENTER 有、HOOK_EXIT 全无）。
-//   安全：处理器体全部包 try/catch —— `toolName` 此刻可能仍在 TDZ，抛出即被吞，行为不变。
+// ── ★GATE-1①（2026-09-20）：exit 留痕 —— **注册点上移**（原位于逃生口分支之后）──
+//   原因：逃生口分支直接 `process.exit(0)` 早退，原注册点在其后 ⇒ 逃生口生效期间
+//   **零事件留痕**（实测：HOOK_ENTER 有、HOOK_EXIT / allow / block 全无）。
+//   上移到逃生口之前后，bypass 早退同样留下 HOOK_EXIT 证据。
+//   安全：处理器体全部包 try/catch —— `WATCHED_TOOLS` / `toolName` 此刻可能仍在 TDZ，
+//         抛出即被吞掉，**行为完全不变**（未赋值 ⇒ 不写 allow，与上移前一致）。
 process.on('exit', (code) => {
   try {
     if (!process.argv.includes('--stop-check')) {
@@ -60,6 +72,13 @@ process.on('exit', (code) => {
       audit('HOOK_EXIT', `code=${code} tool=${_t}`);
     }
   } catch { /* 留痕失败不影响判定 */ }
+  try {
+    if (code === 2) return;                     // 2 = block（已记 block）
+    if (process.argv.includes('--stop-check')) return;
+    const t = (() => { try { return toolName || ''; } catch { return ''; } })();
+    if (!WATCHED_TOOLS.includes(t)) return;      // 仅写类/命令类工具算「成功的写」
+    recordGateEvent('allow', { reason: 'ALLOW' });
+  } catch { /* 忽略 */ }
 });
 
 /** 任何阶段都无条件放行的目录段（状态维护）；★ FIX-9：由 includes() 子串匹配收紧为段前缀匹配 */
@@ -77,6 +96,8 @@ const DELETE_EXEMPT_PATTERNS = [
   /(?:^|\/)\.vs\//,
   /(?:^|\/)\.codebuddy\/temp\//,
   /(?:^|\/)\.codebuddy\/memory\//,
+  // ★ GATE-5（2026-09-23）：外置「项目记忆」目录（~/{IDE}/projects/<slug>/memory/**）同口径豁免
+  /(?:^|\/)\.(?:codebuddy|claude|cursor|codex)\/projects\/[^/]+\/memory\//,
   /\.bak(?:[-.][\w.-]+)?$/,
   /\.(?:tmp|log|orig|rej|swp|old)$/,
 ];
@@ -88,6 +109,20 @@ const DELETE_CMD_PATTERNS = [
   /\brd\b/i,
   /\b(?:Move-Item|Rename-Item|mv|move|ren|rename)\b/i,
   /\bsvn\s+(?:delete|rm|remove|move|mv|rename)\b/i,
+];
+
+/**
+ * ★ FIX-21（2026-09-18）：门禁事件流（block / allow）—— 判定推迟到「会话结束」的唯一依据。
+ *   block = 本次工具调用被拦截；allow = 写类工具调用最终放行（说明已开闸/换路径成功）。
+ */
+const GATE_EVENTS_FILE = join(PROJECT_DIR, '.codebuddy/temp/gate-events.jsonl');
+const STOP_GATE_WINDOW_MS = 10 * 60 * 1000;   // 拦截距「会话结束」超过 10 分钟 ⇒ 与本次无关，不通知
+// ★ FIX-21：上移自 notify 区（Stop 判定分支在逃生口块之前执行，晚声明会 TDZ）
+const QQ_NOTIFY_MIN_INTERVAL_MS = 20000;    // 全局最小间隔（防并发 spawn 连发）
+const QQ_NOTIFY_FP_WINDOW_MS = 600000;      // 同指纹窗口（10 分钟）
+const QQ_NOTIFY_OFF_MARKERS = [
+  '.codebuddy/hooks/.qq-notify-off',
+  '.claude/hooks/.qq-notify-off',
 ];
 
 /** 项目/运行时目录的规范化形式（供路径判定复用；★ FIX-9 提前定义，避免 Bash 分支 TDZ） */
@@ -120,25 +155,35 @@ const EXEMPT_PATHS = [
  * 原实现仅在 01-03 分支做 EXEMPT_PATHS 判定，05/06/07 走裸 block ⇒ 与 SSOT §四 豁免表不一致，
  * 导致每次归档都需人工开逃生口（2026-09-17 实证：06/07 各需开闸一次）。
  *
- * 最小授权（仅文档路径，绝不含业务代码）：
- *   05 → docs/iterations/                                          （测试报告）
- *   06 → docs/iterations/ · docs/knowledge-base/ · requirements/**\/*.md · feasibility/**\/*.md
- *        （上线记录 / 知识库刷新 / spec 活文档回写；★ mdDirs 限 .md，不放行同目录其它文件）
+ * 最小授权（仅文档路径，绝不含业务代码；★ GATE-7 2026-09-27 对齐实际产出）：
+ *   05 → docs/iterations/ · docs/knowledge-base/ · requirements/*.md   （测试报告/知识库刷新/规格回写）
+ *   06 → docs/iterations/ · docs/knowledge-base/ · requirements|feasibility 的 .md
+ *        · project/lessons-learned.md
+ *        （上线记录 / 知识库刷新 / spec 活文档回写 / 模式沉淀；★ mdDirs 限 .md，不放行同目录其它文件）
  *   07 → docs/iterations/ · project/lessons-learned.md             （回顾报告 / 模式沉淀）
+ *   NONE → docs/iterations/ · requirements|feasibility 的 .md      （立项前需求登记 / 迭代文档预写）
  *
- * 明确仍拦（fail-closed）：00/none 全部、业务区（back-end/ front-end/ sql/ …）、
- * 05/07 的 requirements/、06 的 requirements 非 .md 文件、07 的 project/ 其它文件、以及所有 Bash 命令。
+ * 明确仍拦（fail-closed）：00 全部、none 态的 knowledge-base 与业务区（back-end/ front-end/ sql/ …）、
+ * requirements 非 .md 文件（全阶段）、07 的 project/ 其它文件、以及所有 Bash 命令。
  */
 const STAGE_EXEMPT_PATHS = {
-  '05': { dirs: ['docs/iterations/'] },
+  // ★ GATE-7（2026-09-27）：05 增 knowledge-base（测试期知识库刷新）与 requirements/*.md
+  //   （走查/测试期的规格回写）—— 实测 05 期误拦 requirements md 22 次、KB 33+ 次。
+  '05': { dirs: ['docs/iterations/', 'docs/knowledge-base/'], mdDirs: ['requirements/'] },
   '06': {
     dirs: ['docs/iterations/', 'docs/knowledge-base/'],
     mdDirs: ['requirements/', 'feasibility/'],
+    // ★ GATE-7：模式沉淀自 06 开始（实测 06 期 lessons-learned 被拦；07 原已放行）
+    files: ['skills/iteration-workflow/project/lessons-learned.md'],
   },
   // ★ FIX-16（2026-09-17）：07 回顾的「模式沉淀」为强制本职动作（phase-07 step-3/step-5，
   //   AP-1/AP-4 明禁"仅报告声称"）⇒ 放行写 project/lessons-learned.md。
   //   判定走 files 精确后缀（自动跨 IDE 前缀），不放行 project/ 下其它文件。
   '07': { dirs: ['docs/iterations/'], files: ['skills/iteration-workflow/project/lessons-learned.md'] },
+  // ★ GATE-7（2026-09-27）：无活跃迭代期的纯文档放行 —— 立项前需求登记
+  //   （实测 requirements/待排期需求登记.md 被拦 2 次）与迭代文档预写。
+  //   业务代码 / docs 其它子目录 / knowledge-base 在 none 态仍然全拦（fail-closed）。
+  'NONE': { dirs: ['docs/iterations/'], mdDirs: ['requirements/', 'feasibility/'] },
 };
 
 /**
@@ -173,13 +218,125 @@ const META_WRITE_EXEMPT_PATHS = [
   '.codex/memory/',
 ];
 
+/**
+ * ★ GATE-5（2026-09-23 用户批准）：外置「项目记忆」目录 —— 与 FIX-11 同层（元层写入，与阶段无关）。
+ * 背景：CodeBuddy 系 IDE 把**项目级**记忆落在用户目录 `~/{IDE}/projects/<slug>/memory/**`，不在工作区内
+ *      ⇒ 原 `{IDE}/memory/` 前缀恒不命中，01-03 写记忆被判越界（2026-09-23 实测 2 次；GATE-5 登记）。
+ * 范围严格限定 `projects/<slug>/memory/`：不放行 `projects/<slug>/` 下其它内容（会话记录 / 转录等）。
+ */
+const META_WRITE_EXEMPT_RE = [
+  /(?:^|\/)\.(?:codebuddy|claude|cursor|codex)\/projects\/[^/]+\/memory\//i,
+];
+
 /** ★ FIX-11：工作记忆路径判定。排除 Bash 伪路径（`[CMD] …`），
  *  避免命令文本里含 memory 字样被误当豁免目标放行。 */
+/** ★ FIX-17e：headless 接管锁 —— 锁有效期内禁止其它会话写入业务区（服务写锁、本 hook 读锁）。
+ *  豁免：① headless 自身（服务 exec 注入 PIVAS_HANDOFF_OWNER，随 CLI → hook 继承）
+ *        ② 锁文件本身（允许删除以解除锁定）
+ *  fail-open：无锁 / 已过期 / 解析失败一律视为无锁，避免残留锁把 IDE 永久锁死。 */
+const HANDOFF_LOCK_REL = '.codebuddy/temp/handoff/RUNNING.json';
+function handoffLockActive() {
+  if (process.env.PIVAS_HANDOFF_OWNER) return null;
+  try {
+    const raw = readFileSync(join(PROJECT_DIR, HANDOFF_LOCK_REL), 'utf-8');
+    const j = JSON.parse(raw.replace(/^\uFEFF/, ''));
+    if (j && j.expiresAt && Date.now() < Number(j.expiresAt)) return j;
+  } catch { /* 无锁 / 过期 / 解析失败 ⇒ 视为无锁 */ }
+  return null;
+}
 function isMetaWriteExempt(relPath) {
   const raw = String(relPath || '');
   if (!raw || raw.startsWith('[')) return false;
   const p = raw.replace(/\\/g, '/').replace(/^\/+/, '');
+  // ★ GATE-5（2026-09-23）：外置项目记忆（绝对路径，带盘符 / 用户目录前缀）—— 与阶段无关
+  if (META_WRITE_EXEMPT_RE.some((re) => re.test(p))) return true;
   return META_WRITE_EXEMPT_PATHS.some((x) => p.startsWith(x) || p.includes('/' + x));
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// ★ MAINT-3 P-5（2026-09-22 用户批准）：MEMORY.md 写入侧配额守卫
+//   背景：`{IDE}/memory/` 在 META_WRITE_EXEMPT_PATHS ⇒ 零写入约束 ⇒ 三次逼近/越限
+//   （2026-09-14 截断丢尾 151 行 / 09-17 余量 4.5% / 09-22 距 WARN 线 88 码元）全靠人工发现。
+//   规则：写 MEMORY.md 前估算「写后 UTF-16 码元」—— > LIMIT 拦一次；> WARN 仅 stderr 告警。
+//   语义：fail-open（估算失败 / 未知工具 ⇒ 放行 + MEMORY_QUOTA_SKIP 留痕）；
+//         逃生口天然优先（上游已放行）；开关 MEMORY_QUOTA_GUARD=0。
+// ─────────────────────────────────────────────────────────────────────────
+const MEMORY_QUOTA_LIMIT = 8000;                  // IDE 注入阈值（超 ⇒ 从头部截断，尾部丢失）
+const MEMORY_QUOTA_WARN = 7200;                   // 余量 < 10% 告警线
+const MEMORY_QUOTA_RE = /(?:^|\/)(?:\.codebuddy|\.claude|\.cursor|\.codex)\/memory\/MEMORY\.md$/i;
+
+/** UTF-16 码元数（= JS String.length；IDE 截断判定口径）
+ *  ★ 禁 `Buffer.byteLength(s,'utf16-le')` —— Node 不认该别名（抛 Unknown encoding），
+ *    且会被守卫 catch 吞成 fail-open ⇒ 静默失效（2026-09-22 回归 P5-A 实测根因）。 */
+function memoryCodeUnits(s) {
+  return String(s).length;
+}
+
+/** 估算写入后 MEMORY.md 码元；无法估算（读失败 / 非唯一匹配 / 未知工具）⇒ null */
+function estimateMemoryUnits(fsPath, tool, hi) {
+  const ti = (hi && hi.tool_input) || {};
+  const t = String(tool || '');
+  if (t === 'write_to_file' || t === 'Write') {
+    if (typeof ti.content !== 'string') return null;
+    return memoryCodeUnits(ti.content);           // 全量写入 ⇒ 无需读旧文件
+  }
+  if (t === 'replace_in_file' || t === 'Edit') {
+    const rel = String(fsPath || '').replace(/\\/g, '/');
+    const abs = rel.startsWith(PROJECT_DIR_NORM) ? rel : join(PROJECT_DIR, rel);
+    let cur;
+    try {
+      cur = readFileSync(abs, 'utf-8');
+    } catch {
+      return null;
+    }
+    const oldStr = typeof ti.old_str === 'string' ? ti.old_str : ti.old_string;
+    const newStr = typeof ti.new_str === 'string' ? ti.new_str : ti.new_string;
+    if (typeof oldStr !== 'string' || typeof newStr !== 'string' || !oldStr) return null;
+    let used = oldStr;
+    let first = cur.indexOf(oldStr);
+    if (first < 0) {
+      const crlf = oldStr.replace(/\r?\n/g, '\r\n');       // 行尾形态兼容（\n ⇄ \r\n）
+      if (crlf !== oldStr && cur.indexOf(crlf) >= 0) { used = crlf; first = cur.indexOf(crlf); }
+    }
+    if (first < 0) return null;
+    if (cur.indexOf(used, first + used.length) >= 0) return null;      // 非唯一 ⇒ 无法估算
+    return memoryCodeUnits(cur.slice(0, first) + newStr + cur.slice(first + used.length));
+  }
+  return null;
+}
+
+function memoryQuotaGuard(fsPath, tool, hi) {
+  try {
+    if (String(process.env.MEMORY_QUOTA_GUARD || '') === '0') return;
+    const p = String(fsPath || '').replace(/\\/g, '/');
+    if (!MEMORY_QUOTA_RE.test(p)) return;
+    const n = estimateMemoryUnits(fsPath, tool, hi);
+    if (n === null) {
+      audit('MEMORY_QUOTA_SKIP', p);
+      return;
+    }
+    if (n > MEMORY_QUOTA_LIMIT) {
+      audit('MEMORY_QUOTA_BLOCK', p + ' ' + n + '/' + MEMORY_QUOTA_LIMIT);
+      block(
+        'MEMORY.md 写入后估算超配额（' + n + ' / ' + MEMORY_QUOTA_LIMIT + ' 码元）—— 超限会被 IDE 截断并丢弃尾部内容。',
+        '目标: ' + p,
+        '（估算含 ±行尾差异；可用 memory_quota.py 复核实际值）',
+        '',
+        '处理方式:',
+        '  python .codebuddy/skills/iteration-workflow/scripts/memory_quota.py',
+        '  压缩措辞，或把细节外移到速查分片（PIVAS-速查-env/backend/frontend/spec.md）',
+        '',
+        '确需原样写入：由用户开闸后重试。'
+      );
+    }
+    if (n > MEMORY_QUOTA_WARN) {
+      audit('MEMORY_QUOTA_WARN', p + ' ' + n + '/' + MEMORY_QUOTA_LIMIT);
+      process.stderr.write('[gate] WARNING: MEMORY.md 写入后估算 ' + n + ' 码元（>'
+        + MEMORY_QUOTA_WARN + '，余量 <10%）-- 建议先瘦身（memory_quota.py）。\n');
+    }
+  } catch (e) { /* fail-open：守卫自身异常不得阻断写入（★ 必须留痕，防静默失效） */
+    audit('MEMORY_QUOTA_ERR', String((e && e.message) || e).slice(0, 140));
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -249,7 +406,7 @@ function concAppend(rec) {
 }
 /**
  * 写前检查：他会话在 TTL 内写过同一文件 ⇒ 拦一次并要求重读；
- * 同会话 / 声明过期 / 本会话已被告知过（GRACE 内重试）⇒ 放行 + 登记/续期声明。
+ * 同会话 / 声明过期 / 本会话已被告知过（GRACE 内重试）⇒ 放行。
  */
 async function concLockCheck(rel, tool) {
   try {
@@ -306,7 +463,11 @@ const DANGEROUS_CMD_PATTERNS = [
   // ── 文件写入/重定向 ──
   /\b(?:Out-File|Set-Content|Add-Content|Tee-Object)\b/i,       // PowerShell 写入
   /\b(?:New-Item|mkdir)\b/i,                                       // 创建文件/目录（★ FIX-10：ni/md 改命令位判定）
-  /[^>]>\s*\S/,                                                    // 输出重定向（排除 >>）
+  // ★ FIX-25（2026-09-20 用户拍板「档 2」）：重定向模式收窄 —— 原 `/[^>]>\s*\S/`
+  //   会把命令**文本**里的 `->` / `=>` 当成输出重定向 ⇒ 只读命令被拦
+  //   （实证：`Write-Output "a -> b"`、`playwright-cli eval "() => {…}"`）。
+  //   残留（登记待裁决）：比较符 `A >= B` 仍会被判为追加重定向。
+  /[^=>-]>\s*\S/,                                                  // 输出重定向（排除 >> / -> / =>）
   />>\s*\S/,                                                       // 追加重定向
   // ── 文件删除 ──
   /\b(?:Remove-Item|erase|rmdir|rm|del)\b/i,                     // 删除命令（★ FIX-10：ri/rd 改命令位判定）
@@ -371,6 +532,13 @@ function bypassFileState() {
     return { path: p, active: true, until, mode: until ? 'ttl' : 'forever' };
   }
   return null;
+}
+// ── ★ FIX-21：会话结束（Stop）门禁判定入口 ──────────────────────
+// 必须**早于逃生口块**（逃生口激活时会直接 process.exit(0) 放行，放后面就永远执行不到）。
+// Stop 钩子入参不含工具调用信息，本分支只判定「本次会话是否真被门禁阻断」并决定是否通知。
+if (process.argv.includes('--stop-check')) {
+  await runStopCheck();
+  process.exit(0);
 }
 
 if (!BYPASS_DISABLED_FOR_TEST) {
@@ -439,26 +607,38 @@ const BYPASS_CREATE_PATTERNS = [
   /(?:^|\s)>{1,2}\s*[^\n]*\.gate-bypass/i,                                    // 重定向写入：> / >>
   /\b(?:copy|Copy-Item|xcopy|robocopy|tee|Tee-Object)\b[^\n]*\.gate-bypass/i,
   /\b(?:New-Item|ni|Set-Content|Add-Content|Out-File|touch)\b[^\n]*\.gate-bypass/i,
-  /\b(?:python|python3|py|node|nodejs|ruby|perl|php)\b[^\n]*\.gate-bypass/i,  // 解释器内联 / 脚本
 ];
-
 /**
- * ★ 判定必须用**整条命令**（而非 splitCommandChain 拆出的段）：
- *   解释器内联脚本含 `;`（如 `python -c "import os; os.remove('…')"`）会被拆段，
- *   导致 "python" 与 ".gate-bypass" 分居两段 ⇒ 逐段判定**漏检**（FIX-9d 同源教训）。
- *   故模式内用 `[^\n]*` 允许跨段，只在**同一条命令行内**关联。
+ * ★ FIX-14（2026-09-18）：解释器 + 文件名的判定，由「整行提及即拦」收窄为「邻近出现**写入迹象**才拦」。
+ * 两例实测假阳性：① 通知文案 `node notify.qqbot.js "…（.gate-bypass 已不在位）"` 被误拦（通知发不出）；
+ *   ② 只读检查 `python …memory_quota.py` 与 `Test-Path …\.gate-bypass` 同处一行命令亦被误拦。
+ * 语义：**提及 ≠ 创建** ⇒ 无写入迹象时仅记 `AUDIT_SUSPECT` 供回溯，不再阻断。
  */
+const BYPASS_INTERP_RE = /\b(?:python|python3|py|node|nodejs|ruby|perl|php)\b/i;
+const BYPASS_WRITE_HINT_RE = /(?:writeFileSync|appendFileSync|writeFile|\.write\s*\(|open\s*\([^)]*[\x27\x22]w|openSync|createWriteStream|WriteAllText|WriteAllBytes|copyFileSync|shutil\.|os\.remove|unlink|>{1,2}[^\n]*\.gate-bypass)/i;
 function isBypassCreateCommand(cmd) {
   const s = String(cmd || '');
-  return BYPASS_CREATE_PATTERNS.some((p) => p.test(s));
+  if (!s) return false;
+  if (BYPASS_CREATE_PATTERNS.some((p) => p.test(s))) return true;
+  const i = s.indexOf('.gate-bypass');
+  if (i >= 0 && BYPASS_INTERP_RE.test(s)) {
+    const near = s.slice(Math.max(0, i - 140), i + 80);      // 邻近窗口（允许跨段）
+    if (BYPASS_WRITE_HINT_RE.test(near)) return true;
+    audit('AUDIT_SUSPECT', '[BYPASS-MENTION] ' + s.slice(0, 160));
+  }
+  return false;
 }
 
+// ★ FIX-21：写类工具「最终放行」也记一条 allow —— 用于判定「拦截后是否又成功写入」
+//   （= 已开闸 / 换路径成功 ⇒ 会话并未被阻断）。非写类工具（读文件等）不记，避免误判为已放行。
 let stdinIsTTY = false;
 const input = await new Promise((resolve) => {
   let data = '';
   const timeout = setTimeout(() => resolve(data), 3000);
   process.stdin.setEncoding('utf-8');
-  process.stdin.on('data', (chunk) => { data += chunk; });
+  // ★ FIX-14①（2026-09-17）：宿主可能带 UTF-8 BOM（\uFEFF）送入 stdin ⇒ 逐块剥离，
+  //   否则 JSON.parse 抛错 → fail-closed 误拦正常工具调用（用户侧表现为无意义的「解析失败」弹窗）。
+  process.stdin.on('data', (chunk) => { data += String(chunk).replace(/^\uFEFF/, ''); });
   process.stdin.on('end', () => { clearTimeout(timeout); resolve(data); });
   if (process.stdin.isTTY) {
     stdinIsTTY = true;
@@ -485,16 +665,19 @@ if (!input || !input.trim()) {
 // ── 解析 hook 输入 ─────────────────────────────────────
 let toolName, filePath, hookInput;
 try {
-  hookInput = JSON.parse(input);
+  // ★ FIX-14①（2026-09-17）：解析前再度剥离 BOM（可能跨 chunk 被拆开）+ 去首尾空白
+  const raw = (input || '').replace(/^\uFEFF+/, '').trim();
+  hookInput = JSON.parse(raw);
   toolName = hookInput.tool_name;
   const toolInput = hookInput.tool_input || {};
   filePath = toolInput.filePath || toolInput.file_path || toolInput.target_file || '';
 } catch {
-  // JSON 解析失败 → fail-closed：阻止而非放行
+  // JSON 解析失败 → fail-closed：阻止而非放行（拦截行为不变）
+  // ★ FIX-14①：完整原始输入留痕，便于区分「真异常」与「BOM / 编码类误拦」
+  audit('HOOK_RAW_INPUT', input);
   block(
-    'Hook 输入格式错误，无法解析为 JSON。',
-    `输入前100字符: ${(input || '').substring(0, 100)}`,
-    '工具调用已拦截以保护代码安全。'
+    '门禁收到无法识别的输入，已安全拦截。',
+    '如果你正在执行正常操作却看到此提示，属误拦；请查看 .codebuddy/hooks/gate-audit.log 中的 HOOK_RAW_INPUT 原始内容核查。'
   );
 }
 
@@ -530,7 +713,8 @@ if (toolName === 'execute_command' || toolName === 'Bash') {
   // ★ FIX-9：删除/移动类段先走「清单锚定」校验（04 阶段不再无条件放行删除）
   const deleteSeg = segments.find((seg) => isDeleteSegment(seg));
   if (deleteSeg) {
-    await deleteGate(extractPathsFromCommand(deleteSeg), deleteSeg);
+    // ★ GATE-6：传入整条 cmd —— 变量赋值可能与 Move/Remove 段分处不同段
+    await deleteGate(extractPathsFromCommand(deleteSeg, cmd), deleteSeg);
   }
 
   // ★ FIX-9d：解释器内联「疑似删除」仅审计留痕（不拦截，理由见 isInlineDeleteSuspect 注释）
@@ -578,12 +762,29 @@ if (toolName === 'Delete' || toolName === 'delete_file' || toolName === 'delete_
   await deleteGate([relativePath], relativePath);
 }
 
+// ── 第0关：★ FIX-17e headless 接管锁 ──────────────────────
+if (relativePath === HANDOFF_LOCK_REL) {
+  audit('HANDOFF_LOCK_REL', relativePath);      // 允许解除锁（用户自助逃生）
+  process.exit(0);
+}
+const hLock = handoffLockActive();
+if (hLock) {
+  block(
+    '当前有 headless 接管在运行，写入已暂停（防并发改同一迭代）。',
+    `接管 #${hLock.id} 起于 ${hLock.startedAt || '?'}，剩余约 ${Math.max(0, Math.round((Number(hLock.expiresAt) - Date.now()) / 60000))} 分钟`,
+    `本次尝试: ${relativePath}`,
+    '若确需手动继续：结束该接管，或删除 .codebuddy/temp/handoff/RUNNING.json（该删除已豁免）'
+  );
+}
+
 await gateCheck(relativePath);
 
 // ── 门禁检查（活跃迭代 + 阶段判定） ──────────────────
 async function gateCheck(fsPath) {
   // ★ FIX-11：工作记忆写入/维护与迭代状态解耦（ACTIVE=none / 00 / 05 / 06 / 07 一并放行）。
   if (isMetaWriteExempt(fsPath)) {
+    // ★ MAINT-3 P-5（2026-09-22）：MEMORY.md 写入侧配额守卫（fail-open；逃生口上游优先）
+    memoryQuotaGuard(fsPath, toolName, hookInput);
     audit('META_ALLOW', fsPath);
     process.exit(0);
   }
@@ -595,11 +796,20 @@ async function gateCheck(fsPath) {
   }
 
   if (!activeId || activeId === 'none') {
+    // ★ GATE-7（2026-09-27）：none 态放行纯文档路径（立项前需求登记 / 迭代文档预写）。
+    //   Bash 伪路径不享豁免（matchStageExempt 内 `[` 守卫，与 FIX-24 口径一致）。
+    const noneHit = matchStageExempt('NONE', fsPath);
+    if (noneHit) {
+      audit('STAGE_ALLOW', `[NONE] ${fsPath} (pattern=${noneHit})`);
+      process.exit(0);
+    }
     block(
       '当前无活跃迭代。',
       '所有代码修改必须经过迭代工作流。',
       `本次尝试: ${fsPath}`,                       // ★ FIX-11：拦截留痕带目标，便于回溯
-      '请先创建新迭代（开始迭代 / 进入01阶段）。'
+      '',
+      'none 态仅放行纯文档: docs/iterations/ · requirements/*.md · feasibility/*.md',
+      '业务代码修改请先创建新迭代（开始迭代 / 进入01阶段）。'
     );
   }
 
@@ -632,7 +842,6 @@ async function gateCheck(fsPath) {
   }
 
   // 01-03 阶段：窄放行——仅豁免目录可写
-  // execute_command 无文件路径，不会被 EXEMPT_PATHS 放行（预期行为）
   // ★ FIX-24（2026-09-20）：Bash 伪路径（`[CMD] …`）**不享**路径豁免。
   //   原实现用 `includes('/' + pattern)` 兜"绝对路径 / IDE 前缀"，但缺少 `[` 守卫 ⇒
   //   命令文本里只要出现 `/docs/knowledge-base/` 之类的片段就整车放行（可被路径穿越规避）。
@@ -739,16 +948,62 @@ function toProjectRelative(p) {
   return s.replace(/^\.?\/+/, '');
 }
 
-/** 从删除类命令段提取候选路径 token */
-function extractPathsFromCommand(seg) {
+/**
+ * ★ GATE-6（2026-09-24）：命令内 shell 变量赋值收集 —— **字面收集，不求值、不执行、不读环境**
+ *
+ * 背景（门禁变量路径坑）：Agent 做原子落盘常写
+ *   `$d=".codebuddy/temp"; … Move-Item "$d\x.md" "$d\x.md.bak"`
+ * 静态解析只能拿到 `$d\x.md` ⇒ 命中不了 temp/ 目录豁免 ⇒ 被拦（fail-closed）；
+ * 而同一命令若目标叫 `.tmp` 又会被「扩展名豁免」放行 ⇒ 判定自相矛盾、不可预测。
+ *
+ * 语义边界：仅在**同一条命令文本内**做字面替换；解析不出的变量原样保留 ⇒ 仍走
+ *           fail-closed 拦截（本改动**不扩大放行面**，只消除「能解析却被误拦」的假阳性）。
+ */
+function collectShellAssignments(cmd) {
+  const map = Object.create(null);
+  const re = /(?:^|[;&|\s])(?:\$(\w+)|(?:set\s+)?(\w+))\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s;|&]+))/g;
+  const src = String(cmd || '');
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    const name = m[1] || m[2];
+    const val = m[3] !== undefined ? m[3] : (m[4] !== undefined ? m[4] : m[5]);
+    if (name && val) map[name] = val;
+  }
+  return map;
+}
+
+/** 展开 `$name` / `${name}`（多轮 —— 支持变量套变量）；未赋值变量原样保留 */
+function expandShellVars(text, map) {
+  let s = String(text || '');
+  for (let i = 0; i < 3; i++) {
+    let next = s;
+    for (const k of Object.keys(map)) {
+      const rx = new RegExp('\\$\\{' + k + '\\}|\\$' + k + '(?![\\w])', 'g');
+      next = next.replace(rx, map[k]);
+    }
+    if (next === s) break;
+    s = next;
+  }
+  return s;
+}
+
+/** 从删除类命令段提取候选路径 token（★ GATE-6：cmd = 整条命令，供变量赋值收集） */
+function extractPathsFromCommand(seg, cmd) {
   let s = String(seg || '').replace(/["']/g, ' ');
+  const vars = collectShellAssignments(cmd || seg);
+  if (Object.keys(vars).length) s = expandShellVars(s, vars);
   s = s.replace(/\s-[a-zA-Z][\w-]*/g, ' ');                 // -Recurse / -Force / -LiteralPath
   s = s.replace(/(?:^|\s)\/[a-zA-Z]{1,3}(?=\s|$)/g, ' ');   // cmd 开关 /q /s /f /y
-  s = s.replace(/\b(?:Remove-Item|Remove-ItemProperty|Move-Item|Rename-Item|Copy-Item|erase|rmdir|del|delete_files|delete|remove|rename|move|ren|rni|ri|mi|rm|rd|mv|svn)\b/gi, ' ');
-  s = s.replace(/\b(?:cmd|powershell|pwsh|bash|sh|zsh|call|start|exec|xargs)\b/gi, ' ');   // shell 前缀词（非路径）
+  // ★ FIX-15（2026-09-18）：命令名 / shell 前缀词**只从段首剥离**（原为全文 `\b…\b` 删除，
+  //   会把路径里的同名片段当命令名吃掉：实测 `…\temp\patch-exec.mjs` → `…\temp\patch-` + `.mjs`，
+  //   碎片不在豁免清单 ⇒ 整条删除命令被误拦并报「目标: .mjs」）。
+  s = s.replace(/^\s*(?:(?:cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh(?:\.exe)?|bash|sh|zsh|call|start|exec|xargs)\b[\s/]*)+/i, ' ');
+  s = s.replace(/^\s*(?:Remove-Item|Remove-ItemProperty|Move-Item|Rename-Item|Copy-Item|erase|rmdir|del|delete_files|delete|remove|rename|move|ren|rni|ri|mi|rm|rd|mv|svn)\b/i, ' ');
   const tokens = s.split(/\s+/).map((t) => t.replace(/[;,)]+$/, '')).filter((t) => t && !/^-/.test(t));
   // ★ 优先只校验「像路径」的 token（含分隔符或扩展名），避免 cmd/shell 前缀或裸词干扰豁免判定
-  const pathLike = tokens.filter((t) => /[\\/]/.test(t) || /\.[A-Za-z0-9]{1,8}$/.test(t));
+  // ★ FIX-15 补强：丢弃「扩展名碎片」（形如 `.mjs`）—— 只可能来自路径被误切，非真实删除目标
+  const isExtFragment = (t) => /^\.[A-Za-z0-9]{1,8}$/.test(t);
+  const pathLike = tokens.filter((t) => !isExtFragment(t) && (/[\\/]/.test(t) || /\.[A-Za-z0-9]{1,8}$/.test(t)));
   return (pathLike.length ? pathLike : tokens).slice(0, 40);
 }
 
@@ -832,15 +1087,23 @@ async function deleteGate(paths, label) {
   }
 
   const allow = readDeleteAllow(activeId);
+  audit('DELETE_TARGETS', `${label} -> [${list.join(' , ')}]`);
   for (const raw of pending) {
     const rel = toProjectRelative(raw);
     if (rel && Array.isArray(allow) && allow.some((a) => matchDeleteAllow(rel, a))) continue;
+    // ★ GATE-6：目标含未展开 shell 变量时，明确告知「门禁只能字面判定」，
+    //   避免 Agent 反复重试同一形态命令（2026-09-24 门禁变量路径坑）。
+    const unresolved = /\$\{?\w+\}?/.test(String(raw));
+    const hints = [
+      '登记方式: 任务清单增补 DELETED 项 → 用户确认 → 写入 state.yaml 的 delete_allow。',
+      '豁免: runtime/ · temp/ · memory/ · node_modules/ · dist/ · obj/ · bin/ · *.bak*',
+      '★ 目标含未展开的 shell 变量：门禁只能做字面判定、无法求值 ⇒ 请把变量写成字面路径后重试。',
+    ];
     block(
       '删除/移动类操作未在任务清单登记。',
       `目标: ${rel === null ? raw + '（项目外路径）' : rel}`,
       `迭代: ${activeId}`,
-      '登记方式: 任务清单增补 DELETED 项 → 用户确认 → 写入 state.yaml 的 delete_allow。',
-      '豁免: runtime/ · temp/ · memory/ · node_modules/ · dist/ · obj/ · bin/ · *.bak*'
+      ...(unresolved ? hints : hints.slice(0, 2))
     );
   }
 
@@ -884,9 +1147,221 @@ function auditBypass(reason) {
   }
 }
 
+// ── 拦截即发 QQ 确认提醒（事件驱动，零延迟）── 2026-09-17 ──
+// gate 的 block() 是所有"需你确认"弹窗（无活跃迭代 / 阶段不允许 / 删除未登记 /
+// 危险命令）的唯一触发点。在弹确认的那一刻直接发 QQ，弥补 watcher 仅"轮询空闲"的延迟。
+//
+// ★ FIX-19（2026-09-18）：四处修正（起因：2026-09-18 09:53 连发 4 条「待确认」全是误报）
+//   ① 测试态静默 —— gate-regression-test.py 以合成 stdin 调本 hook，拦截是**预期结果**而非
+//      真实待确认（铁证：通知里 `迭代: test-iter` 只来自测试夹具 SCENARIOS）。故
+//      GATE_TEST_RUNTIME_DIR / GATE_TEST_DISABLE_BYPASS 存在时只审计 QQ_NOTIFY_SKIP(test)。
+//   ② 手动总开关 —— QQ_NOTIFY=0 或 hooks/.qq-notify-off 标记 ⇒ 静默（批量维护期免打扰）。
+//   ③ 去重升级 —— 原「全局 60s」会把**不同目标**的连续拦截一并吞掉（信息缺失），
+//      改为「同指纹 10min 防刷屏」（判定已推迟到 Stop，不再需要全局 20s 连发保护）；指纹 = 原因 + 目标。
+
+/** 静默原因（null = 正常发送） */
+function notifySilentReason() {
+  if (process.env.GATE_TEST_RUNTIME_DIR || process.env.GATE_TEST_DISABLE_BYPASS) return 'test';
+  if (process.env.QQ_NOTIFY === '0' || process.env.QQ_NOTIFY === 'off') return 'env';
+  for (const rel of QQ_NOTIFY_OFF_MARKERS) {
+    if (existsSync(join(PROJECT_DIR, rel))) return 'marker';
+  }
+  return null;
+}
+
+/** 当前工具名（block 可能在 stdin 解析前被触发 ⇒ try 兜住 let 的 TDZ） */
+function blockToolLabel() {
+  try { return toolName || '?'; } catch { return '?'; }
+}
+
+/** 当前目标（相对路径 > filePath > Bash 命令原文）—— 逐段 try，避免一处 TDZ 吃掉全部 */
+function blockTargetLabel() {
+  const pick = (fn) => { try { return fn() || ''; } catch { return ''; } };
+  return pick(() => relativePath)
+      || pick(() => filePath)
+      || pick(() => ((hookInput && hookInput.tool_input && hookInput.tool_input.command) || ''));
+}
+
+/**
+ * 迭代上下文（ACTIVE + {ID}.state.yaml）—— 口径与 qqbot-service.js 的 readIterationContext 同源。
+ * 目的：通知要回答「当前在处理什么」——迭代 · 阶段 · 待办步骤，而不是只有一句「被拦截」。
+ */
+function readIterContext() {
+  const out = { id: '', phase: '', pending: '' };
+  try {
+    const af = join(RUNTIME_DIR, 'ACTIVE');
+    let id = '';
+    try { id = String(readFileSync(af, 'utf-8') || '').replace(/^\uFEFF/, '').trim().split(/\r?\n/)[0].trim(); } catch { /* 无 ACTIVE */ }
+    if (!id || id === 'none') return out;
+    out.id = id;
+    let raw = '';
+    try { raw = readFileSync(join(RUNTIME_DIR, `${id}.state.yaml`), 'utf-8'); } catch { return out; }
+    const pm = raw.match(/^current_phase:\s*"?([^"\r\n]+?)"?\s*$/m);
+    if (pm) out.phase = pm[1];
+    const list = [];
+    let curId = '', curName = '';
+    for (const ln of raw.split(/\r?\n/)) {
+      const mi = ln.match(/^\s*-\s*id:\s*"([^"]+)"/);
+      if (mi) { curId = mi[1]; curName = ''; continue; }
+      const mn = ln.match(/^\s*name:\s*"([^"]+)"/);
+      if (mn) { curName = mn[1]; continue; }
+      if (/^\s*status:\s*"?pending"?\s*$/.test(ln) && curId) list.push(curId + (curName ? ' ' + curName : ''));
+    }
+    out.pending = list.slice(0, 3).join(' ｜ ');
+  } catch { /* 上下文缺失不影响拦截判定 */ }
+  return out;
+}
+
+/**
+ * ★ FIX-21：门禁事件留痕 —— 只写事件流，**不发通知**。
+ *   通知判定推迟到会话结束（`--stop-check`）：推理中自判门禁 / 已开闸 / 换路径绕过 ⇒ 一律不打扰。
+ */
+function recordGateEvent(kind, extra) {
+  try {
+    mkdirSync(dirname(GATE_EVENTS_FILE), { recursive: true });
+    const ev = Object.assign({
+      ts: Date.now(), kind,
+      tool: blockToolLabel(),
+      target: String(blockTargetLabel() || '').slice(0, 200),
+    }, extra || {});
+    appendFileSync(GATE_EVENTS_FILE, JSON.stringify(ev) + '\n', 'utf-8');
+  } catch { /* 留痕失败不影响门禁判定 */ }
+}
+
+/** 事件流 → { lastBlock, lastAllow }（各取时间最新的一条） */
+function readGateEvents() {
+  const out = { lastBlock: null, lastAllow: null };
+  try {
+    for (const ln of readFileSync(GATE_EVENTS_FILE, 'utf-8').split(/\r?\n/).filter(Boolean)) {
+      let ev = null;
+      try { ev = JSON.parse(ln); } catch { continue; }
+      if (!ev || !ev.ts) continue;
+      if (ev.kind === 'block') { if (!out.lastBlock || ev.ts >= out.lastBlock.ts) out.lastBlock = ev; }
+      else if (ev.kind === 'allow') { if (!out.lastAllow || ev.ts >= out.lastAllow.ts) out.lastAllow = ev; }
+    }
+  } catch { /* 无事件文件 = 未被拦截 */ }
+  return out;
+}
+
+/**
+ * 「会话是否确实被门禁阻断」的唯一判定（Stop 时调用）：
+ *   ① 存在 block；② block 之后没有 allow（没开闸、没换路径成功）；③ block 在会话末段时间窗内。
+ * 三者皆真才算真阻断 —— 满足用户口径「只有会话结束后确实有门禁阻断才通知」。
+ */
+function resolveSessionBlocked() {
+  const { lastBlock, lastAllow } = readGateEvents();
+  if (!lastBlock) return null;
+  if (lastAllow && lastAllow.ts >= lastBlock.ts) return null;
+  if (Date.now() - lastBlock.ts > STOP_GATE_WINDOW_MS) return null;
+  return lastBlock;
+}
+
+/** Stop 入口：node .codebuddy/hooks/gate-check.mjs --stop-check */
+async function runStopCheck() {
+  try {
+    const ev = resolveSessionBlocked();
+    if (!ev) {
+      audit('GATE_STOP_CHECK', 'no-real-block（无拦截 / 拦截后已放行 / 超窗）⇒ 不通知');
+      return;
+    }
+    // ① 测试态 / ② 手动开关 ⇒ 静默（仅审计留痕）
+    const silent = notifySilentReason();
+    if (silent) {
+      audit('QQ_NOTIFY_SKIP', `reason=${silent} :: ${String(ev.reason || '').slice(0, 80)}`);
+      return;
+    }
+    // ③ 去重：同指纹（原因+目标）窗口内只提醒一次
+    const fp = String(ev.reason || '') + '|' + String(ev.target || '');
+    const now = Date.now();
+    const stateFile = join(RUNTIME_DIR, 'qq-gate-notify.json');
+    let st = { last: 0, fp: '', fpAt: 0 };
+    try { st = Object.assign(st, JSON.parse(readFileSync(stateFile, 'utf-8'))); } catch { /* 无痕 */ }
+    if (st.fp === fp && st.fpAt && now - st.fpAt < QQ_NOTIFY_FP_WINDOW_MS) {
+      audit('QQ_NOTIFY_SKIP', 'dedupe 同指纹窗口内 :: ' + String(fp).slice(0, 80));
+      return;
+    }
+    try { writeFileSync(stateFile, JSON.stringify({ last: now, fp, fpAt: now }), 'utf-8'); } catch { /* 忽略 */ }
+    audit('GATE_STOP_CHECK', 'real-block ⇒ 通知 :: ' + String(fp).slice(0, 120));
+    sendGateNotify(ev);
+  } catch (e) {
+    audit('GATE_STOP_CHECK_ERR', String((e && e.message) || e));
+  }
+}
+
+/** 由「阻断事件」构造并发送门禁通知（不可逆 → ask 回路；其余 → 入队带 #N） */
+function sendGateNotify(ev) {
+  try {
+    const notifyPath = join(PROJECT_DIR, 'tools/qqbot/notify.qqbot.js');
+    if (!existsSync(notifyPath)) return;
+    const reason = ev.reason || '操作被门禁拦截';
+    const target = ev.target || '';
+
+    // ★ FIX-19 上下文：工具 / 目标 / 拦截时刻 / 迭代·阶段 / 待办步骤
+    const ctx = readIterContext();
+    const detail = String(ev.detail || '');
+    const payload = {
+      title: '会话结束仍被门禁阻断',
+      status: reason,
+      rows: [
+        ['工具', ev.tool || '?'],
+        ['目标', target ? String(target).slice(0, 120) : '(未提供)'],
+        ['拦截于', new Date(ev.ts || Date.now()).toLocaleString('zh-CN', { hour12: false })],
+        ['迭代', ctx.id ? `${ctx.id}（阶段 ${ctx.phase || '?'}）` : '(无活跃迭代)'],
+        ['待办', ctx.pending || '(state.yaml 未读到 pending 步骤)'],
+        ...(detail ? [['详情', detail.slice(0, 120)]] : []),
+      ],
+      next: '本条在「会话结束」时判定：此前所有拦截若已被放行/绕开均不计。处理 = 开逃生口或切换阶段；QQ 回「确认#N」仅登记意图，默认只回执不执行',
+      prompt: '门禁阻断（会话结束时仍未放行）：' + reason,   // 降级用；notify-enqueue.js 会用 rows 渲染成多行
+      kind: 'gate',
+    };
+    const msg = '门禁阻断：' + reason;   // 仅用于审计留痕 / 解析降级
+
+    // ★ FIX-20：不可逆动作（提交/推送/发布/写库/删除）⇒ **强制走 ask.js 决策回路**（必带 #N，
+    //   超时 2h，且不会自动执行）—— 此前只靠 handoffPrompt 里的文字约定，无机制保障。
+    const IRREVERSIBLE_RE = /svn\s+commit|git\s+push|git\s+commit|run_ddl|drop\s+table|truncate\s+table|deploy|部署|发布|提交推送|删除文件/i;
+    if (IRREVERSIBLE_RE.test(reason + ' ' + String(target || '') + ' ' + detail)) {
+      const askPath = join(PROJECT_DIR, 'tools/qqbot/ask.js');
+      if (existsSync(askPath)) {
+        const askPrompt = [
+          '【不可逆操作 · 需你本人确认】',
+          String(reason).slice(0, 200),
+          '工具：' + (ev.tool || '?'),
+          '目标：' + (target ? String(target).slice(0, 120) : '(未提供)'),
+          '迭代：' + (ctx.id ? `${ctx.id}（阶段 ${ctx.phase || '?'}）` : '(无活跃迭代)'),
+          '',
+          '此类操作不会自动执行，也不会被 headless 代跑；请在 IDE 内确认，或回「确认#N」登记意图。',
+        ].join('\n');
+        const askChild = spawn(process.execPath,
+          [askPath, '--prompt', askPrompt, '--kind', 'irreversible', '--timeoutSec', '7200'],
+          { detached: true, stdio: 'ignore', windowsHide: true });
+        askChild.unref();
+        audit('QQ_ASK_IRREVERSIBLE', msg + ` | 工具=${ev.tool || '?'} 目标=${target || '-'}`);
+        return;
+      }
+    }
+    // 优先送「合并服务」入队（带 #id，可在 QQ 回「确认#N」）；
+    // 服务不可用时 notify-enqueue.js 自身会回退为直接发送，原能力不受影响。
+    const enqueuePath = join(PROJECT_DIR, 'tools/qqbot/notify-enqueue.js');
+    const notifyTarget = existsSync(enqueuePath) ? enqueuePath : notifyPath;
+    // detached + unref + stdio:ignore → 父进程 exit(2) 后子进程仍独立把 QQ 发出去
+    const child = spawn(process.execPath, [notifyTarget, '--json', JSON.stringify(payload)], {
+      detached: true, stdio: 'ignore', windowsHide: true,
+    });
+    child.unref();
+    audit('QQ_NOTIFY', msg + ` | 工具=${ev.tool || '?'} 目标=${target || '-'}`);
+  } catch (e) {
+    audit('QQ_NOTIFY_ERR', String((e && e.message) || e));
+  }
+}
+
 // ── 阻止输出 ───────────────────────────────────────────
 function block(...lines) {
   audit('BLOCK', lines.join(' | '));   // ★ FIX-9：拦截留痕（原仅 BYPASS 有记录）
+  // ★ FIX-21：此处**只留痕不通知** —— 是否真的「阻断了会话」由 Stop 时 --stop-check 判定。
+  recordGateEvent('block', {
+    reason: String(lines[0] || '操作被门禁拦截').slice(0, 200),
+    detail: String(lines.slice(1).join(' ')).slice(0, 300),
+  });
   const box = [
     '╔══════════════════════════════════════════════════╗',
     '║  🛑 修改门禁：操作已被拦截                        ║',

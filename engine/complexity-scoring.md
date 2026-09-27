@@ -138,6 +138,7 @@ thresholds:
 | step-3x-cross-review | 技术方案L1/L2交叉审查 | N/A | mandatory=true | mandatory=true |
 | step-1-5x-cross-review | 任务清单交叉审查 | N/A | mandatory=true | mandatory=true |
 | step-2-5-kb-refresh | 知识库刷新（06 归档前无条件） | mandatory=true | mandatory=true | mandatory=true |
+| step-fix-1-register | 缺陷修复窗口（step-fix-2-code → step-fix-3-build → step-fix-4-regress → step-fix-5-reclose，按需触发） | mandatory=false | mandatory=false | mandatory=false |
 
 > ★ **步骤 ID 以 `phase-steps.md` 为准**（本表原写 `step-1x-cross-review`，与 2026-07-18 v1.2 更名后的
 > `step-1x-review` 不一致，已统一）。
