@@ -140,6 +140,13 @@ Agent 必须在 step-1-5-review 完成后，输出以下信息并等待用户确
 
 **交付标准**：用户明确表示"任务清单通过" / "确认" / "开始编码"；**清单版式自检 ERROR 0**（`python scripts/doc_lint.py <清单>`，含 `## 目录` / 相对链接 / Mermaid）。
 
+**★ 等待方式（三选一，判据与模板见 `tools/qqbot/README.md` 方案 A/B/D）**：
+- 用户在工位（通常 <5 分钟）→ **A**：`ask.js` 登记后自轮询 `wait-answer.ps1`（分片 ≤5 分钟）；
+- 用户离开工位、**本会话存活** → **D**：派 waiter 成员代等（一轮 ≤3 片 × 5 分钟 = 15 分钟；等待期主 Agent 零 token，QQ 回复经 waiter 唤醒本会话）；
+- 本会话已停 → **B**：headless 接管（新会话 + handoff 传上下文）。
+- ★ **铁律**：登记必须用 `ask.js`（输出 `#N` + `#ts`，可回复）；**禁止**只发单向通知却在文案里写"等你确认"。
+  等待期用 `phase_status: blocked` 标注（恢复方据此区分"等待中"与"未开始"，避免重复执行）。
+
 **禁止行为**：
 - ❌ Agent 在用户未确认的情况下直接创建 Team 并派发任务
 - ❌ 自动审查完成后就跳到 step-3-team-code
@@ -174,6 +181,10 @@ Start-Process powershell -WindowStyle Hidden -ArgumentList @(
 > ★ **崩溃防护强制**（宿主终止会导致成员与回传产出一并丢失）：
 >   同批并行 ≤3、单成员上下文 ≤15 万 token、每个成员 prompt 必含【产出落盘】段
 >   （`engine/team-agent-strategy.md` §二维度五 / §七）；宿主终止后走 §八 崩溃恢复协议。
+> ★ **慢成员预防强制**（2026-09-29 实证：任务过大 → msgs=130 轮次爆炸 + 上下文膨胀，非 EH 饥饿）：
+>   派发前落实拆小（2~3 文件/成员）+ prompt 必含【任务范围与报告上限】段（只读清单内文件、报告 ≤16KB）
+>   （`engine/team-agent-strategy.md` §九）；成员久无响应**先走 §九 判别清单定性**再干预，勿误判为宿主崩溃；
+>   收尾对账 msgs（>50）与报告大小（>16KB），超标项回写 `project/lessons-learned.md`。
 
 1. 根据任务依赖图，按分组批量 task 派发 Team Agent（同批 ≤3）
 2. 每个 Team Agent 每完成一个文件，**先增量落盘**到 `.codebuddy/temp/team-out/<成员名>.md`，
@@ -183,6 +194,10 @@ Start-Process powershell -WindowStyle Hidden -ArgumentList @(
 ### Step 2.5：批量变更预览与确认（★ 强制）
 
 > 所有 Team Agent 完成后，在写入任何文件之前执行。
+>
+> ★ **"完成"判定只认磁盘证据**（2026-09-29 登记的平台缺陷防线）：主 agent 收尾时子成员可能
+> 仍在执行但界面显示"已完成"——以 team-out 落盘标记（`TEAM-OUT-COMPLETE`）+ 目标文件
+> LastWriteTime 为准，界面成员状态仅作参考（`engine/team-agent-strategy.md` §九）。
 
 主 Agent 输出统一变更预览：
 
@@ -197,6 +212,9 @@ Start-Process powershell -WindowStyle Hidden -ArgumentList @(
 ```
 
 **交付标准**：用户明确确认后，主 Agent 批量写入所有文件（此后的完整性校验/编译验证等继续按现有流程执行）。
+
+> ★ **等待方式**：同 Step 1.6（A 自轮询 / D 成员代等 / B headless；判据与 waiter 模板见 `tools/qqbot/README.md` 方案 A/B/D）。
+> 本步是**写入前最后一道确认**、窗口通常最长 ⇒ 人已离位且本会话存活时优先 **D（成员代等）**。
 
 > ★ **主 Agent 批量写入必须原子写**（2026-09-24 新增）
 >
