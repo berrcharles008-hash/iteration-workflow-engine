@@ -18,9 +18,20 @@
 - ITERATIONS_DIR  = {PROJECT_ROOT}/{paths.docs_iterations}
 - SPECS_DIR       = {PROJECT_ROOT}/{paths.specs_dir}
 - KB_DIR          = {PROJECT_ROOT}/{paths.kb_dir}
+- IDE             = {当前宿主 IDE 目录：CodeBuddy → .codebuddy；Claude Code → .claude}
 ```
 
 > 后续所有步骤读取 engine/ 或 project/ 文件时，Agent 在内存中将 `{{占位符}}` 替换为以上具体值（变量注入协议详见 `engine/template-injection.md`），**绝不输出占位符字符串本身**。`{{KB_DIR}}` 指向活文档知识库（L1/L2/L3），与冻结态 `{{SPECS_DIR}}` 分离。若 `{{KB_DIR}}` 下的知识库文件不存在，可执行 `python scripts/gen-knowledge-base.py` 生成。
+
+**★ `{IDE}` 单花括号占位符解析约定（2026-09-29 新增；引擎文档 `{IDE}/…` 一律按此解析）**：
+
+1. `{IDE}` = 当前宿主 IDE 目录（= 上表 `IDE` 值）。取值表本轮承诺 **CodeBuddy `.codebuddy` / Claude Code `.claude`** 两值；
+   Cursor `.cursor` / Codex `.codex` 已被 hook 识别，但**不承诺**其引擎副本存在。
+2. 实现层路径白名单**必须逐宿主枚举**（`hooks/gate-check.mjs` 的数组字面量），故**不变量化**；`{IDE}` 仅用于文档指代，
+   读到「实现未跟随文档」时按本理解读，不得据此改 hook。
+3. ★ **派发时主 Agent 必须把 `{IDE}` 解析为实际目录后再嵌入成员 prompt** —— 成员 prompt 内**不得残留字面量**
+   （成员无解析义务，残留会导致照字面创建目录）。
+4. 同一文件内**禁止**与 `{{IDE_DIR}}` 混用；后者仅限脚本渲染的模板（渲染实现见 `scripts/setup-gate.py`）。
 
 ---
 
@@ -87,7 +98,7 @@
 2. 读取 .codebuddy/skills/iteration-workflow/runtime/ACTIVE
 3. 双文件都存在：
    ├── 内容一致 → 静默通过
-   └── 内容不一致 → 输出警告，以 .codebuddy 为准
+   └── 内容不一致 → 输出警告，以 {IDE}（当前宿主目录）为准
 4. 仅 .codebuddy 存在：
    └── 同步到 .claude 端
 5. 仅 .claude 存在：
@@ -101,7 +112,7 @@
 ⚠️ ACTIVE 指针双副本不一致：
   .claude/runtime/ACTIVE     → {内容}
   .codebuddy/runtime/ACTIVE  → {内容}
-  已以 .codebuddy 为准，请检查 sync 脚本是否正常运行。
+  已以 {IDE}（当前宿主目录）为准，请检查 sync 脚本是否正常运行。
 ```
 
 > **变更记录（2026-07-23 S4.1）**：新增 Step B.3 ACTIVE 双副本一致性校验，不阻塞流程。
@@ -297,4 +308,4 @@ Agent 根据复杂度选择了 Lite 模板（文件名从映射表获取，如 "
 - **phase-04**：进入阶段→全文读一次；缺陷修复→step-fix-* 节
 - **complexity-scoring**：新迭代 Step C→「一、复杂度评估算法」（含 1.2 评分映射、1.3 复杂度升降级机制）
 
-> ★ 映射节锚机械核验：`python .codebuddy/skills/iteration-workflow/scripts/check-s1-anchors.py`（逐锚 UTF-8 grep，MISS=exit 1，WARN=跨文件引用不阻断；SLIM-5 ST-4 新增，本行为其 A1 引用豁免依据）。
+> ★ 映射节锚机械核验：`python {IDE}/skills/iteration-workflow/scripts/check-s1-anchors.py`（逐锚 UTF-8 grep，MISS=exit 1，WARN=跨文件引用不阻断；SLIM-5 ST-4 新增，本行为其 A1 引用豁免依据）。

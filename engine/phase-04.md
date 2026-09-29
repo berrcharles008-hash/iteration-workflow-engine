@@ -171,10 +171,12 @@ Start-Process powershell -WindowStyle Hidden -ArgumentList @(
   '-NoProfile','-ExecutionPolicy','Bypass','-File','tools\eh-monitor.ps1','-DurationMin','180')
 ```
 
-- 产物（`.codebuddy/temp/eh-monitor/`）：`samples-<ts>.csv` 进程 CPU/内存曲线、
+- ★ **[CodeBuddy-only]** 本 Step 2.0 的采样器为 CodeBuddy 平台专属产物；
+  非 CodeBuddy 宿主（Claude Code 等）**静默跳过**本步，其余派发纪律不受影响。
+- 产物（`{IDE}/temp/eh-monitor/`）：`samples-<ts>.csv` 进程 CPU/内存曲线、
   `events-<ts>.log` 结构化事件（HostStarvation / EH 冷启动 / hook 超时 / RSS）、
   `profiles/` 自动抢救的 cpu profile
-- 提前停止：`New-Item .codebuddy/temp/eh-monitor/.stop -Force`（脚本启动时会清残留标记）
+- 提前停止：`New-Item {IDE}/temp/eh-monitor/.stop -Force`（脚本启动时会清残留标记）
 - **已实测**（2026-09-24 16:07）：该启动命令**不被门禁拦截**；
   采样显示常驻 40 个 CodeBuddy 进程、合计 **8.5GB** —— 系统级内存压力背景
 - 崩溃发生后：把 `profiles/` 与 `events-*.log` 交给分析方，并回写 `project/lessons-learned.md`
@@ -184,24 +186,29 @@ Start-Process powershell -WindowStyle Hidden -ArgumentList @(
 > ★ Team Agent 仅生成**业务代码**不写入业务文件，写入由主 Agent 统一执行。
 > ★ **崩溃防护强制**（宿主终止会导致成员与回传产出一并丢失）：
 >   同批并行 ≤3、单成员上下文 ≤15 万 token、每个成员 prompt 必含【产出落盘】段
->   （`engine/team-agent-strategy.md` §二维度五 / §七）；宿主终止后走 §八 崩溃恢复协议。
+>   （`engine/team-agent-strategy.md` §二维度五 / §七）；宿主终止后走 §八 宿主中断恢复。
 > ★ **慢成员预防强制**（2026-09-29 实证：任务过大 → msgs=130 轮次爆炸 + 上下文膨胀，非 EH 饥饿）：
 >   派发前落实拆小（2~3 文件/成员）+ prompt 必含【任务范围与报告上限】段（只读清单内文件、报告 ≤16KB）
 >   （`engine/team-agent-strategy.md` §九）；成员久无响应**先走 §九 判别清单定性**再干预，勿误判为宿主崩溃；
 >   收尾对账 msgs（>50）与报告大小（>16KB），超标项回写 `project/lessons-learned.md`。
 
 1. 根据任务依赖图，按分组批量 task 派发 Team Agent（同批 ≤3）
-2. 每个 Team Agent 每完成一个文件，**先增量落盘**到 `.codebuddy/temp/team-out/<成员名>.md`，
-   再输出代码内容（不调用 write_file/replace_in_file 写业务文件）
+2. 每个 Team Agent 每完成一个文件，**先增量落盘**到 `{IDE}/temp/team-out/<成员名>.md`，
+   再输出代码内容（**默认**不调用 write_file/replace_in_file 写业务文件）
+   ★ 白名单试点批次例外（2026-09-29 新增，**默认关闭**）：仅**派发时显式列出的白名单文件**
+   可直写（`mode=acceptEdits`），其余仍走本默认；白名单须**双写**（`engine/team-agent-strategy.md` §七
+   与本 Step 派发模板各一份），**越界即回收白名单**。
 3. 主 Agent 收集所有 Agent 输出，生成统一变更预览
 
 ### Step 2.5：批量变更预览与确认（★ 强制）
 
-> 所有 Team Agent 完成后，在写入任何文件之前执行。
+> 所有 Team Agent 完成后，在写入**非白名单**文件之前执行。
 >
-> ★ **"完成"判定只认磁盘证据**（2026-09-29 登记的平台缺陷防线）：主 agent 收尾时子成员可能
-> 仍在执行但界面显示"已完成"——以 team-out 落盘标记（`TEAM-OUT-COMPLETE`）+ 目标文件
-> LastWriteTime 为准，界面成员状态仅作参考（`engine/team-agent-strategy.md` §九）。
+> ★ **"完成"= 双层判据**（2026-09-29 修订；`engine/team-agent-strategy.md` §三 Step 6 / §九）：
+> ① **写入已停止**：team-out 落盘标记（`TEAM-OUT-COMPLETE`）+ 目标文件 LastWriteTime
+> （后者在直写模式下降级为「在产出 vs 空转」判别）；
+> ② **产出正确**：`svn diff` 真实 diff 核对（白名单直写批次以②为准）。
+> 界面成员状态仅作参考。
 
 主 Agent 输出统一变更预览：
 
@@ -215,7 +222,8 @@ Start-Process powershell -WindowStyle Hidden -ArgumentList @(
 | front-end/src/pages/foo.vue | 替换 | ±18 | 修改表单提交逻辑 |
 ```
 
-**交付标准**：用户明确确认后，主 Agent 批量写入所有文件（此后的完整性校验/编译验证等继续按现有流程执行）。
+**交付标准**：用户明确确认后，主 Agent 批量写入**非白名单**文件；**白名单直写文件**以 ② 层
+`svn diff` 核对确认（此后的完整性校验/编译验证等继续按现有流程执行）。
 
 > ★ **等待方式**：同 Step 1.6（A 自轮询 / D 成员代等 / B headless；判据与 waiter 模板见 `tools/qqbot/README.md` 方案 A/B/D）。
 > 本步是**写入前最后一道确认**、窗口通常最长 ⇒ 人已离位且本会话存活时优先 **D（成员代等）**。
@@ -228,7 +236,7 @@ Start-Process powershell -WindowStyle Hidden -ArgumentList @(
 > **写法**（逐个文件）：`写入 <目标>.tmp` → `Move-Item <目标>.tmp <目标> -Force`，
 > 全部完成后核对无 `.tmp` 残留。
 >
-> **实测**（2026-09-24）：`.codebuddy/temp/**` 与业务目录（`tools/`）下的
+> **实测**（2026-09-24）：`{IDE}/temp/**` 与业务目录（`tools/`）下的
 > `Move-Item` / `Copy-Item` / `Remove-Item *.tmp|*.bak` **均未被门禁拦截**，可直接用。
 
 ### Step 3：Agent 完成后更新清单
@@ -326,10 +334,10 @@ complexity_actual_note: "04 实际新增 4 个文件、1 个接口，与 03 复�
 
 | 动作 | 命令 / 位置 |
 |------|------------|
-| 停止采样 | `New-Item .codebuddy/temp/eh-monitor/.stop -Force`（脚本到时亦自动退出） |
-| 取回事件日志 | `.codebuddy/temp/eh-monitor/events-*.log`（HostStarvation / EH 冷启动 / hook 超时 / RSS） |
-| 取回资源曲线 | `.codebuddy/temp/eh-monitor/samples-*.csv` |
-| 取回 cpu profile | `.codebuddy/temp/eh-monitor/profiles/`（有则交分析方） |
+| 停止采样 | `New-Item {IDE}/temp/eh-monitor/.stop -Force`（脚本到时亦自动退出） |
+| 取回事件日志 | `{IDE}/temp/eh-monitor/events-*.log`（HostStarvation / EH 冷启动 / hook 超时 / RSS） |
+| 取回资源曲线 | `{IDE}/temp/eh-monitor/samples-*.csv` |
+| 取回 cpu profile | `{IDE}/temp/eh-monitor/profiles/`（有则交分析方） |
 | 记录重派开销 | 本轮曾发生宿主终止时：记录「重派耗时 vs 首次耗时」实测值 |
 
 ★ 本轮若发生宿主终止：把 `events-*.log` 关键片段 + 重派开销**实测值**回写

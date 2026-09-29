@@ -15,9 +15,9 @@
 | **S0** | 无工具上下文的防御放行 | 任意 | 任意 | — | **ALLOW** | stdin 空 / JSON 解析失败 / 非写入工具（`read_file`等）/ 无 filePath。exit 0 |
 | **S1** | 正常开发窗口 | ✅ in_progress | 04 | `front-end/src/pages/foo.vue` | **ALLOW** | 04 阶段=合法写码窗口，hook 无条件放行全部写入 |
 | **S2** | 无活跃迭代 | ❌ none | — | `back-end/.../SomeBLL.cs` | **BLOCK** | ACTIVE=none → "当前无活跃迭代" |
-| **S3** | 设计阶段写豁免目录 | ✅ in_progress | 01/02/03 | `docs/iterations/2026-07-23-020/需求分析.md` | **ALLOW** | EXEMPT_PATHS 匹配：`docs/iterations/`、`.codebuddy/skills/`、`.codebuddy/memory/` |
+| **S3** | 设计阶段写豁免目录 | ✅ in_progress | 01/02/03 | `docs/iterations/2026-07-23-020/需求分析.md` | **ALLOW** | EXEMPT_PATHS 匹配：`docs/iterations/`、`{IDE}/skills/`、`{IDE}/memory/` |
 | **S4** | 设计阶段越权写业务代码 | ✅ in_progress | 01/02/03 | `back-end/.../Entity.cs` | **BLOCK** | 非 04 阶段 + 非豁免路径 → "仅允许修改迭代产出目录" |
-| **S5** | GATE_BYPASS 逃生口 | 任意 | 任意 | 任意 | **ALLOW** | 环境变量 `GATE_BYPASS=1` 或 `.codebuddy/hooks/.gate-bypass` 标记文件存在。exit 0，先于所有门禁检查 |
+| **S5** | GATE_BYPASS 逃生口 | 任意 | 任意 | 任意 | **ALLOW** | 环境变量 `GATE_BYPASS=1` 或 `{IDE}/hooks/.gate-bypass` 标记文件存在。exit 0，先于所有门禁检查 |
 | **S6a** | ACTIVE 指向已完结迭代 | ✅ 但 completed/abandoned | — | 任意 | **BLOCK** | state.yaml 中无 `current_phase: "04"` 匹配 → "无法读取 current_phase"。**自修复由 prompt 层处理**（gate-protocol.md §一 fallback 扫描→修复 ACTIVE="none"） |
 | **S6b** | ACTIVE 指向缺失的 state.yaml | ✅ 但文件不存在 | — | 任意 | **BLOCK** | `existsSync(stateFile)` = false → "状态文件丢失" |
 | **S7** | 开发窗口已关闭 | ✅ in_progress | 05/06/07 | `front-end/src/...` | **BLOCK** | 非 01-04 阶段 → "当前阶段 {N} 不允许进行文件写入操作" |

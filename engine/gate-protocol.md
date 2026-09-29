@@ -593,7 +593,7 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
 |------|------|
 | 存储 | `$RUNTIME_DIR/write-claims.jsonl`（append-only；读取仅取末 800 行） |
 | 键 | `(session_id, 项目相对路径)`；`session_id` 取 stdin `session_id` ＞ `CODEBUDDY_SESSION_ID` ＞ `transcript_path` 的 convId 段（三源兜底） |
-| 范围 | 写类工具（`Write` / `Edit`）**全项目**；白名单排除：`runtime/`、`{IDE}/memory/`、`.codebuddy/temp/`、`node_modules|dist|obj|bin|.vs`、`*.log|tmp|bak` |
+| 范围 | 写类工具（`Write` / `Edit`）**全项目**；白名单排除：`runtime/`、`{IDE}/memory/`、`{IDE}/temp/`、`node_modules|dist|obj|bin|.vs`、`*.log|tmp|bak` |
 | 拦 | 他会话在 **TTL 10min** 内写过同一文件 ⇒ 阻止（exit 2），提示先 `read_file` 重读 |
 | 放行 | 同会话 · 声明过期 · **同 `(sid,路径)` 在 GRACE 5min 内重试**（「拦一次」语义 —— 防对方会话崩溃后死锁） |
 | 关闭 | `CONC_LOCK=0|off` 或标记文件 `hooks/.conc-off` |

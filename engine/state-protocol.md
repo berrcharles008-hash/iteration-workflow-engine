@@ -336,7 +336,7 @@ rollback_checks:
 ### 3.3 Schema 强制校验规则（★ 写入时必须执行）
 
 > Agent 每次写入 state.yaml 时，必须在写入完成后立即执行以下校验，确保格式合规。
-> ★ 已脚本化（SLIM-4 · 2026-09-25）：写入后执行 `python .codebuddy/skills/iteration-workflow/scripts/validate-state.py`（省略路径 = 经 ACTIVE 解析最新 in_progress state；脚本 ERR ⇒ 按下方自检 3 步回退，WARN 不回退）。
+> ★ 已脚本化（SLIM-4 · 2026-09-25）：写入后执行 `python {IDE}/skills/iteration-workflow/scripts/validate-state.py`（省略路径 = 经 ACTIVE 解析最新 in_progress state；脚本 ERR ⇒ 按下方自检 3 步回退，WARN 不回退）。
 > 脚本与本文规则不一致时**以本文为准**并登记 AUDIT；★ 双向对账项（05 报告 vs `defects[].id`）不在脚本覆盖内，仍由 Agent 执行 ⇒ **脚本 exit 0 ≠ 本节全过**。
 
 **必填字段检查**：以下字段必须在 state.yaml 中存在：
