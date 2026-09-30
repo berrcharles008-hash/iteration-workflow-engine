@@ -319,6 +319,47 @@ def a4_refs():
         ok('A4', '引擎层跨文件引用目标均存在（扫描 %d 个文件）' % len(pool))
 
 
+# ── A4b {IDE} 类令牌近形笔误（★ E-6，2026-09-30-001）────────
+# 背景：`{IDE}`（单花括号 = 运行时变量）无机械校验，写错不报错；渲染层 `{{IDE_DIR}}` 须双花括号。
+# 策略：只对**已知变量集的近形**报 WARN（不做全量白名单，避免误伤模板占位符如 {角色名}/{业务名}）。
+VAR_TYPO_PATTERNS = [
+    (re.compile(r'(?<!\{)\{IDE_DIR\}(?!\})'), '{IDE_DIR} 单花括号 —— 运行时变量应为 {IDE}；渲染层应为 {{IDE_DIR}}'),
+    (re.compile(r'(?<!\{)\{IDEDIR\}(?!\})'), '{IDEDIR} —— 疑似 {IDE_DIR} 笔误'),
+    # 注：`{ID}` 已**有意排除** —— 流程图中作通用占位符（如 `runtime/{ID}.state.yaml`）属合法写法，
+    #     逐处判定为 WARN 会淹没信号（实测 11 处全为流程图用法）；只保留无歧义的近形。
+    (re.compile(r'(?<!\{)\{ITERATIONID\}(?!\})'), '{ITERATIONID} —— 疑似 {ITERATION_ID} 笔误'),
+    (re.compile(r'(?<!\{)\{PROJECTROOT\}(?!\})'), '{PROJECTROOT} —— 疑似 {PROJECT_ROOT} 笔误'),
+    (re.compile(r'(?<!\{)\{KBDIR\}(?!\})'), '{KBDIR} —— 疑似 {KB_DIR} 笔误'),
+]
+
+
+def a4b_var_typos():
+    hits = []
+    scanned = 0
+    for dirpath, _dirs, files in os.walk(os.path.join(SKILL_ROOT, 'engine')):
+        for fn in files:
+            if not fn.endswith('.md'):
+                continue
+            p = os.path.join(dirpath, fn)
+            try:
+                txt = open(p, encoding='utf-8').read()
+            except Exception:
+                continue
+            scanned += 1
+            for rx, desc in VAR_TYPO_PATTERNS:
+                for m in rx.finditer(txt):
+                    line = txt.count('\n', 0, m.start()) + 1
+                    rel = os.path.relpath(p, SKILL_ROOT).replace('\\', '/')
+                    hits.append('%s:%d %s' % (rel, line, desc))
+    if hits:
+        for h in hits[:10]:
+            warn('A4b', h)
+        if len(hits) > 10:
+            warn('A4b', '另有 %d 处（略）' % (len(hits) - 10))
+    else:
+        ok('A4b', '{IDE}/{{IDE_DIR}} 类令牌无近形笔误（扫描 %d 个 engine md）' % scanned)
+
+
 # ── A5 治理文档时效 ─────────────────────────────────────────
 def a5_gov_docs():
     if not GOV_DOCS:
@@ -418,7 +459,7 @@ def main():
     print('')
 
     for name, fn in (('A1', a1_orphan), ('A2', a2_step_ids), ('A3', a3_doc_names),
-                     ('A4', a4_refs), ('A5', a5_gov_docs)):
+                     ('A4', a4_refs), ('A4b', a4b_var_typos), ('A5', a5_gov_docs)):
         try:
             fn()
         except Exception as e:

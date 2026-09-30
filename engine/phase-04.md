@@ -150,6 +150,13 @@ Agent 必须在 step-1-5-review 完成后，输出以下信息并等待用户确
 - ★ **等待时限与退化（2026-09-29 新增）**：等待**至多一轮**；片满仍未收到回复 ⇒ **停止等待**（不再续派），
   保留 `blocked` 标注并在 `pause_reason` 写明"等待用户超时"，此后交既有静置通道按需接管；
   ★ 等待项**不得绑定"回复即起新会话"**——否则回复唤醒本会话的同时会另起一个干活者（双写撞车）。
+- ★ **跨节点 invariant（2026-09-30 新增 · QQ-WAKE-1）**：**每个新回合开工的第一动作** = 跑
+  `node tools/qqbot/poll-answer.js` 读回**未消费答复**（判定 = 答案文件无 `consumedAt`；`--json` 可编程消费）；
+  适用于 Step 1.6 / Step 2.5 / Step E 及 **§八 宿主中断恢复后重开回合**等全部"等待后重开"路径（**细则唯一来源 = 本节**）。
+- ★ **能力边界（2026-09-30 新增）**：读回 ≠ 唤醒会话 ≠ 自动执行 —— 答复**不唤醒**已静置会话；
+  答复若属**不可逆动作**（提交/推送/发布/删除），仍须走 FIX-20 决策回路，**不得**因"读到了答复"就自动执行。
+- ★ **消费动作（2026-09-30 新增）**：处理完毕跑 `node tools/qqbot/poll-answer.js --consume`（写 `consumedAt`，幂等）；
+  **不得**与 `wait-answer.ps1 -SinceIso` 同回合混用（`--consume` 会前移 mtime ⇒ 已消费答复会被误判新鲜；约定见 `tools/qqbot/README.md`）。
 
 **禁止行为**：
 - ❌ Agent 在用户未确认的情况下直接创建 Team 并派发任务
@@ -183,7 +190,7 @@ Start-Process powershell -WindowStyle Hidden -ArgumentList @(
 
 > 派发前读取 `project/agent-prompt-examples.md`，按模板组装 Agent prompt。
 > 并行决策算法见 `engine/team-agent-strategy.md`。
-> ★ Team Agent 仅生成**业务代码**不写入业务文件，写入由主 Agent 统一执行。
+> ★ Team Agent **默认**仅生成**业务代码**不写入业务文件，写入由主 Agent 统一执行（★ 白名单试点例外见下方 Step 2）。
 > ★ **崩溃防护强制**（宿主终止会导致成员与回传产出一并丢失）：
 >   同批并行 ≤3、单成员上下文 ≤15 万 token、每个成员 prompt 必含【产出落盘】段
 >   （`engine/team-agent-strategy.md` §二维度五 / §七）；宿主终止后走 §八 宿主中断恢复。
@@ -198,6 +205,10 @@ Start-Process powershell -WindowStyle Hidden -ArgumentList @(
    ★ 白名单试点批次例外（2026-09-29 新增，**默认关闭**）：仅**派发时显式列出的白名单文件**
    可直写（`mode=acceptEdits`），其余仍走本默认；白名单须**双写**（`engine/team-agent-strategy.md` §七
    与本 Step 派发模板各一份），**越界即回收白名单**。
+   ★ **门禁层（2026-09-30 新增 · E-3，细则唯一来源 = `team-agent-strategy.md` §七 门禁层硬化条）**：
+   白名单须同步写入 `runtime/{ITERATION_ID}.state.yaml` 的 `dispatch_whitelist:` 段（条目 `- "路径"`；**双副本**：`.codebuddy` 为源、`.claude` 为判定源）；
+   门禁 **04 阶段四档**处置（无段=关闭 / ≥1=启用 / 空数组 & 解析异常 = 留痕放行）；覆盖**仅写类工具**（Bash/Delete 不在其列）；
+   **派发前置判据**：解析条数 ≥1，否则不得派发；**清除时点 = 04 收口**（删段 + 双副本同步）。
 3. 主 Agent 收集所有 Agent 输出，生成统一变更预览
 
 ### Step 2.5：批量变更预览与确认（★ 强制）

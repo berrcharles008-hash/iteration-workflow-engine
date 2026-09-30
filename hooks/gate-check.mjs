@@ -360,6 +360,11 @@ const CONC_EXCLUDE_RES = [
   /(?:^|\/)runtime\//,
   /(?:^|\/)\.codebuddy\/memory\//,
   /(?:^|\/)\.claude\/memory\//,
+  // ★ E-4（2026-09-30-001）：补齐 .cursor/.codex（与 META_WRITE_EXEMPT_PATHS 对齐）
+  /(?:^|\/)\.cursor\/memory\//,
+  /(?:^|\/)\.codex\/memory\//,
+  // ★ E-4：外置「项目记忆」—— 与 META_WRITE_EXEMPT_RE 逐字一致（含 i；concInScope 不做小写归一）
+  /(?:^|\/)\.(?:codebuddy|claude|cursor|codex)\/projects\/[^/]+\/memory\//i,
   /(?:^|\/)\.codebuddy\/temp\//,
   /(?:^|\/)(?:node_modules|dist|obj|bin|\.vs)\//,
   /\.(?:log|tmp|bak)$/i,
@@ -586,12 +591,79 @@ function splitCommandChain(cmd) {
 const CMD_WRAPPER_PREFIX_RE = /^(?:(?:cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh(?:\.exe)?)\s+(?:\/[a-z]\s+|-\w+\s+)*)/i;
 const SHORT_ALIAS_AT_CMD_POS_RE = /^(?:ni|md|mi|ri|rd|rni)(?=\s|$)/i;
 
-/** 单个命令段是否危险（命令位短别名 或 危险模式 或 解释器内联） */
+// ── ★ E-2（迭代 2026-09-30-001）：git 变更类动词的**词元化**判定 ──
+// 病根：DANGEROUS_CMD_PATTERNS 的 git 行要求动词**紧跟** `git` ⇒ `git -C <dir> commit`
+//       静默放行（2026-09-29 回流提交实命中）。评审实测 ≥8 类前置全局选项可继续挡住动词
+//       ⇒ 扫描式跳过全量前置选项 + 未知选项结构兜底 fail-closed（宁拦只读，不漏变更）。
+const GIT_BOOL_OPTS = new Set([
+  '-p', '--paginate', '-P', '--no-pager', '--bare', '--no-replace-objects',
+  '--no-lazy-fetch', '--no-optional-locks', '--no-advice',
+  '--literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs', '--icase-pathspecs',
+  '--html-path', '--man-path', '--info-path', '-v', '--version', '-h', '--help',
+]);
+const GIT_VALUE_OPTS = new Set([
+  '-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--exec-path',
+]);
+const GIT_CHANGE_VERBS = new Set(['commit', 'push', 'reset', 'rebase', 'merge', 'cherry-pick', 'stash']);
+
+/** 引号感知分词：`"a b"` / 'a b' 视为单 token（含空格的选项值） */
+function tokenizeQuoteAware(s) {
+  const out = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m;
+  while ((m = re.exec(String(s || ''))) !== null) {
+    out.push(m[1] !== undefined ? m[1] : (m[2] !== undefined ? m[2] : m[3]));
+  }
+  return out;
+}
+
+/**
+ * 段内是否为 git 变更类命令（词元判定）。hit=true 才危险。
+ * suspect=true = 命中未知全局选项 ⇒ 结构兜底 fail-closed（调用方可留痕 AUDIT_SUSPECT）。
+ */
+function gitChangeVerb(seg) {
+  const s = String(seg || '').replace(CMD_WRAPPER_PREFIX_RE, ' ').trim();
+  const tokens = tokenizeQuoteAware(s);
+  const gi = tokens.findIndex((t) => /^git(?:\.exe)?$/i.test(t));
+  if (gi < 0) return { hit: false };
+  let i = gi + 1;
+  let suspect = false;
+  while (i < tokens.length) {
+    const t = tokens[i];
+    if (t === '--') { i += 1; break; }                                        // 选项终止符：其后首词元即命令
+    if (!t.startsWith('-')) break;
+    const eqName = t.match(/^(--[a-z][a-z-]*)=/i);
+    if (eqName && GIT_VALUE_OPTS.has(eqName[1].toLowerCase())) { i += 1; continue; }   // --opt=value
+    if (GIT_VALUE_OPTS.has(t)) {
+      const nxt = tokens[i + 1];
+      // 取值类吞下一 token；`--exec-path` 无值形态不得吞命令词（评审 M1）
+      if (t === '--exec-path' && (!nxt || !/[\\/]/.test(nxt))) { i += 1; continue; }
+      i += 2; continue;
+    }
+    if (/^-C.+/.test(t)) { i += 1; continue; }                                 // 粘连 -C<path>
+    if (GIT_BOOL_OPTS.has(t)) { i += 1; continue; }
+    suspect = true; i += 1; continue;                                          // 未知选项 ⇒ 结构兜底
+  }
+  const verb = String(tokens[i] || '').toLowerCase();
+  if (suspect) return { hit: true, verb, suspect: true };                      // fail-closed
+  if (!GIT_CHANGE_VERBS.has(verb)) return { hit: false, verb };
+  if (verb === 'stash' && String(tokens[i + 1] || '').toLowerCase() === 'list') return { hit: false, verb: 'stash list' };
+  return { hit: true, verb };
+}
+
+/** 任意文本（含 `[CMD]` 伪路径 / 多段拼接）内是否含 git 变更类命令；容忍 80 字符截断（决策侧复用） */
+function textHasGitChange(text) {
+  const segs = String(text || '').replace(/\[CMD\]\s*/gi, ' ').split(/[\n;]+| {2,}/);
+  return segs.some((seg) => gitChangeVerb(seg).hit);
+}
+
+/** 单个命令段是否危险（命令位短别名 或 危险模式 或 解释器内联 或 git 变更词元） */
 function isDangerousSegment(seg) {
   const s = String(seg || '').trim();
   if (SHORT_ALIAS_AT_CMD_POS_RE.test(s.replace(CMD_WRAPPER_PREFIX_RE, ''))) return true;
   return DANGEROUS_CMD_PATTERNS.some((p) => p.test(s))
-      || INTERPRETER_INLINE_PATTERNS.some((p) => p.test(s));
+      || INTERPRETER_INLINE_PATTERNS.some((p) => p.test(s))
+      || gitChangeVerb(s).hit;   // ★ E-2：并入判定链（不新增独立 block 点 ⇒ 同段只拦一次）
 }
 
 /**
@@ -710,6 +782,12 @@ if (toolName === 'execute_command' || toolName === 'Bash') {
 
   const dangerSeg = segments.find((seg) => isDangerousSegment(seg));
 
+  // ★ E-2 结构兜底留痕（2026-09-30）：命中未知 git 全局选项 ⇒ fail-closed 判危险并留痕
+  if (dangerSeg) {
+    const gitProbe = gitChangeVerb(dangerSeg);
+    if (gitProbe.suspect) audit('AUDIT_SUSPECT', `[GIT-OPT-UNKNOWN] ${String(dangerSeg).substring(0, 120)}`);
+  }
+
   // ★ FIX-9：删除/移动类段先走「清单锚定」校验（04 阶段不再无条件放行删除）
   const deleteSeg = segments.find((seg) => isDeleteSegment(seg));
   if (deleteSeg) {
@@ -779,6 +857,80 @@ if (hLock) {
 
 await gateCheck(relativePath);
 
+// ── ★ E-3（迭代 2026-09-30-001）：N-1 文件级白名单（dispatch_whitelist）────
+// 语义：默认关闭；命中白名单 ⇒ 继续既有分支（不阻断）；未命中 ⇒ block（越界即回收）。
+// 覆盖：仅写类工具（Write/Edit 的真实 fsPath）；Bash 伪路径与 Delete 显式跳过
+//       （Bash 提取启发式不可靠 — 评审片 2 F1；删除走 deleteGate SSOT — F6）。
+// ★ 函数形态（不可用 const —— 顶层 `await gateCheck(...)` 先于本段声明执行，const 会触发 TDZ）
+function isE3BuiltinExempt(norm) {
+  return [
+    '.codebuddy/memory/', '.claude/memory/', '.cursor/memory/', '.codex/memory/',
+    '.codebuddy/temp/', '.claude/temp/',
+  ].some((pre) => String(norm || '').startsWith(pre));
+}
+
+/** 归一：`\`→`/` / 剥 `./` / 小写 / 去 `..` 段（防白名单前缀逃逸；评审片 3 🟡5） */
+function e3Normalize(p) {
+  const parts = [];
+  const segs = String(p || '').replace(/\\/g, '/').replace(/^\.?\/+/, '').toLowerCase().split('/');
+  for (const seg of segs) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') { parts.pop(); continue; }
+    parts.push(seg);
+  }
+  return parts.join('/');
+}
+
+/**
+ * 解析 state.yaml 的 dispatch_whitelist 段 —— 四档判定（评审片 2 F5：三态 + 异常）。
+ * 返回 { state: 'none' | 'empty' | 'ok' | 'error', items, lines }；lines = 段原始行数（留痕用）。
+ */
+function readDispatchWhitelist(stateContent) {
+  try {
+    const lines = String(stateContent || '').split(/\r?\n/);
+    let saw = false;
+    let sectionLines = 0;
+    let malformed = false;
+    const items = [];
+    for (const line of lines) {
+      if (!saw) {
+        if (/^dispatch_whitelist\s*:/.test(line)) {
+          saw = true;
+          sectionLines = 1;
+          const inline = line.match(/\[(.*)\]/);
+          if (inline) {
+            for (const m of inline[1].matchAll(/"([^"]+)"/g)) items.push(e3Normalize(m[1]));
+          }
+        }
+        continue;
+      }
+      if (/^\S/.test(line)) break;                       // 下一个顶层键 ⇒ 段结束（/^\S/ 防引号/数字开头键）
+      sectionLines += 1;
+      if (!line.trim() || /^\s*#/.test(line)) continue;  // 空行 / 注释
+      const m = line.match(/^\s*-\s*"?([^"\s#]+)"?\s*(?:#.*)?$/);
+      if (m) items.push(e3Normalize(m[1]));
+      else malformed = true;                             // 形如列表项但无法解析 ⇒ 异常
+    }
+    if (!saw) return { state: 'none', items: [], lines: 0 };
+    if (malformed) return { state: 'error', items, lines: sectionLines };
+    return items.length
+      ? { state: 'ok', items, lines: sectionLines }
+      : { state: 'empty', items: [], lines: sectionLines };
+  } catch {
+    return { state: 'error', items: [], lines: 0 };
+  }
+}
+
+/** 白名单命中：条目为精确路径或目录前缀（条目以 `/` 结尾或作为目录前缀） */
+function matchDispatchWhitelist(target, items) {
+  if (!target) return false;
+  return items.some((pat) => {
+    const p = String(pat || '').replace(/\/+$/, '');
+    if (!p) return false;
+    return target === p || target.startsWith(p + '/');
+  });
+}
+
 // ── 门禁检查（活跃迭代 + 阶段判定） ──────────────────
 async function gateCheck(fsPath) {
   // ★ FIX-11：工作记忆写入/维护与迭代状态解耦（ACTIVE=none / 00 / 05 / 06 / 07 一并放行）。
@@ -830,6 +982,34 @@ async function gateCheck(fsPath) {
   // ── 第4关：阶段判断 ─────────────────────────────────────
   // 04 阶段：放行全部写入（开发窗口）
   if (currentPhase === '04') {
+    // ★ E-3（2026-09-30）：N-1 文件级白名单校验（纯增量拦截；未启用 ⇒ 逐字旧行为）
+    const rawPath04 = String(fsPath || '');
+    const isPseudoPath04 = rawPath04.startsWith('[');
+    const isDeleteTool04 = toolName === 'Delete' || toolName === 'delete_file' || toolName === 'delete_files';
+    const wl = readDispatchWhitelist(stateContent);
+    if (wl.state === 'ok' && !isPseudoPath04 && !isDeleteTool04) {
+      // 项目外绝对路径（toProjectRelative 口径的 null 分支）⇒ 判越界拦（fail-closed；评审片 2 F7）
+      const isOutsideAbs = /^[A-Za-z]:[\\/]/.test(rawPath04) || rawPath04.startsWith('/');
+      const norm04 = e3Normalize(rawPath04);
+      const builtinOk = isE3BuiltinExempt(norm04);
+      if (!builtinOk && !matchDispatchWhitelist(isOutsideAbs ? null : norm04, wl.items)) {
+        audit('WHITELIST_BLOCK', `[04] ${rawPath04} | whitelist=${wl.items.join(',')}`);
+        block(
+          'N-1 白名单校验：写入越界（越界即回收白名单）。',
+          `越界文件: ${rawPath04}`,
+          `白名单（${wl.items.length} 条）: ${wl.items.join(' · ')}`,
+          '处置：由主编排 Agent 回收/修正白名单，或将该路径列入派发白名单后重试。'
+        );
+      }
+    } else if (wl.state === 'empty') {
+      audit('WHITELIST_DISABLED', `[04] activeId=${activeId || '-'} (empty-section, lines=${wl.lines})`);
+    } else if (wl.state === 'error') {
+      audit('WHITELIST_PARSE_FAIL', `[04] activeId=${activeId || '-'} lines=${wl.lines} path=${rawPath04}`);
+    }
+    // ★ E-2 留痕（评审片 3 🔴）：04 期危险段放行无 block 事件 ⇒ 补 audit，防「授权在、留痕无」；仅 E-2 命中段
+    if (isPseudoPath04 && gitChangeVerb(rawPath04.replace(/^\[CMD\]\s*/, '')).hit) {
+      audit('E2_CMD_04_PASS', rawPath04.substring(0, 140));
+    }
     process.exit(0);
   }
 
@@ -1319,7 +1499,10 @@ function sendGateNotify(ev) {
     // ★ FIX-20：不可逆动作（提交/推送/发布/写库/删除）⇒ **强制走 ask.js 决策回路**（必带 #N，
     //   超时 2h，且不会自动执行）—— 此前只靠 handoffPrompt 里的文字约定，无机制保障。
     const IRREVERSIBLE_RE = /svn\s+commit|git\s+push|git\s+commit|run_ddl|drop\s+table|truncate\s+table|deploy|部署|发布|提交推送|删除文件/i;
-    if (IRREVERSIBLE_RE.test(reason + ' ' + String(target || '') + ' ' + detail)) {
+    // ★ E-2 决策侧（2026-09-30）：`git -C … commit` 等带前置全局选项形态不被旧正则命中
+    //   ⇒ 复用词元判定（strip `[CMD] ` 前缀 + 容忍 80 字符截断；评审片 3 🔴 FIX-20 只修一半问题）。
+    const irreversibleText = reason + ' ' + String(target || '') + ' ' + detail;
+    if (IRREVERSIBLE_RE.test(irreversibleText) || textHasGitChange(irreversibleText)) {
       const askPath = join(PROJECT_DIR, 'tools/qqbot/ask.js');
       if (existsSync(askPath)) {
         const askPrompt = [
