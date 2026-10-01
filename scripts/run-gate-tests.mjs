@@ -82,6 +82,18 @@ const TEST_ITERATION_ID = 'selftest-gate-regression';
 
 // ── 测试用例定义（直接从 gate-test-cases.toml 核心映射） ──
 
+// ★ FIX-26（2026-10-01）：命令通道用例的绝对路径前缀。
+//   用「部署布局」形态 `{PROJECT_DIR}/{IDE}/skills/iteration-workflow/runtime/` —— 与真实项目一致；
+//   ALWAYS_ALLOW 的段字面量 `/skills/iteration-workflow/runtime/` 正是按该形态匹配**绝对路径**的。
+const PROJ_ABS = PROJECT_DIR.replace(/\\/g, '/');
+const RT_ABS = `${PROJ_ABS}/.codebuddy/skills/iteration-workflow/runtime`;
+/** 构造 Bash 用例的 stdin（固定 tool_name=Bash + command） */
+const bashCase = (id, name, phase, command, expectExit) => ({
+  id, name, phase, active: true,
+  stdin: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }),
+  expectExit, expectBlock: expectExit === 2,
+});
+
 const TESTS = [
   // S0: 04阶段 + 写业务代码 → 放行
   {
@@ -292,7 +304,65 @@ const TESTS = [
     tool: 'delete_file', file: 'C:/Users/tester/.codebuddy/projects/proj-slug/memory/old-note.md',
     expectExit: 0, expectBlock: false
   },
+
+  // ── ★ FIX-26（2026-10-01）：state 归档命令误拦收口（同目录改名解析 + runtime/ 维护命令豁免）──
+  // 起因：`Rename-Item -LiteralPath '<runtime>/x.state.yaml' -NewName 'x.state.archived.yaml'`
+  //   被以「目标 2026-…state.archived.yaml 未登记 delete_allow」拦下（裸名不含目录分量）。
+  //   ★ 锚定：A 组=放行（含两端均在 runtime/），B/C/D/E/G 组=负向对照（必须仍然拦）。
+  bashCase('F26-A', '01阶段 Rename-Item 裸名(源+目标均在 runtime/) → 放行',
+    '01', `Rename-Item -LiteralPath '${RT_ABS}/2026-09-18-001-x.state.yaml' -NewName '2026-09-18-001-x.state.archived.yaml'`, 0),
+  bashCase('F26-B', '01阶段 Rename-Item 裸名(源在业务目录) → 阻止',
+    '01', `Rename-Item -LiteralPath '${PROJ_ABS}/back-end/a.cs' -NewName 'a.archived.cs'`, 2),
+  bashCase('F26-C', '01阶段 Rename-Item -NewName 带路径(../业务) → 阻止（不代解析）',
+    '01', `Rename-Item -LiteralPath '${RT_ABS}/x.state.yaml' -NewName '../back-end/a.cs'`, 2),
+  bashCase('F26-D', '01阶段 命令目标含上跳段 runtime/../hooks → 阻止（.. 守卫）',
+    '01', `Remove-Item '${RT_ABS}/../hooks/x.mjs'`, 2),
+  bashCase('F26-E', '01阶段 删业务文件 → 阻止（命令通道未放宽）',
+    '01', `Remove-Item '${PROJ_ABS}/back-end/a.cs'`, 2),
+  bashCase('F26-F', '01阶段 Move-Item 两端均在 runtime/ → 放行（通道对齐）',
+    '01', `Move-Item -LiteralPath '${RT_ABS}/x.state.yaml' -Destination '${RT_ABS}/x.state.archived.yaml'`, 0),
+  bashCase('F26-G', '01阶段 混合目标(runtime/ + 业务) → 阻止（全目标判定）',
+    '01', `Remove-Item '${RT_ABS}/x.tmp' '${PROJ_ABS}/back-end/a.cs'`, 2),
+  bashCase('F26-H', '04阶段 runtime/ 归档 → 放行（与旧行为一致）',
+    '04', `Rename-Item -LiteralPath '${RT_ABS}/y.state.yaml' -NewName 'y.state.archived.yaml'`, 0),
 ];
+
+// ── S8：阶段推进留痕观测（RESUME-3 批次 3 路线 I · ALLOW+NOTIFY · 2026-10-01）──
+  // 写 state.yaml 且 current_phase 变更：观测态一律放行（exit 0），QQ 告警在沙箱内静默
+  // （notifyPhaseGuard 见 GATE_TEST_RUNTIME_DIR ⇒ 仅 audit 留痕）。断言重点是「不误拦」。
+  {
+    const rtRel = '.codebuddy/skills/iteration-workflow/runtime/' + TEST_ITERATION_ID + '.state.yaml';
+    TESTS.push(
+      { // S8a: 推进无留痕 → 放行 + 告警（观测态核心语义）
+        id: 'S8a', name: '阶段推进(04→05)无 phase_confirm → 放行(观测态告警)',
+        phase: '04', active: true,
+        tool: 'write_to_file', file: rtRel,
+        toolInput: { content: 'iteration_status: "active"\ncurrent_phase: "05"\n' },
+        expectExit: 0, expectBlock: false
+      },
+      { // S8b: 推进 + 合法留痕（ide 带 quote）→ 放行（CONFIRMED 路径）
+        id: 'S8b', name: '阶段推进(04→05)含合法 phase_confirm(ide+quote) → 放行',
+        phase: '04', active: true,
+        tool: 'write_to_file', file: rtRel,
+        toolInput: { content: 'iteration_status: "active"\ncurrent_phase: "05"\nphase_confirm:\n  from: "04"\n  to: "05"\n  by: "ide"\n  at: "2026-10-01T14:10:00"\n  quote: "通过，进入05"\n' },
+        expectExit: 0, expectBlock: false
+      },
+      { // S8c: 留痕 by=ide 无 quote → 仍放行但告警（无效留痕口径）
+        id: 'S8c', name: '阶段推进(04→05)phase_confirm(ide 无 quote=无效) → 放行(告警)',
+        phase: '04', active: true,
+        tool: 'write_to_file', file: rtRel,
+        toolInput: { content: 'iteration_status: "active"\ncurrent_phase: "05"\nphase_confirm:\n  from: "04"\n  to: "05"\n  by: "ide"\n  at: "2026-10-01T14:10:00"\n' },
+        expectExit: 0, expectBlock: false
+      },
+      { // S8d: replace_in_file 模拟替换路径：phase 行未变更 → 无告警放行
+        id: 'S8d', name: 'replace_in_file 写 state.yaml 但 current_phase 未变更 → 放行(无告警)',
+        phase: '04', active: true,
+        tool: 'replace_in_file', file: rtRel,
+        toolInput: { old_str: 'iteration_status: "active"', new_str: 'iteration_status: "active"\n# touch' },
+        expectExit: 0, expectBlock: false
+      }
+    );
+  }
 
 // ── 工具函数 ──────────────────────────────────────────
 
@@ -372,6 +442,10 @@ function runHook(testCase) {
   else { delete env.CODEBUDDY_SESSION_ID; delete env.CLAUDE_SESSION_ID; }
   // ★CONC-1：按用例注入额外环境变量（如 CONC_LOCK=0 关闭保护）
   if (testCase.env) Object.assign(env, testCase.env);
+  // ★ RESUME-3（2026-10-01）：非逃生口用例一律禁用逃口（FIX-10 开关，只更严格不构成绕道）——
+  //   否则 .gate-bypass 标记存在期间（如本次实施开闸）全部用例被逃口短路放行 = 假绿（实测复现）。
+  //   逃生口用例（gateBypass=env / gateBypassFile=标记文件）保留真实逃生口语义。
+  if (!testCase.gateBypass && !testCase.gateBypassFile) env.GATE_TEST_DISABLE_BYPASS = '1';
   // hook 的项目根优先级：CODEBUDDY_PROJECT_DIR > CLAUDE_PROJECT_DIR > cwd。
   // 旧代码写入的是 COBUDDY_PROJECT_DIR（少一个 E），hook 不识别，等于从未传递；
   // 这里显式设置目标变量并清除另一个，避免外部环境变量抢占优先级。

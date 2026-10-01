@@ -33,6 +33,7 @@
 > **版式纪律**：产出文档须遵循 `engine/doc-style-guide.md`（问题清单"一行一条"，处置细节进附录）；生成后自检 `python scripts/doc_lint.py <文件>`（ERROR 必修）。
 
 **交付标准**：所有问题已决议，用户确认"评审通过"或"进入技术方案"；**文档版式自检 ERROR 0**（`python scripts/doc_lint.py <文档>`）
+★ 等待方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`。
 
 ### 步骤清单（进入阶段时写入 phase_steps）
 

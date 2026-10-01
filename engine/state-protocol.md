@@ -343,6 +343,7 @@ rollback_checks:
 - `version` / `iteration_id` / `iteration_status` / `complexity` / `current_phase` / `phase_status` / `last_updated`
 
 > ★ `started_at` / `ended_at` 为可选度量字段（2026-09-25 METRICS-AUTO 新增）：**不在必填清单内**，缺失不视为校验失败；旧版 state 无此字段属正常态（向后兼容，同 §review_gate 先例）。
+> ★ `phase_confirm` 为可选留痕段（2026-10-01 RESUME-3 批次 3 新增）：**不在必填清单内**（观测期向后兼容，同上先例）；`current_phase` 变更时须随写（见 §3.3 枚举区「阶段推进留痕」与 `gate-protocol.md` §三-B）。
 
 > ★ `phase_history` 条目存在时，其 `completed_at` / `skipped_at` 须**包含式匹配** `\d{4}-\d{2}-\d{2}T\d{2}:\d{2}`（允许尾随 `:ss` / 时区后缀，禁止全串匹配）【PHASE-METRICS 2026-09-25】；纯日期视为校验 WARN（**不阻断**，兼容历史 12 state 不回溯；实施后新迭代抽查 WARN=0）。`entered_at` 不引入——阶段起点 = 上一**实做**阶段 `completed_at`，首阶段 = `started_at`；skipped 条目不参与阶段窗界链（仅作注记）。
 
@@ -361,6 +362,19 @@ rollback_checks:
 | `defects[].severity` | `P0` / `P1` / `P2` |
 | `defects[].root_cause_level` | `L1` / `L2` / `L3` |
 | `defects[].design_changed` | `true` / `false`（布尔） |
+
+**阶段推进留痕（★ 2026-10-01 RESUME-3 批次 3 新增）**：
+
+| 字段 | 允许值 |
+|------|--------|
+| `phase_confirm.from` / `phase_confirm.to` | `"01"` ~ `"07"`（字符串，`to` = `from` + 1） |
+| `phase_confirm.by` | `qq#N`（QQ 确认门登记已消费）/ `ide`（本会话通过语）/ `handoff`（headless 继承 `PIVAS_HANDOFF_OWNER`）/ `bypass`（逃生口） |
+| `phase_confirm.at` | ISO 时间戳（`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}` 包容式匹配，同 `phase_history` 口径） |
+| `phase_confirm.quote` | 自由文本（`by: "ide"` 时**必填** = 用户通过语原文；其他取值可省） |
+
+- 触发时机：`current_phase` 变更的**同一次写入**必须含 `phase_confirm`（执行条款见 `gate-protocol.md` §三-B「确认留痕」）；
+- **可选字段（观测期向后兼容）**：缺失不视为校验失败（同 `review_gate` legacy 先例）；`by:"ide"` 无 `quote` 视为**无效留痕**（07 回顾审计项）；
+- 观测期 `gate-check.mjs` 对 current_phase 变更**仅通知不拦截**（fail-open）；强制化（fail-closed）另行拍板（RESUME-3 批次 3 路线 I → G1）。
 
 **缺陷台账校验（★ 2026-09-23 DEFECT-1 新增）**：
 - `defects` 为**可选字段**（缺失 = 无缺陷，向后兼容旧 state.yaml）；存在时每条须通过上表枚举校验，且 `id` 唯一；

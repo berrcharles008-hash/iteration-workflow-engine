@@ -43,6 +43,8 @@
 | step-4-review-gate | 写入评审门禁结果到 state.yaml | ✅ | 始终 |
 | step-5-user-confirm | 用户确认"评审通过" | ✅ | 始终 |
 
+> ★ 上表用户确认类步骤（step-2-user-resolve / step-5-user-confirm 等）的等待方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`。
+
 **step-4-review-gate 执行要求**：
 - 读取 `02-需求评审/02-需求评审.md` 的结论复选框
 - 映射到 `review_gate.result`：

@@ -90,6 +90,7 @@
 4. 报告「五、缺陷记录」节与 `defects[]` 按 `D-xx` **双向对账**；未修者转「七、遗留问题」并置 `status: "deferred"` + `defer_reason`（用户裁决）。
 
 **交付标准**：所有自动用例 ✅ 通过或 ⚠️ 跳过（有解释），手动用例 ⏳ 待验证，用户确认"测试通过"；**文档版式自检 ERROR 0**（`python scripts/doc_lint.py <文档>`）；★ 缺陷台账与报告**对账一致**
+★ 本阶段确认点（测试通过 / design_changed / deferred 裁决）的等待方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`。
 
 **动作链覆盖**（2026-09-18 新增；标准版 / 精简版报告**均必填**）：
 

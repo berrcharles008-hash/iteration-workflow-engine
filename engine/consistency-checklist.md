@@ -20,6 +20,7 @@
 | A5 | 治理文档时效 | a 内容日期 > 7 天；b 自其 mtime 以来 `engine/` 有文件更新（联动）；c **mtime 与内容日期背离 > 3 天**（记账一致性） | WARN |
 | A6 | 回流水位 | 与源仓库逐文件比对（路径缺失 ⇒ SKIP） | WARN |
 | A7 | 状态字段登记闭环（★ 2026-09-23 新增） | `state.yaml` 的顶层字段须在 `state-protocol.md` §三（格式）**且** §3.3（枚举）登记；出现未登记字段 ⇒ WARN。**历史反例**：`delete_allow` 仅见于门禁协议、Schema 未登记 ⇒ 静默漂移（本次 `defects[]` 已按此规则登记） | WARN（★ 脚本未实现，人工核） |
+| A8 | 等待点指针完备（★ 2026-10-01 新增 · RESUME-3 批次 1） | 含"等待用户"类确认表述的 engine md（含 templates/）须挂 `waiting-protocol.md` 指针；漏挂 ⇒ ERR。**背景**：等待机制曾只挂 phase-04，09-30 真实迭代确认门主动登记 0 次 | ERR |
 
 > A5 对象 = `engine/evolution-safety.md` · `engine/consistency-checklist.md` · `runtime/SESSION-HANDOFF.md`（三份元层规范）。
 

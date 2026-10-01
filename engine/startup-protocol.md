@@ -78,6 +78,7 @@
 │   按 [迭代门禁协议](workflow-engine.md#迭代门禁协议) 输出选项：
 │   1️⃣ 继续当前迭代  2️⃣ 归档当前迭代  3️⃣ 强制跳过（需说明理由）
 │   等待用户选择，不得自作主张跳进新迭代
+│   ★ 等待方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`。
 ├── 若当前迭代 iteration_status = "completed" 或用户请求与开新迭代无关
 │   → 跳过 Step C，正常响应用户操作
 └── 若阶段状态为 paused（曾被强制跳过）→ 提示恢复
@@ -127,6 +128,7 @@
 - 对应执行深度说明
 
 等待用户确认等级后继续。
+★ 等待方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`。
 
 ---
 

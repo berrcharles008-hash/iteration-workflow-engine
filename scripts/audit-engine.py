@@ -16,6 +16,7 @@
     A4 引用存在      引擎层反引号内的跨文件引用目标须存在
     A5 治理文档时效  a 内容日期（>7 天） b 联动（引擎已改） c mtime 与内容日期背离（>3 天）
     A6 回流水位      项目侧 skill ↔ 源仓库（缺路径则 SKIP）
+    A8 等待点指针    含"等待用户"类确认表述的 engine md 须挂 `waiting-protocol.md` 指针（★ E4，RESUME-3 批次 1）
 
 规范页：engine/consistency-checklist.md
 """
@@ -360,6 +361,45 @@ def a4b_var_typos():
         ok('A4b', '{IDE}/{{IDE_DIR}} 类令牌无近形笔误（扫描 %d 个 engine md）' % scanned)
 
 
+# ── A8 等待点指针完备（★ E4，RESUME-3 批次 1，2026-10-01）────
+# （编号 A7 已被规范页"状态字段登记闭环"（人工核）占用 ⇒ 机械维度顺延为 A8）
+# 背景：确认门等待机制曾只挂在 phase-04（2026-09-30 真实迭代确认门主动登记 0 次，
+#       10-01 04→05 由离机指令穿透 §三-B 且事后无审计痕迹）。
+# 规则：engine/**（含 templates/）中含"等待用户"类确认表述的 md，必须含
+#       `waiting-protocol.md` 引用（指针行），否则 ERR（文档级防漏挂；
+#       防"执行漏跑"属批次 3 强制层，不在此覆盖）。
+WAIT_POINT_RE = re.compile(
+    r'等待用户(?:明确)?(?:确认|选择|拍板)'   # 等待用户确认/等待用户明确确认/等待用户选择/拍板
+    r'|用户确认[“”\'"][^”"\'"]{2,12}[”"\'"]'  # 用户确认"测试通过"/"评审通过"等
+    r'|待用户拍板|须用户确认')
+WAIT_PROTO_REF = 'waiting-protocol.md'
+
+
+def a8_wait_points():
+    hits = []
+    scanned = 0
+    eng = os.path.join(SKILL_ROOT, 'engine')
+    for dirpath, _dirs, files in os.walk(eng):
+        for fn in files:
+            if not fn.endswith('.md'):
+                continue
+            p = os.path.join(dirpath, fn)
+            try:
+                txt = open(p, encoding='utf-8').read()
+            except Exception:
+                continue
+            scanned += 1
+            if WAIT_POINT_RE.search(txt) and WAIT_PROTO_REF not in txt:
+                rel = os.path.relpath(p, SKILL_ROOT).replace('\\', '/')
+                line = txt.count('\n', 0, WAIT_POINT_RE.search(txt).start()) + 1
+                hits.append('%s:%d' % (rel, line))
+    if hits:
+        for h in hits:
+            err('A8', '%s 含确认等待表述但未挂 `%s` 指针' % (h, WAIT_PROTO_REF))
+    else:
+        ok('A8', '等待点指针完备（扫描 %d 个 engine md）' % scanned)
+
+
 # ── A5 治理文档时效 ─────────────────────────────────────────
 def a5_gov_docs():
     if not GOV_DOCS:
@@ -459,7 +499,8 @@ def main():
     print('')
 
     for name, fn in (('A1', a1_orphan), ('A2', a2_step_ids), ('A3', a3_doc_names),
-                     ('A4', a4_refs), ('A4b', a4b_var_typos), ('A5', a5_gov_docs)):
+                     ('A4', a4_refs), ('A4b', a4b_var_typos), ('A8', a8_wait_points),
+                     ('A5', a5_gov_docs)):
         try:
             fn()
         except Exception as e:

@@ -34,6 +34,7 @@ Agent 准备修改文件
     │       │   ║                                          [gate: agent] ║
     │       │   ╚══════════════════════════════════════════════════╝
     │       │   等待用户选择，Agent 不得自行绕过。
+    │       │   ★ 等待方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`。
     │       │
     │       └── 有 in_progress 的迭代（ACTIVE 失同步）
     │           → 修复 ACTIVE 写入正确迭代ID → 从顶部重新进入
@@ -135,6 +136,18 @@ Agent 准备修改文件
 
 **路径判定增强（GATE-6 · 2026-09-24，现行 hook 行为）**：`extractPathsFromCommand()` 对**同一条命令内**做 shell 变量赋值收集与字面替换（`collectShellAssignments` + `expandShellVars`，支持变量套变量，最多 3 轮）；解析不出的变量**原样保留 ⇒ 仍 fail-closed**（**不扩大放行面**，只消除「能解析却被误拦」的假阳性）；拦截话术追加「门禁只能字面判定，请改写字面路径」。沿革与回归详见 `runtime/gate-protocol-CHANGELOG.md` 及 `runtime/TOOLING-TODO.md` GATE-6 工单。
 
+**★ FIX-26（2026-10-01 · 用户批准 · 开闸实施）state 归档命令误拦收口**（三处，均为「消除假阳性/收紧」，非放宽）：
+- **① 同目录改名解析**：`Rename-Item -LiteralPath '<path>' -NewName '<裸名>'` 中，`-NewName` 只接受**名称**（PowerShell 语义，给路径会报错）⇒ 其目录 ≡ `-Path` 的父目录，可静态确定；
+  实现 `resolveRenameNewName()`：`-NewName` 为裸名且同段**恰好一个**带目录分量的目标作锚点时，将该裸名展开为 `{锚点父目录}/{裸名}` 后再交 `deleteGate` 判定，留痕 `RENAME_SAMEDIR`。
+  边界：仅认 `Rename-Item`/`rni`；`-NewName` 带路径 / 无锚点 / 多锚点 ⇒ 原样返回（继续 fail-closed）。**`Move-Item`/`Copy-Item`/`Remove-Item` 不适用**（其路径参数是完整路径，裸名按 CWD 解析，不能假定同目录）。
+  起因（实测 `gate-audit.log` 2026-10-01T08:47:27Z）：归档命令报的目标是裸名 `…state.archived.yaml` ⇒ 不匹配 `runtime/` 前缀而 BLOCK，**同一命令的源路径却已按 runtime/ 豁免放行** ⇒ 两端判定自相矛盾。
+- **② `runtime/` 状态维护命令豁免**（关闭通道不一致）：**所有危险段**的目标都落在 `ALWAYS_ALLOW`（`skills/iteration-workflow/runtime/`）内时放行，留痕 `STAGE_ALLOW [CMD-RUNTIME]`；
+  任一目标解析不出 / 项目外绝对路径 / 落在非 runtime 目录 ⇒ 返回 null，继续走原阶段门禁（fail-closed 不变）。实现 `runtimeMaintenanceTargets()`。
+  依据：文件工具写/删 runtime/ 在第 1 关无条件放行，而命令通道在 01-03 一律拦（FIX-24）——同一路径两种结果（实测 2026-10-01T08:48:37Z：`DELETE_EXEMPT` 已放行、随后被阶段层拦），使归档 state 等维护动作只能开闸或绕道。
+- **③ 上跳段守卫（`isAlwaysAllow`）**：路径含 `..` 段一律不认定豁免（原实现只看前缀，`<runtime>/../../hooks/x` 会被判「在 runtime 内」被判豁免）。只收紧、不放宽，为 ② 的放行面兜住路径穿越。
+
+**回归**：`scripts/run-gate-tests.mjs` 新增 F26-A…F26-H（1 组放行 + 5 组负向对照 + 04 期对照），全套 40/40 PASS（2026-10-01 实测）；同时新增 3 处 `..` 守卫相关对照。
+
 ---
 
 ### 逃生口自建拦截（★ GAP-4/加固① · 2026-09-16）
@@ -155,7 +168,33 @@ Agent 准备修改文件
 > ★ **FIX-25（2026-09-20 · 用户拍板「档 2」）· 危险段假阳性收窄**：`DANGEROUS_CMD_PATTERNS` 的「输出重定向」模式现行值为 `/[^=>-]>\s*\S/`（`->` 文本箭头 / `=>` JS 箭头 / `>=` 比较符**不是重定向运算符**，不再误拦；实证误拦例与回归对照详见 `runtime/TOOLING-TODO.md` FIX-25 条目）。
 > ★ **同日订正一处对外口径**：`execute_command` **不是阶段禁行** —— 只读命令（跑脚本 / `dir` / `Get-Content` / `git status` 等）在**任何阶段**都放行；只有「危险段」才回落阶段门禁。
 > **残留（登记待裁决）**：`A >= B` 形态仍被判危险（比较符非重定向；工单 = `runtime/TOOLING-TODO.md` FIX-25 条目）。
-> **回归基线**：当前全量 **97/97**（口径：93 = FIX-25 时点回归数，97 = GATE-6 用例并入后当前全量）。
+> **回归基线**：GATE-A / GATE-A2 后 **157/157**（BASE 0 失败 · FIX 127/127 · GATE-A 组 30/30；沿革 93 → 97 → 127 → 157）。
+>
+> ★ **GATE-A（2026-10-01 · 用户拍板「方案 A」）· 只读命令误拦收口** —— 本口径的落地实现：
+> **起因**：改动前实测（探针 `runtime/probe-readonly-gate.mjs`，26 条纯只读样本）**误拦 10 条**：
+> ① `powershell|pwsh -Command|-c "…"`（含 `cmd /c "…"`）被判「解释器内联 = 任意代码执行」——
+> 实证 `gate-audit.log` 2026-10-01T08:13:17/18Z 两条 `Get-Process` / `Get-ChildItem` 被拦；
+> ② 写/删/移动**动词**全文词匹配 ⇒ `Select-String -Pattern 'move'`、`git log --grep=move` 被拦；
+> ③ 重定向 `>` 命中引号内文本 ⇒ `Select-String -Pattern 'a > b'` 被拦；
+> ④ 命中后无路径可豁免 ⇒ 非 04 阶段一律 block，且话术错位为「仅允许修改迭代产出目录」。
+>
+> **实现（三条，现行 hook 行为）**：
+> 1. **包装剥壳**（`unwrapWholeShellCommand` / `unwrapQuotedPayload`）：**仅当整条命令就是一个可完整解析的包装**
+>    （`powershell|pwsh … -Command|-c "…"` / `cmd /c "…"`）才剥壳（最多 3 层），内层交回判定链；
+>    解析不出（引号未闭合 / 闭引号后仍有语句 / `-EncodedCommand`）⇒ **放弃剥壳，仍按原逻辑（fail-closed）**。
+>    `node -e` / `python -c` / `bash -c` **不剥**（真·任意代码执行，保持拦）。
+> 2. **命令位动词判定 + 引号感知**（`WRITE_DELETE_VERB_AT_POS_RE` / `hasWriteDeleteAtCommandPos` / `stripQuotedText`）：
+>    写/删/移动动词仅在**命令位**（段首 · `;|&` 分隔符 · `{}()` · 带空格赋值等号后）判定；
+>    判定前剔除**成对**引号内文本（引号内 = 数据；未闭合引号原样保留 ⇒ 不剥壳 ⇒ 拦）。
+> 3. **话术分流**（`cmdGateLines`）：`[CMD] …` 拦截不再复用文件话术，改为报**命中规则** + 只读替代路径
+>    （`read_file` / `search_content` 不受门禁约束）。
+>
+> **补口（GATE-A2 · 2026-10-01 同日）**：GATE-A② 曾收窄出 1 处放行窗口 —— `$x=Remove-Item y`
+> （`=` 两侧无空格）不被 `\s=\s` 切子句 ⇒ 子句首整坨不匹配 `^remove-item` ⇒ **零成本绕过**（探针取证）。
+> 现于命令位判定前先剥 `PS_ASSIGN_PREFIX_RE`（**只剥 `$` 开头变量** `$x=` / `$env:X=` / `$a[0]=`，
+> 不碰 `FOO=bar` bash 前缀、不碰 `--grep=move` 参数值）。取证：探针 3 样本 allow → BLOCK，
+> 负向对照 **6/6**；回归 **157/157**（GATE-A 组 30/30）。
+> **回滚**：A2 = `patch-gate-A2.mjs --rollback`（备份 `gate-check.mjs.bak-pre-GATE-A2`）；A = `patch-gate-A.mjs --rollback`（备份 `gate-check.mjs.bak-pre-GATE-A`）。
 
 **不受影响**：① **删除**标记 —— 标记存在时上游逃生口检查已 `exit(0)` 放行，本判定不会被触达
 （标记不存在时删除会被拦，属无害）；② **只读查询**（如 `git check-ignore -v .gate-bypass`）—— 不匹配创建语义。
@@ -188,6 +227,7 @@ Agent 准备修改文件
 1. 恢复 ACTIVE Line 1 = 该迭代 ID，Line 2 = `STATUS=completed PHASE=07`
 2. 提示用户："检测到 {迭代ID} 的 07-迭代回顾 阶段被跳过，是否现在执行？"
 3. 等待用户确认后进入 07 阶段
+   ★ 等待方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`。
 
 ---
 
@@ -261,6 +301,8 @@ Agent 必须在完成修改后输出：
                 请选择 1️⃣ / 2️⃣ / 3️⃣：
 ```
 
+★ 等待方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`。
+
 ### 强制跳过协议
 
 用户选择选项 3️⃣ 时：
@@ -296,6 +338,8 @@ Agent 必须输出确认框（禁止直接废弃或直接暂停，不判断用�
 
     请选择 1️⃣ / 2️⃣ / 3️⃣：
 ```
+
+★ 等待方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`。
 
 - 选择 1️⃣ → 执行 [强制跳过协议](#强制跳过协议)
 - 选择 2️⃣ → 执行 [迭代废弃协议](state-protocol.md#二-state-写入时机协议)（写入 abandoned 相关字段）
@@ -334,6 +378,8 @@ Agent 必须输出确认框（禁止直接废弃或直接暂停，不判断用�
             → 用户确认后再执行
 ```
 
+★ 上述删除确认各分支的等待方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`。
+
 **核心规则**：**已归档 = 不可删除，不接受任何理由。**（在 [workflow-engine.md#迭代门禁协议](workflow-engine.md#迭代门禁协议) 章节也有引用）
 
 ---
@@ -360,6 +406,8 @@ Agent 必须输出确认框（禁止直接废弃或直接暂停，不判断用�
             "阶段：{M}，原因：{rejection_reason}"
             "请选择：1️⃣ 重新执行评审  2️⃣ 强制跳过"
 ```
+
+★ 等待方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`。
 
 - 强制跳过写法：在 `review_gate` 上追加 `overridden_by` / `override_reason` / `overridden_at`
 - 完整规则见 [state-protocol.md](state-protocol.md) §3.1 review_gate
@@ -401,6 +449,24 @@ Agent 准备修改 current_phase（M → M+1）
             ╚══════════════════════════════════════════════════╝
             终止推进，保持 current_phase = M。
 ```
+
+#### 确认留痕（phase_confirm · RESUME-3 批次 3 路线 I，2026-10-01 新增）
+
+ALLOW 后的推进写入 = **同一次写入**中更新 `current_phase` + 落 `phase_confirm` 留痕段（schema 见 `state-protocol.md` §phase_confirm）：
+
+```yaml
+phase_confirm:
+  from: "04"
+  to: "05"
+  by: "ide"              # qq#N（QQ 确认门登记已消费）/ ide（本会话通过语）/ handoff（headless 继承 PIVAS_HANDOFF_OWNER）/ bypass（逃生口，走 BYPASS 审计）
+  at: "2026-10-01T01:40:00"
+  quote: "通过，进入05"   # ★ by=ide 时必填：用户通过语原文（无 quote 视为无效留痕）
+```
+
+- ★ **事故教训（2026-10-01 实锤）**：迭代 2026-09-30-002 的 04→05 由离机指令「完成后关机」驱动连续收口——该指令**不含**上述通过语清单 ⇒ §三-B 被穿透且事后无法审计（`phase_history[04]` 无 review_gate、无任何确认字段）。`phase_confirm` 即为堵此审计盲区。
+- `by:"qq#N"` 须对应已消费登记；`by:"ide"` 的 quote 必须是**本轮用户原话**；合写判定 = 仅以 `current_phase` 单字段合取（与 `iteration_status` 等其他字段合写**仍须留痕**，防漏网）。
+- **观测期说明**：`gate-check.mjs` 对 current_phase 变更当前为**通知不拦截**（fail-open，QQ 推送留痕缺失告警）；强制化（fail-closed 拦截）须另行拍板（RESUME-3 批次 3 路线 I → G1）。
+- 等待用户确认的方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`。
 
 #### 与 三-A 的关系
 
@@ -511,6 +577,12 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
   05/06/07 与 `ACTIVE=none` 仍拦，见 §一决策树）
   ★ FIX-24（2026-09-20）：01-03 分支 **Bash 伪路径不享路径豁免**（`[CMD] …` 经 `raw.startsWith('[')` 守卫；放行写 `EXEMPT_ALLOW` 审计留痕）。
 - 删除/移动类操作命中「删除豁免」清单的（见 §一「04 阶段的删除类操作校验」）
+- ★ **命令通道的删除豁免与 `runtime/` 维护命令**（FIX-26 · 2026-10-01）：
+  `Rename-Item -NewName '<裸名>'` 先按**源文件父目录**展开再判豁免（同目录改名 = PowerShell 语义，非猜测）；
+  **所有危险段**的目标都落在 `skills/iteration-workflow/runtime/` 内时，命令通道与文件工具同口径放行
+  （归档 / 清理 state 文件等维护动作），留痕 `STAGE_ALLOW [CMD-RUNTIME]`；路径含 `..` 段一律不认定豁免。
+  条件不满足（解析不出 / 项目外路径 / 混有非 runtime 目标）⇒ 仍 fail-closed。
+  注：其余豁免目录（`temp/` · `memory/` 等）的命令通道**仍受阶段门禁约束**（FIX-24 口径不变）。
 - ★ **写入/修改 `{IDE}/memory/` 下的工作记忆文件**（FIX-11 · 2026-09-16）——**与迭代状态无关**：
   `ACTIVE=none` 与 00/05/06/07 阶段同样放行（依据：记忆维护属元层，≠ 业务迭代；
   且系统级要求「每次完成任务必须写记忆」）。范围**严格限定** `{IDE}/memory/`：

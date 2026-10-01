@@ -132,6 +132,7 @@ C. **其他指令** — 比如补充修改、新增需求等
 3. **B 选项（审查本轮产出）的审查方式**应根据阶段动态适配（见上表）
 4. 用户选择 A 后，进入门禁检查流程（gate-protocol.md §三-B）
 5. **禁止行为**：Agent 不得在输出模板后不等用户选择就自行推进 `current_phase`
+6. ★ 等待方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`；确认后的推进写入须含 `phase_confirm` 留痕（见 `state-protocol.md` §phase_confirm）
 
 ## 阶段回退文档同步门禁
 

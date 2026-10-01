@@ -4,7 +4,7 @@
 
 **执行方式**：主 Agent 分析代码库，结合需求产出方案。需要时派生 code-explorer 探索代码。
 
-**★ 复杂度复评 `step-3-rescore`**（03 必经步骤）：探索完成后必须执行复评（用探索得到的**实际文件清单**重算复杂度），而不是"发现偏差才升级"。详见 §step-3-rescore。调整须用户确认后写入 `state.yaml` 的 `complexity` 与 **`complexity_adjustments`**（★ 字段名以 `state-protocol.md` schema 为准，**勿自造字段名**，P-048 同类）。
+**★ 复杂度复评 `step-3-rescore`**（03 必经步骤）：探索完成后必须执行复评（用探索得到的**实际文件清单**重算复杂度），而不是"发现偏差才升级"。详见 §step-3-rescore。调整须用户确认后写入 `state.yaml` 的 `complexity` 与 **`complexity_adjustments`**（★ 字段名以 `state-protocol.md` schema 为准，**勿自造字段名**，P-048 同类）；等待方式见 `engine/waiting-protocol.md`。
 
 **🟢 简单需求极简模式**：产出独立 `03-技术方案.md`（极简 ~300字），聚焦改动范围表 + 接口签名，不含完整代码示例。内容模板见 `SKILL.md` 关键原则 #14。
 
@@ -105,6 +105,7 @@ Step 1.6 L1 自动生成时：
 > **★ 禁止行为**：Agent 完成方案输出后，**不得直接问用户"是否确认通过"**。必须先完成 L1→L2 两层审查，输出审查结论后，再邀请用户确认。
 >
 > 事故案例：2026-06-30-007 迭代中，Agent 仅做 L1 审查就邀请用户确认，遗漏 L2（DeleteResult 未列入）和 L3（BusinessException 不存在、前端类名大小写错误、DBMS_LOCK 权限未标注），导致方案存在编译级错误。
+> ★ 邀请用户确认 03 方案时的等待方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`。
 
 > **为什么合并 L2+L3**：原 L3 有 6 项验证清单，每项都要 `search_content`，token 消耗巨大且 Agent 容易疲劳跳过。合并后用"优先级 + 最多 5 项"控制验证深度，确保最重要的符号一定被验到。
 

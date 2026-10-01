@@ -21,6 +21,7 @@
 | **S6a** | ACTIVE 指向已完结迭代 | ✅ 但 completed/abandoned | — | 任意 | **BLOCK** | state.yaml 中无 `current_phase: "04"` 匹配 → "无法读取 current_phase"。**自修复由 prompt 层处理**（gate-protocol.md §一 fallback 扫描→修复 ACTIVE="none"） |
 | **S6b** | ACTIVE 指向缺失的 state.yaml | ✅ 但文件不存在 | — | 任意 | **BLOCK** | `existsSync(stateFile)` = false → "状态文件丢失" |
 | **S7** | 开发窗口已关闭 | ✅ in_progress | 05/06/07 | `front-end/src/...` | **BLOCK** | 非 01-04 阶段 → "当前阶段 {N} 不允许进行文件写入操作" |
+| **S8** | 阶段推进留痕观测（RESUME-3 批次 3 路线 I） | ✅ in_progress | 任意 | `{ID}.state.yaml`（写入含 `current_phase` 变更） | **ALLOW+NOTIFY** | phaseAdvanceGuard：检测 current_phase 变更且无合法 `phase_confirm` ⇒ 放行但推 QQ 告警（fail-open 观测态）；强制化（BLOCK）另行拍板；现值/新值比对手法同 memoryQuotaGuard（`tool_input.content` / `old_str+new_str` 模拟替换） |
 
 ### 主表验证命令模板
 
@@ -53,7 +54,7 @@ echo '' | node hooks/gate-check.mjs; $LASTEXITCODE
 | **迭代门禁：删除已归档** | `gate-protocol.md` §二 | 用户请求删除迭代 | 已归档→不可删除 BLOCK；进行中/暂停/废弃→警告+用户确认 | 人工评审 |
 | **步骤门禁：强制步骤结清** | `gate-protocol.md` §三-C | current_phase 推进 M→M+1 | `mandatory: true` 步骤须全为 completed/skipped，否则先结清再推进 | 人工评审 |
 | **步骤门禁：条件重武装** | `gate-protocol.md` §三 | 跳步意图 / 恢复后首轮 / Agent 自检 | 拦截并提示当前第一个 pending 强制步骤 | 人工评审 |
-| **阶段推进确认门禁** | `gate-protocol.md` §三-B | current_phase 变更 | 检查本轮用户指令含"通过/确认/没问题/进入XX阶段"等明确通过语 | 人工评审 |
+| **阶段推进确认门禁** | `gate-protocol.md` §三-B | current_phase 变更 | 检查本轮用户指令含"通过/确认/没问题/进入XX阶段"等明确通过语；**推进写入须含 `phase_confirm` 留痕**（§三-B「确认留痕」） | 人工评审 + **S8 观测态**（hook 通知留痕缺失，强制化待拍板） |
 | **评审门禁** | `gate-protocol.md` §三-A | 推进 02→03 或 03→04 | 检查 `review_gate.result` ≠ "rejected" | 人工评审 |
 | **修改门禁：迭代归属校验** | `gate-protocol.md` §一 | 04 阶段写 `docs/iterations/{id}/` 下文件 | id 须与活跃迭代一致，不一致→BLOCK | 人工评审 |
 

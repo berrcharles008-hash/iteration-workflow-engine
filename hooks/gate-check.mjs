@@ -34,6 +34,26 @@
  *                （立项前需求登记；业务代码仍然全拦）。
  *              依据：2026-09-14~09-27 gate-audit.log 实测 BLOCK 317 次，05 占 81 次，
  *              其中 requirements/*.md 22 次 + knowledge-base 33 次均为合法产出。
+ *           ｜ GATE-A（2026-10-01 用户拍板「方案 A」）只读命令误拦收口（回归 SSOT §一 FIX-25 口径）：
+ *              ① `powershell|pwsh -Command|-c "…"` / `cmd /c "…"` **整条剥壳**后再判（最多 3 层；
+ *                 解析不出即放弃 ⇒ fail-closed）—— 消除「宿主本就在 PowerShell 里跑」的包装误判；
+ *                 `node -e` / `python -c` / `bash -c` **不剥**（真·任意代码执行，保持拦）。
+ *              ② 写/删/移动**动词**改「命令位」判定（WRITE_DELETE_VERB_AT_POS_RE）+ 判定前剔除
+ *                 成对引号内文本（stripQuotedText）—— 消除 `-Pattern 'move'` / `--grep=move` /
+ *                 `-Pattern 'a > b'` 等**数据**被当命令（实测 26 条只读样本误拦 10 条）。
+ *              ③ 拦截话术分流：`[CMD] …` 伪路径不再复用文件话术（原提示「仅允许修改迭代产出目录」
+ *                 对只读命令完全误导），改为报**命中规则** + 只读替代路径。
+ *           ｜ GATE-A2（2026-10-01 同日补口）拾回 GATE-A② 收窄出的 1 处放行窗口：
+ *              `$x=Remove-Item y`（`=` 两侧无空格）原整坨成为子句首 ⇒ 零成本绕过；
+ *              现由 PS_ASSIGN_PREFIX_RE 先剥 PowerShell 变量赋值前缀再判（只剥 `$var=`，
+ *              不碰 `--grep=move` 参数值）。回归 GATE-A 组随之上调（负向对照恢复满拦）。
+ *           ｜ FIX-26（2026-10-01 用户批准·开闸实施）state 归档命令误拦收口，三处：
+ *              ① resolveRenameNewName —— `Rename-Item -NewName '<裸名>'` 按源文件父目录展开
+ *                 （PowerShell 语义：-NewName 只能给名称），消除「源已豁免、目标被判越界」的自相矛盾；
+ *              ② runtimeMaintenanceTargets —— 所有危险段的目标都在 ALWAYS_ALLOW（runtime/）内时
+ *                 命令通道放行，关闭「文件工具放行 / 命令一律拦」的通道不一致（归档维护被迫开闸）；
+ *              ③ isAlwaysAllow 补「上跳段 `..`」守卫（只收紧）：防配合 ② 的放行面被路径穿越利用。
+ *              实测依据：gate-audit.log 2026-10-01T08:47:27Z（裸名误拦）/ 08:48:37Z（删除层已放行、被阶段层拦）。
  */
 
 import { readFileSync, existsSync, appendFileSync, writeFileSync, statSync, mkdirSync } from 'fs';
@@ -340,6 +360,129 @@ function memoryQuotaGuard(fsPath, tool, hi) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// ★ RESUME-3 批次 3 路线 I（2026-10-01）：phaseAdvanceGuard（阶段推进留痕观测 · fail-open）
+//   背景：§三-B 提示词门禁被穿透实锤——2026-10-01 01:40 的 04→05 由离机指令「完成后关机」
+//   连续收口（state.yaml:39），phase_history[04] 无 review_gate、无确认字段，事后无法审计。
+//   语义：检测 {ID}.state.yaml 写入是否变更 current_phase；变更而缺合法 phase_confirm 留痕
+//   ⇒ **放行但推 QQ 告警**（决策表 S8 = ALLOW+NOTIFY）；强制化（BLOCK）另行拍板（路线 I → G1）。
+//   挂载：concLockCheck 之后、第 1 关 ALWAYS_ALLOW 之前——state.yaml 命中 ALWAYS_ALLOW 段，
+//   挂在第 3 关之后是**死代码**（评审片 1/2 实证 :833-836 早退）。
+//   手法：现值读 RUNTIME_DIR（活跃侧）；新值 write_to_file=ti.content、replace_in_file=
+//   old_str+new_str 模拟替换（CRLF 兼容同 memoryQuotaGuard；模拟失败 ⇒ audit 留痕放行，不误伤）。
+//   已知残留绕过面：04 期 execute_command 直写 state.yaml（E2_CMD_04_PASS 留痕放行）。
+const PHASE_STATE_FILE_RE = /\/skills\/iteration-workflow\/runtime\/[^/]+\.state\.yaml$/i;
+
+function extractPhase(text) {
+  const m = String(text || '').match(/^current_phase:\s*"?([^"\r\n]+?)"?\s*$/m);
+  return m ? m[1] : null;
+}
+
+function extractPhaseConfirm(text) {
+  const t = String(text || '');
+  if (!/^\s*phase_confirm\s*:/m.test(t)) return null;
+  const pick = (k) => {
+    const m = t.match(new RegExp('^\\s*' + k + ':\\s*"?([^"\\r\\n]+?)"?\\s*$', 'm'));
+    return m ? m[1].trim() : '';
+  };
+  return { from: pick('from'), to: pick('to'), by: pick('by'), quote: pick('quote') };
+}
+
+function notifyPhaseGuard(reason, fromPhase, toPhase) {
+  try {
+    // 测试沙箱 / 显式关闭 ⇒ 不真发 QQ（同 notifySilentReason 口径），仅 audit 留痕可断言
+    if (process.env.GATE_TEST_RUNTIME_DIR || process.env.QQ_NOTIFY === '0' || process.env.QQ_NOTIFY === 'off') {
+      audit('PHASE_GUARD_NOTIFY_SKIP', 'silent');
+      return;
+    }
+    const enqueuePath = join(PROJECT_DIR, 'tools/qqbot/notify-enqueue.js');
+    const notifyPath = join(PROJECT_DIR, 'tools/qqbot/notify.qqbot.js');
+    const notifyTarget = existsSync(enqueuePath) ? enqueuePath : notifyPath;
+    if (!existsSync(notifyTarget)) { audit('PHASE_GUARD_NOTIFY_SKIP', 'no-notify-script'); return; }
+    let iterLabel = '-';
+    try { const c = readIterContext(); if (c && c.id) iterLabel = c.id + '（阶段 ' + (c.phase || '?') + '）'; } catch { /* 忽略 */ }
+    const payload = {
+      rows: [
+        ['事件', '阶段推进留痕告警（观测态 · 未拦截）'],
+        ['推进', (fromPhase || '?') + ' → ' + (toPhase || '(current_phase 行被删除)')],
+        ['原因', reason],
+        ['迭代', iterLabel],
+        ['依据', 'gate-protocol.md §三-B「确认留痕」/ 决策表 S8'],
+      ],
+      next: '推进已放行（观测态 fail-open）。补留痕 = state.yaml 增 phase_confirm{from,to,by,at[,quote]}（by=ide 须附 quote）。强制化另行拍板（RESUME-3 批次 3 G1）。',
+      prompt: '阶段推进留痕告警：' + reason,
+      kind: 'gate',
+    };
+    const child = spawn(process.execPath, [notifyTarget, '--json', JSON.stringify(payload)], {
+      detached: true, stdio: 'ignore', windowsHide: true,
+    });
+    child.unref();
+    audit('PHASE_GUARD_NOTIFY', reason + ' ' + fromPhase + '->' + toPhase);
+  } catch (e) {
+    audit('PHASE_GUARD_ERR', String((e && e.message) || e).slice(0, 140));
+  }
+}
+
+async function phaseAdvanceGuard(relPath) {
+  try {
+    if (String(process.env.PHASE_ADVANCE_GUARD || '') === '0') return;
+    const norm = '/' + String(relPath || '').replace(/\\/g, '/');
+    if (!PHASE_STATE_FILE_RE.test(norm)) return;
+    if (toolName === 'Delete' || toolName === 'delete_file' || toolName === 'delete_files') return;
+    const ti = (typeof hookInput !== 'undefined' && hookInput && hookInput.tool_input) || {};
+    const stateBase = relPath.replace(/\\/g, '/').split('/').pop();
+    const stateAbs = join(RUNTIME_DIR, stateBase);
+    let curText = null;
+    try { curText = readFileSync(stateAbs, 'utf-8'); } catch { return; }   // 新建/无现值 ⇒ 观测态不评
+    const oldPhase = extractPhase(curText);
+    if (oldPhase === null) return;
+    let newText = null;
+    if (toolName === 'write_to_file' || toolName === 'Write') {
+      newText = typeof ti.content === 'string' ? ti.content : null;
+      if (newText === null) { audit('PHASE_GUARD_SKIP', relPath + ' (no-content)'); return; }
+    } else if (toolName === 'replace_in_file' || toolName === 'Edit') {
+      const edits = Array.isArray(ti.edits) && ti.edits.length
+        ? ti.edits
+        : [{ old_str: typeof ti.old_str === 'string' ? ti.old_str : ti.old_string,
+             new_str: typeof ti.new_str === 'string' ? ti.new_str : ti.new_string }];
+      let sim = curText, failed = false;
+      for (const ed of edits) {
+        const o = typeof ed.old_str === 'string' ? ed.old_str : ed.old_string;
+        const n = typeof ed.new_str === 'string' ? ed.new_str : ed.new_string;
+        if (typeof o !== 'string' || typeof n !== 'string' || !o) { failed = true; break; }
+        let used = o, first = sim.indexOf(o);
+        if (first < 0) { const crlf = o.replace(/\r?\n/g, '\r\n'); if (crlf !== o && sim.indexOf(crlf) >= 0) { used = crlf; first = sim.indexOf(crlf); } }
+        if (first < 0) { failed = true; break; }
+        sim = sim.slice(0, first) + n + sim.slice(first + used.length);
+      }
+      if (failed) { audit('PHASE_GUARD_SKIP', relPath + ' (sim-fail)'); return; }
+      newText = sim;
+    } else {
+      return;   // 其余写工具不判（命令通道 = 已知残留绕过面，见决策表 S8 备注）
+    }
+    const newPhase = extractPhase(newText);
+    if (newPhase === null) {
+      notifyPhaseGuard('写入内容不含 current_phase 行（结构性破坏风险）', oldPhase, null);
+      return;
+    }
+    if (String(newPhase) === String(oldPhase)) return;   // 未变更
+    const c = extractPhaseConfirm(newText);
+    const okConfirm = !!c
+      && String(c.from) === String(oldPhase)
+      && String(c.to) === String(newPhase)
+      && ['qq#', 'ide', 'handoff', 'bypass'].some((k) => String(c.by || '').indexOf(k) === 0)
+      && (String(c.by) !== 'ide' || String(c.quote || '').length > 0);
+    if (okConfirm) {
+      audit('PHASE_ADVANCE_CONFIRMED', oldPhase + '->' + newPhase + ' by=' + c.by);
+      return;
+    }
+    audit('PHASE_GUARD_MISS', oldPhase + '->' + newPhase + ' confirm=' + (c ? JSON.stringify(c).slice(0, 120) : 'none'));
+    notifyPhaseGuard('current_phase 变更但无合法 phase_confirm 留痕', oldPhase, newPhase);
+  } catch (e) {
+    audit('PHASE_GUARD_ERR', String((e && e.message) || e).slice(0, 140));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // ★ CONC-1（2026-09-20 用户批准）多会话写者互斥（软锁 · fail-open）
 //   背景：同一工作区可同时打开多个 IDE 会话（2026-09-20 实证：5 秒内观测到
 //   两个不同 session_id 同时调用本 hook）。追加式编辑冲突只会「old_str 失配」，
@@ -463,23 +606,16 @@ const WATCHED_TOOLS = [
   'write_to_file', 'replace_in_file', 'delete_file', 'delete_files', 'execute_command',
 ];
 
-/** Shell 命令：写/删除类模式（触发门禁） */
+/** Shell 命令：危险模式（触发门禁）。
+ *  ★ GATE-A②（2026-10-01）：写/删/移动类**动词**已移出本表，改由 hasWriteDeleteAtCommandPos()
+ *    做「命令位」判定 + stripQuotedText() 剔除成对引号内文本 —— 消除只读查询误拦
+ *    （实证：`Select-String -Pattern 'move'`、`git log --grep=move` 被全文词匹配判危险）。
+ *    依据：SSOT §一 FIX-25 订正口径「只读命令在任何阶段都放行」，本改动即实现回归该口径。
+ *  本表保留「命令/工具级」模式（重定向 / git 变更 / svn 变更 / 打包压缩）。 */
 const DANGEROUS_CMD_PATTERNS = [
-  // ── 文件写入/重定向 ──
-  /\b(?:Out-File|Set-Content|Add-Content|Tee-Object)\b/i,       // PowerShell 写入
-  /\b(?:New-Item|mkdir)\b/i,                                       // 创建文件/目录（★ FIX-10：ni/md 改命令位判定）
-  // ★ FIX-25（2026-09-20 用户拍板「档 2」）：重定向模式收窄 —— 原 `/[^>]>\s*\S/`
-  //   会把命令**文本**里的 `->` / `=>` 当成输出重定向 ⇒ 只读命令被拦
-  //   （实证：`Write-Output "a -> b"`、`playwright-cli eval "() => {…}"`）。
-  //   残留（登记待裁决）：比较符 `A >= B` 仍会被判为追加重定向。
+  // ── 文件写入/重定向（★ GATE-A②：判定前先剔引号内文本，见 stripQuotedText） ──
   /[^=>-]>\s*\S/,                                                  // 输出重定向（排除 >> / -> / =>）
   />>\s*\S/,                                                       // 追加重定向
-  // ── 文件删除 ──
-  /\b(?:Remove-Item|erase|rmdir|rm|del)\b/i,                     // 删除命令（★ FIX-10：ri/rd 改命令位判定）
-  /\bdel\s+/i, /\berase\s+/i,                                      // cmd 删除
-  // ── 文件修改/移动 ──
-  /\b(?:Move-Item|mv|move|Rename-Item|ren|rename)\b/i,             // ★ FIX-10：mi/rni 改命令位判定
-  /\bcopy\s+/i,                                                    // 文件复制
   // ── Git 变更类 ──
   /\bgit\s+(?:commit|push|reset|rebase|merge|cherry-pick|stash)\b/i,
   // ── SVN 变更类 ──
@@ -487,6 +623,95 @@ const DANGEROUS_CMD_PATTERNS = [
   // ── 打包/压缩（可能覆盖文件） ──
   /\b(?:Compress-Archive|Expand-Archive)\b/i,
 ];
+
+/**
+ * ★ GATE-A②（2026-10-01）：写/删/移动类动词 —— 仅在**命令位**判定。
+ * 命令位 = 段首（wrapper 前缀剥离后）/ 语句分隔符后 / `{}` `()` 后 / 带空格的赋值等号后。
+ * 依据：`Select-String -Pattern 'move'`、`git log --grep=move` 中的 move 是**数据**非命令；
+ *       原全文 `\b` 词匹配把两者一并判危险 ⇒ 只读查询被拦（2026-10-01 实测 26 条只读样本拦 10 条）。
+ * 补口（GATE-A2 · 2026-10-01 同日）：原 `$x=Remove-Item y`（`=` 两侧无空格）会漏 ——
+ *       子句首整坨 `$x=Remove-Item` 不匹配 `^remove-item`；现由 PS_ASSIGN_PREFIX_RE 先剥
+ *       PowerShell 变量赋值前缀再判（只剥 `$var=`，不影响 `--grep=move` 等参数值）。
+ */
+const WRITE_DELETE_VERB_AT_POS_RE =
+  /^(?:remove-item(?:property)?|move-item|copy-item|rename-item|new-item(?:property)?|set-item(?:property)?|set-content|add-content|clear-content|out-file|tee-object|compress-archive|expand-archive|erase|rmdir|delete_files|delete|unlink|truncate|del|rm|rd|ri|rni|mi|mv|move|ren|rename|ni|md|mkdir|copy)(?:\.exe)?(?=\s|$|[;|&,)}])/i;
+
+/**
+ * ★ GATE-A2（2026-10-01）：PowerShell 变量赋值前缀（`$x=` / `$env:NAME=` / `$a[0]=` / `$o.Prop=`）。
+ * 为什么需要：切子句用 `\s=\s`（等号两侧须有空白）⇒ `$x=Remove-Item y` 不被切分，
+ *   子句首整坨 `$x=Remove-Item` 使 `^remove-item` 永不命中 ⇒ **零成本绕过**
+ *   （2026-10-01 探针实测：3 条取证样本全 allow；带空格形态对照 = BLOCK）。
+ * 边界：**只剥 `$` 开头的变量**（PowerShell 变量必带 `$`）—— 不碰 `FOO=bar`（bash 风格前缀）、
+ *   不碰 `--grep=move`（参数值）⇒ 不引入新的误判/漏放面。
+ */
+const PS_ASSIGN_PREFIX_RE = /^\$[\w:.]+(?:\[[^\]]*\])?\s*=\s*/;
+
+/** 段内是否存在「命令位」的写/删/移动动词（切子句 → 剥 wrapper 前缀 / 残留引号 / PS 赋值前缀） */
+function hasWriteDeleteAtCommandPos(s) {
+  for (const clause of String(s || '').split(/[;|&\n]|[(){}]|\s=\s/)) {
+    const t = clause.trim()
+      .replace(CMD_WRAPPER_PREFIX_RE, ' ')
+      .replace(/^[`"']+/, ' ')
+      .trim()
+      .replace(PS_ASSIGN_PREFIX_RE, '')      // ★ GATE-A2：剥 PowerShell 变量赋值前缀
+      .trim();
+    if (t && WRITE_DELETE_VERB_AT_POS_RE.test(t)) return true;
+  }
+  return false;
+}
+
+/**
+ * ★ GATE-A②（2026-10-01）：引号内文本 = 数据，不参与危险判定。
+ * 依据：`Select-String -Pattern 'a > b'`（模式串里的比较符）、`echo "Remove-Item x"`（文案）——
+ *       引号内是**数据**，原判定将其当命令。保守边界：仅剔除**成对**引号；
+ *       跨段未闭合的引号原样保留 ⇒ 仍走 fail-closed（例：`powershell -Command "del x` ⇒ 不剥壳 ⇒ 拦）。
+ */
+function stripQuotedText(s) {
+  return String(s || '')
+    .replace(/"[^"]*"/g, ' ')
+    .replace(/'[^']*'/g, ' ');
+}
+
+/**
+ * ★ GATE-A①（2026-10-01）：shell 包装剥壳 —— `powershell|pwsh … -Command|-c "…"` 与 `cmd /c "…"`。
+ * 背景：宿主本身就在 PowerShell 中执行命令，显式包装不增加能力，却让只读查询
+ *       （实证 2026-10-01：`powershell -NoProfile -Command "Get-Process …"` / `Get-ChildItem …`）
+ *       被判「解释器内联 = 任意代码执行」而整条拦截（01-03/none/05-07 一律 block）。
+ * 语义：**仅当整条命令就是一个可完整解析的包装**时才剥壳（最多 3 层），内层交回原判定链；
+ *       解析不出即返回 null ⇒ 保持原逻辑（fail-closed）：引号未闭合 / 包装后有其它语句 /
+ *       `-EncodedCommand`（无法静态解析）/ 非白名单包装（`bash -c`、`node -e`、`python -c` 不剥）。
+ */
+function unwrapWholeShellCommand(cmd) {
+  const raw = String(cmd || '');
+  if (!raw.trim()) return null;
+
+  // ① cmd /c "…"（cmd 包装内层可为任意命令）
+  const cmdHead = raw.match(/^\s*cmd(?:\.exe)?\s+\/[a-zA-Z]\s+/i);
+  if (cmdHead) return unwrapQuotedPayload(raw.slice(cmdHead[0].length));
+
+  // ② powershell|pwsh … -Command|-c "…"
+  const psHead = raw.match(/^\s*(?:powershell|pwsh)(?:\.exe)?\s+/i);
+  if (!psHead) return null;
+  const rest = raw.slice(psHead[0].length);
+  const flag = rest.match(/(?:^|\s)(?:-command|-c)(?=\s|$|["'])/i);
+  if (!flag) return null;
+  return unwrapQuotedPayload(rest.slice(flag.index + flag[0].length));
+}
+
+/** 剥掉整体包裹的一对引号（无引号则原样返回；解析存疑 ⇒ null = 放弃剥壳） */
+function unwrapQuotedPayload(text) {
+  const p = String(text || '').trim();
+  if (!p) return null;
+  const q = p[0];
+  if (q === '"' || q === "'") {
+    const last = p.lastIndexOf(q);
+    if (last <= 0) return null;                          // 引号未闭合
+    if (p.slice(last + 1).trim() !== '') return null;    // 闭合引号后仍有内容 ⇒ 结构不完整
+    const inner = p.slice(1, last).trim();
+    return inner || null;
+  }
+  return p;
+}
 
 /** Shell 命令：纯读类模式（直接放行，不检查门禁） */
 const SAFE_CMD_PATTERNS = [
@@ -657,13 +882,39 @@ function textHasGitChange(text) {
   return segs.some((seg) => gitChangeVerb(seg).hit);
 }
 
-/** 单个命令段是否危险（命令位短别名 或 危险模式 或 解释器内联 或 git 变更词元） */
+/**
+ * 单段危险判定 → 命中原因（null = 安全）。
+ * ★ GATE-A③（2026-10-01）：由「返回布尔」改为「返回原因」—— 拦截话术与审计
+ *   得以显示**实际命中规则**（原实现把只读命令也提示成「仅允许修改迭代产出目录」，误导排查）。
+ * 判定链（顺序即优先级）：命令位短别名 → 命令位写删动词 → 危险模式（引号感知）
+ *   → 解释器内联 → git 变更词元。
+ */
+function dangerousSegmentReason(seg) {
+  const raw = String(seg || '').trim();
+  if (!raw) return null;
+  const s = stripQuotedText(raw);                              // ★ GATE-A②：引号内 = 数据
+  const head = s.replace(CMD_WRAPPER_PREFIX_RE, ' ').trim();
+  if (SHORT_ALIAS_AT_CMD_POS_RE.test(head)) {
+    return { rule: 'SHORT-ALIAS@CMD-POS', detail: head.slice(0, 80) };
+  }
+  if (hasWriteDeleteAtCommandPos(s)) {
+    return { rule: 'WRITE/DELETE@CMD-POS', detail: s.slice(0, 80) };
+  }
+  if (DANGEROUS_CMD_PATTERNS.some((p) => p.test(s))) {
+    return { rule: 'DANGEROUS-PATTERN', detail: s.slice(0, 80) };
+  }
+  if (INTERPRETER_INLINE_PATTERNS.some((p) => p.test(s))) {
+    return { rule: 'INTERPRETER-INLINE', detail: s.slice(0, 80) };
+  }
+  if (gitChangeVerb(raw).hit) {
+    return { rule: 'GIT-CHANGE', detail: raw.slice(0, 80) };
+  }
+  return null;
+}
+
+/** 布尔包装（兼容既有调用点） */
 function isDangerousSegment(seg) {
-  const s = String(seg || '').trim();
-  if (SHORT_ALIAS_AT_CMD_POS_RE.test(s.replace(CMD_WRAPPER_PREFIX_RE, ''))) return true;
-  return DANGEROUS_CMD_PATTERNS.some((p) => p.test(s))
-      || INTERPRETER_INLINE_PATTERNS.some((p) => p.test(s))
-      || gitChangeVerb(s).hit;   // ★ E-2：并入判定链（不新增独立 block 点 ⇒ 同段只拦一次）
+  return dangerousSegmentReason(seg) !== null;
 }
 
 /**
@@ -767,7 +1018,22 @@ if (toolName === 'execute_command' || toolName === 'Bash') {
   // 旧实现先判 SAFE（^ 锚定整条命令行首）再判 DANGEROUS，导致首段为
   // cd / echo / dir 等安全前缀时，后续的 del / Remove-Item / 重定向 /
   // 解释器内联（node -e、python -c）被整条放行。
-  const segments = splitCommandChain(cmd);
+  // ★ GATE-A①（2026-10-01）：shell 包装剥壳 —— `powershell|pwsh -Command|-c "…"` · `cmd /c "…"`。
+  //   配合 SSOT §一「只读命令在任何阶段都放行」：包装本身不再等价「任意代码执行」，
+  //   内层文本交回判定链；解析不出 ⇒ 原样走下方逻辑（fail-closed），不放宽任何写语义。
+  let effectiveCmd = cmd;
+  let unwrapDepth = 0;
+  for (let i = 0; i < 3; i++) {
+    const inner = unwrapWholeShellCommand(effectiveCmd);
+    if (inner === null) break;
+    effectiveCmd = inner;
+    unwrapDepth += 1;
+  }
+  if (unwrapDepth > 0) {
+    audit('CMD_UNWRAP', `depth=${unwrapDepth} | ${effectiveCmd.replace(/\s+/g, ' ').substring(0, 140)}`);
+  }
+
+  const segments = splitCommandChain(effectiveCmd);
 
   // ★ GAP-4/加固①（2026-09-16）：逃生口「自建」绝对拦截 —— 任何阶段一律拒绝（含 04）。
   //   逃生口是「人开的闸」；Agent 自建即等于自行解除门禁，故不走阶段门禁、直接 block。
@@ -780,7 +1046,9 @@ if (toolName === 'execute_command' || toolName === 'Bash') {
     );
   }
 
-  const dangerSeg = segments.find((seg) => isDangerousSegment(seg));
+  // ★ GATE-A③（2026-10-01）：取「命中原因」而非仅布尔 —— 供拦截话术/审计显示实际规则
+  const dangerHit = segments.map((seg) => ({ seg, reason: dangerousSegmentReason(seg) })).find((x) => x.reason);
+  const dangerSeg = dangerHit ? dangerHit.seg : undefined;
 
   // ★ E-2 结构兜底留痕（2026-09-30）：命中未知 git 全局选项 ⇒ fail-closed 判危险并留痕
   if (dangerSeg) {
@@ -792,7 +1060,16 @@ if (toolName === 'execute_command' || toolName === 'Bash') {
   const deleteSeg = segments.find((seg) => isDeleteSegment(seg));
   if (deleteSeg) {
     // ★ GATE-6：传入整条 cmd —— 变量赋值可能与 Move/Remove 段分处不同段
-    await deleteGate(extractPathsFromCommand(deleteSeg, cmd), deleteSeg);
+    // ★ GATE-A①：目标提取改用**剥壳后**命令（`cmd /c "del /q x"` ⇒ 段内即 `del /q x`）
+    await deleteGate(extractPathsFromCommand(deleteSeg, effectiveCmd), deleteSeg);
+  }
+
+  // ★ FIX-26（2026-10-01）：runtime/ 状态维护命令豁免（与第 1 关 ALWAYS_ALLOW 对齐）。
+  //   置于逃生口「自建」硬拦之后、阶段门禁之前；目标不满足条件即返回 null ⇒ 行为不变。
+  const rtTargets = runtimeMaintenanceTargets(effectiveCmd, segments);
+  if (rtTargets) {
+    audit('STAGE_ALLOW', `[CMD-RUNTIME] ${rtTargets.join(' , ')}`);
+    process.exit(0);
   }
 
   // ★ FIX-9d：解释器内联「疑似删除」仅审计留痕（不拦截，理由见 isInlineDeleteSuspect 注释）
@@ -808,7 +1085,13 @@ if (toolName === 'execute_command' || toolName === 'Bash') {
   }
 
   // 命中危险段 → 走门禁（命令无文件路径可参与豁免判定，标识取命令文本）
-  await gateCheck(`[CMD] ${cmd.substring(0, 80)}`);
+  // ★ GATE-A③：携带命中规则 / 剥壳信息 ⇒ 拦截话术不再复用文件话术
+  await gateCheck(`[CMD] ${cmd.substring(0, 80)}`, {
+    rule: dangerHit.reason.rule,
+    hit: dangerHit.reason.detail,
+    effectiveCmd,
+    unwrapDepth,
+  });
 }
 
 // ── 无文件路径放行（防御） ────────────────────────────
@@ -829,6 +1112,10 @@ const relativePath = filePathNorm.startsWith(projectDirNorm)
 
 // ── ★CONC-1：多会话写者互斥（软锁；与阶段门禁正交，fail-open）──────────
 await concLockCheck(relativePath, toolName);
+
+// ── ★ RESUME-3 批次 3 路线 I：阶段推进留痕观测（S8 · ALLOW+NOTIFY · fail-open）──
+// 必须挂在第 1 关 ALWAYS_ALLOW 之前（state.yaml 命中 runtime/ 豁免段，挂后面=死代码）。
+await phaseAdvanceGuard(relativePath);
 
 // ── 第1关：ALWAYS_ALLOW（★ FIX-9：段前缀匹配，不再子串 includes）────
 if (isAlwaysAllow(relativePath)) {
@@ -932,7 +1219,25 @@ function matchDispatchWhitelist(target, items) {
 }
 
 // ── 门禁检查（活跃迭代 + 阶段判定） ──────────────────
-async function gateCheck(fsPath) {
+/**
+ * ★ GATE-A③（2026-10-01）：命令类拦截话术。
+ * 原实现对 `[CMD] …` 伪路径复用文件话术（「仅允许修改迭代产出目录」）——
+ * 对只读/查询类误拦完全误导（2026-10-01 实证：两条 Get-Process / Get-ChildItem 拦截即此形态）。
+ */
+function cmdGateLines(cmdCtx) {
+  const ctx = cmdCtx || {};
+  return [
+    '该命令被判「写/删/变更」语义，已拦截（只读查询不受门禁限制）。',
+    '命中规则: ' + (ctx.rule || '(未记录)'),
+    ...(ctx.unwrapDepth ? ['剥壳后命令: ' + String(ctx.effectiveCmd || '').replace(/\s+/g, ' ').slice(0, 120)] : []),
+    '',
+    '只读查询请优先用 read_file / search_content（不受门禁约束）；',
+    '命令建议直接写 Get-ChildItem · Select-String · git log · git status（无需 powershell -Command 包装）。',
+    '确需写操作：进入 04-开发实现 阶段，或由用户手动开闸（.gate-bypass）。',
+  ];
+}
+
+async function gateCheck(fsPath, cmdCtx) {
   // ★ FIX-11：工作记忆写入/维护与迭代状态解耦（ACTIVE=none / 00 / 05 / 06 / 07 一并放行）。
   if (isMetaWriteExempt(fsPath)) {
     // ★ MAINT-3 P-5（2026-09-22）：MEMORY.md 写入侧配额守卫（fail-open；逃生口上游优先）
@@ -954,6 +1259,13 @@ async function gateCheck(fsPath) {
     if (noneHit) {
       audit('STAGE_ALLOW', `[NONE] ${fsPath} (pattern=${noneHit})`);
       process.exit(0);
+    }
+    if (cmdCtx) {
+      block(
+        '当前无活跃迭代：该命令含「写/删/变更」语义，已拒绝。',
+        `本次尝试: ${fsPath}`,
+        ...cmdGateLines(cmdCtx)
+      );
     }
     block(
       '当前无活跃迭代。',
@@ -1037,6 +1349,13 @@ async function gateCheck(fsPath) {
         }
       }
     }
+    if (cmdCtx) {
+      block(
+        `当前处于 ${currentPhase} 阶段：该命令含「写/删/变更」语义，已拒绝。`,
+        `本次尝试: ${fsPath}`,
+        ...cmdGateLines(cmdCtx)
+      );
+    }
     block(
       `当前处于 ${currentPhase} 阶段，仅允许修改迭代产出目录。`,
       `本次尝试: ${fsPath}`,
@@ -1051,6 +1370,13 @@ async function gateCheck(fsPath) {
   }
 
   // 其他阶段（00/05/06/07）：阻止
+  if (cmdCtx) {
+    block(
+      `当前阶段 ${currentPhase}：该命令含「写/删/变更」语义，已拒绝。`,
+      `本次尝试: ${fsPath}`,
+      ...cmdGateLines(cmdCtx)
+    );
+  }
   block(`当前阶段 ${currentPhase} 不允许进行文件写入操作。`);
 }
 
@@ -1099,7 +1425,12 @@ function isInlineDeleteSuspect(seg) {
 
 /** 相对路径是否落在工作流 runtime 目录（ALWAYS_ALLOW） */
 function isAlwaysAllow(relPath) {
-  const p = '/' + String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  const raw = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  // ★ FIX-26（2026-10-01）：含「上跳段」(`..`) 的路径不认定豁免（fail-closed 收紧）。
+  //   原实现只看前缀 ⇒ `<runtime>/../../hooks/x` 会被判为「在 runtime 内」而放行。
+  //   本改动只收紧、不放宽：合法 runtime 路径不含 `..`，回归不受影响。
+  if (/(?:^|\/)\.\.(?:\/|$)/.test(raw)) return false;
+  const p = '/' + raw;
   if (RUNTIME_REL && p.startsWith('/' + RUNTIME_REL)) return true;
   return ALWAYS_ALLOW_SEGMENTS.some((seg) => p.includes(seg));
 }
@@ -1167,6 +1498,42 @@ function expandShellVars(text, map) {
   return s;
 }
 
+/**
+ * ★ FIX-26（2026-10-01）：`Rename-Item -NewName` 的同目录语义解析。
+ *
+ * 背景（实测 gate-audit.log 2026-10-01T08:47:27Z）：归档 state 文件的标准写法
+ *   `Rename-Item -LiteralPath '<abs>/runtime/2026-09-18-001-…state.yaml' -NewName '…state.archived.yaml'`
+ * 被拦，理由是「删除/移动类操作未在任务清单登记」，报的目标是**裸文件名**
+ * `2026-09-18-001-…state.archived.yaml` —— 它不含目录分量 ⇒ 不匹配 runtime/ 前缀、
+ * 也不在删除豁免表 ⇒ fail-closed 误拦；而同一命令的**源**路径已按 runtime/ 豁免放行，
+ * 即同一条命令两个端点判定自相矛盾。
+ *
+ * 依据（非启发式猜测）：PowerShell 官方语义规定 `-NewName` 只能给**名称**、不能给路径，
+ *   故其所在目录 ≡ `-Path` / `-LiteralPath` 值的父目录 —— 可静态确定。
+ *
+ * 边界（不扩大放行面）：仅认 `Rename-Item` / `rni`；`-NewName` 值须为裸名（无 `/` `\`）；
+ *   同段须**恰好一个**带目录分量的目标作锚点；任一条件不满足 ⇒ 原样返回（继续 fail-closed）。
+ *   Move-Item / Copy-Item / Remove-Item **不适用** —— 其路径参数是完整路径，裸名按 CWD 解析，
+ *   不能假定与同段的绝对路径同目录。
+ */
+function resolveRenameNewName(segText, targets) {
+  const seg = String(segText || '');
+  if (!/\b(?:Rename-Item|rni)\b/i.test(seg)) return targets;
+  const m = seg.match(/-NewName\s+(?:"([^"]+)"|'([^']+)'|([^\s;|&)]+))/i);
+  if (!m) return targets;
+  const newName = String(m[1] || m[2] || m[3] || '').trim();
+  if (!newName || /[\\/]/.test(newName)) return targets;      // 带路径 ⇒ 按 CWD 语义判，不代解析
+  const anchors = targets.filter((t) => /[\\/]/.test(String(t)) && String(t) !== newName);
+  if (anchors.length !== 1) return targets;                   // 无锚点 / 多锚点 ⇒ 不猜
+  const anchor = String(anchors[0]).replace(/\\/g, '/');
+  const cut = anchor.lastIndexOf('/');
+  if (cut <= 0) return targets;
+  const dir = anchor.slice(0, cut);
+  const resolved = targets.map((t) => (String(t) === newName ? dir + '/' + newName : t));
+  audit('RENAME_SAMEDIR', `${newName} -> ${dir}/${newName}`);
+  return resolved;
+}
+
 /** 从删除类命令段提取候选路径 token（★ GATE-6：cmd = 整条命令，供变量赋值收集） */
 function extractPathsFromCommand(seg, cmd) {
   let s = String(seg || '').replace(/["']/g, ' ');
@@ -1184,7 +1551,9 @@ function extractPathsFromCommand(seg, cmd) {
   // ★ FIX-15 补强：丢弃「扩展名碎片」（形如 `.mjs`）—— 只可能来自路径被误切，非真实删除目标
   const isExtFragment = (t) => /^\.[A-Za-z0-9]{1,8}$/.test(t);
   const pathLike = tokens.filter((t) => !isExtFragment(t) && (/[\\/]/.test(t) || /\.[A-Za-z0-9]{1,8}$/.test(t)));
-  return (pathLike.length ? pathLike : tokens).slice(0, 40);
+  const picked = (pathLike.length ? pathLike : tokens).slice(0, 40);
+  // ★ FIX-26：Rename-Item 的 -NewName（裸名）按源文件父目录展开后再交 deleteGate 判定
+  return resolveRenameNewName(seg, picked);
 }
 
 /** delete_allow 匹配：精确路径 / 目录前缀（以 / 结尾）/ 通配 / basename 后缀 */
@@ -1290,6 +1659,36 @@ async function deleteGate(paths, label) {
   // ★ 删除白名单校验通过 → 交回调用方继续走「阶段门禁」（不得直接 exit）：
   //   01-03 仍受 EXEMPT_PATHS 约束；00/05/06/07 仍一律阻止；04 放行。
   audit('DELETE_ALLOW', `${label} → ${pending.join(' , ')}`);
+}
+
+/**
+ * ★ FIX-26（2026-10-01）：runtime/ 状态维护命令豁免 —— 关闭「文件通道 vs 命令通道」口径不一致。
+ *
+ * 背景（实测 2026-10-01T08:48:37Z）：文件工具写/删 runtime/ 在第 1 关无条件放行（ALWAYS_ALLOW），
+ *   而命令通道在 01-03 阶段一律拦（FIX-24「Bash 不享豁免」）—— 同一条路径两种结果。
+ *   归档 state 文件那次的实录：删除层已放行（`DELETE_EXEMPT Move-Item … → 两个目标均在 runtime/`），
+ *   随后被阶段层以「01 阶段：该命令含写/删/变更语义」拦下 ⇒ 维护动作只能开闸或绕道，
+ *   与「runtime/ = 状态维护目录」的设计意图冲突。
+ *
+ * 判定：**所有危险段**的目标都必须落在 ALWAYS_ALLOW（runtime/）内 ——
+ *   目标解析不出（0 个）/ 属项目外绝对路径 / 含上跳段 / 落在任何非 runtime 目录 ⇒ 返回 null，
+ *   继续走原阶段门禁（fail-closed，不放宽任何写语义）。
+ *   返回目标清单仅用于审计留痕。
+ */
+function runtimeMaintenanceTargets(cmd, segments) {
+  const dangerSegs = (Array.isArray(segments) ? segments : []).filter((seg) => dangerousSegmentReason(seg));
+  if (dangerSegs.length === 0) return null;
+  const all = [];
+  for (const seg of dangerSegs) {
+    const targets = extractPathsFromCommand(seg, cmd);
+    if (!targets.length) return null;
+    for (const raw of targets) {
+      const rel = toProjectRelative(raw);
+      if (!rel || !isAlwaysAllow(rel)) return null;
+      all.push(rel);
+    }
+  }
+  return all;
 }
 
 /** ★ FIX-9：通用审计留痕（放行与拦截均记录） */
