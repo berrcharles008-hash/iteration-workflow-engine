@@ -4,6 +4,18 @@
 > 本文件是门禁规则的**唯一真相源（Single Source of Truth）**。
 > 路径占位符（`{{ITERATIONS_DIR}}` 等）运行时从 `project/project.manifest.yaml` 注入。
 
+> ★ **实现位置分层（HOOK-SLIM-1 · 2026-10-01 用户拍板）**：
+> 本协议的实现代码位于 **`engine/gate/gate-check.mjs`**——下文各条目中的「实现：…」均指该文件。
+> `{IDE}/hooks/gate-check.mjs` 已降为**转发 shim**：按候选路径定位实现后 `await import()`，
+> 实现缺失时 fail-closed（exit 2）并在 stderr 输出重装指引（反制 install.ps1 注释所警惕的「Hook 静默失效」）。
+> **动机（实测）**：IDE 对 `{IDE}/hooks/**` 的写入强制人工确认且无用户可见开关
+> （`autoApprovalSettings` 全开、`maxRequests=-1` 仍弹；`disabledSecurityCategories` 可选类别仅
+> `injection/scriptExec/powershell` 三个命令内容扫描类别，不含文件写入保护），而 `{IDE}/skills/**`
+> 写入实测不触发（含 `.mjs`）⇒ 策略改动落 `engine/gate/` 后，迭代中不再需要用户手点「运行」。
+> **兼容性**：命令示例 `node {IDE}/hooks/gate-check.mjs`（见 `gate-decision-table.md` 主表）**仍然有效**，
+> 入口路径未变；分发由 install Step 2（`engine/` 整目录 `Copy-Item -Recurse`）与 sync-back（`-Recurse` 回流）
+> 保证，install.ps1 / install.sh 本身零改动。
+
 ---
 
 ## 一、修改门禁协议
@@ -79,7 +91,7 @@ Agent 准备修改文件
                     （见下节「04 阶段的删除类操作校验」；未登记即 BLOCK，fail-closed）
 ```
 
-> ★ **FIX-11（2026-09-16）**：上述决策树**不适用** `{IDE}/memory/` 工作记忆写入/维护（与迭代状态无关、任何阶段放行；范围严格限定 memory/，不含 temp/hooks/skills）—— 规则与实现见 §四 门禁豁免 FIX-11 条目（`hooks/gate-check.mjs` `isMetaWriteExempt()`）。
+> ★ **FIX-11（2026-09-16）**：上述决策树**不适用** `{IDE}/memory/` 工作记忆写入/维护（与迭代状态无关、任何阶段放行；范围严格限定 memory/，不含 temp/hooks/skills）—— 规则与实现见 §四 门禁豁免 FIX-11 条目（`engine/gate/gate-check.mjs` `isMetaWriteExempt()`）。
 > ★ **FIX-12②（2026-09-17）**：05/06/07 阶段的「本职文档产出」按 `STAGE_EXEMPT_PATHS` 阶段化放行（业务代码与命令仍拦）—— 规则与实现见 §四 门禁豁免 FIX-12② 条目（`matchStageExempt()`，排除 Bash 伪路径 `[CMD] …`；放行写 `STAGE_ALLOW` 审计）。
 > ★ **FIX-16（2026-09-17）**：07 阶段另放行写 `project/lessons-learned.md`（模式库；`project/` 其它文件仍拦）—— 规则与实现见 §四 门禁豁免 FIX-16 条目（`STAGE_EXEMPT_PATHS['07'].files`，**精确后缀匹配、自动跨 IDE 前缀**）。
 
@@ -592,11 +604,11 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
   与上条**同层同性质**（工作记忆维护属元层；`ACTIVE=none` 与 00/05/06/07 同样放行）：
   CodeBuddy 系 IDE 的**项目级**记忆落在用户目录、不在工作区内 ⇒ 原 `{IDE}/memory/` 模式恒不命中（01/02 阶段各实测 1 次误拦）。
   范围**严格限定** `projects/<slug>/memory/`：`projects/<slug>/` 下其它内容（会话记录 / 转录）**不在此列**；
-  实现 = `hooks/gate-check.mjs` 的 `META_WRITE_EXEMPT_RE`（写入侧）与 `DELETE_EXEMPT_PATTERNS`（删除侧）。
+  实现 = `engine/gate/gate-check.mjs` 的 `META_WRITE_EXEMPT_RE`（写入侧）与 `DELETE_EXEMPT_PATTERNS`（删除侧）。
 - ★ **`{IDE}/memory/MEMORY.md` 的写入侧配额守卫**（MAINT-3 P-5 · 2026-09-22 用户批准）——
   在 FIX-11 的 memory 豁免**之上**追加的唯一约束：写前估算「写后 UTF-16 码元」，
   **> 8000 拦一次**（超限会被 IDE 从头部截断、尾部丢失）、**> 7200 仅 stderr 告警**（余量 <10%）。
-  - 实现：`hooks/gate-check.mjs` 的 `memoryQuotaGuard()`（在 `gateCheck()` 的 `isMetaWriteExempt` 分支内调用）；
+  - 实现：`engine/gate/gate-check.mjs` 的 `memoryQuotaGuard()`（在 `gateCheck()` 的 `isMetaWriteExempt` 分支内调用）；
     估算口径：`write_to_file`/`Write` 用 `content`；`replace_in_file`/`Edit` 在 `old_str` **唯一命中**时
     按替换差值计算（含 `\n ⇄ \r\n` 兼容），其余情形 ⇒ **fail-open**（放行 + `MEMORY_QUOTA_SKIP` 留痕）。
   - 语义：与 FIX-11 同层（**与迭代阶段无关**）；**逃生口优先级更高**（上游已放行）；
@@ -612,7 +624,7 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
   **07** → `docs/iterations/`（回顾报告）· `{IDE}/skills/iteration-workflow/project/lessons-learned.md`（**模式库写入**，FIX-16）；
   **仍拦（fail-closed）**：`ACTIVE=none` 全部、业务区（`back-end/` `front-end/` `sql/` …）、
   05/07 的 `requirements/`、06 的 `requirements` 非 `.md` 文件、07 的 `project/` 其它文件、**所有 Bash 命令**（伪路径不享豁免）。
-  实现：`hooks/gate-check.mjs` 的 `STAGE_EXEMPT_PATHS` + `matchStageExempt()`；放行写 `STAGE_ALLOW` 审计。
+  实现：`engine/gate/gate-check.mjs` 的 `STAGE_EXEMPT_PATHS` + `matchStageExempt()`；放行写 `STAGE_ALLOW` 审计。
 - ⛔ **创建逃生口标记（`.gate-bypass`）**（GAP-4/加固① · 2026-09-16）—— **不在豁免范围**：
   由 §一「逃生口自建拦截」**绝对拒绝**（任何阶段，含 04）。逃生口须由**用户手动开启**；
   **删除**标记不受此限（标记存在时上游逃生口检查已放行）。
@@ -671,7 +683,7 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
 | 关闭 | `CONC_LOCK=0|off` 或标记文件 `hooks/.conc-off` |
 | ★ 边界 | 与阶段门禁**正交**、**fail-open**（本关自身异常绝不阻断写入）；**不改** `state-protocol.md` §九 |
 
-实现：`hooks/gate-check.mjs` → `concLockCheck()`｜回归：`scripts/run-gate-tests.mjs` 的 `CONC-1~5`｜工单：`runtime/TOOLING-TODO.md` → CONC-1。
+实现：`engine/gate/gate-check.mjs` → `concLockCheck()`｜回归：`scripts/run-gate-tests.mjs` 的 `CONC-1~5`｜工单：`runtime/TOOLING-TODO.md` → CONC-1。
 
 ---
 

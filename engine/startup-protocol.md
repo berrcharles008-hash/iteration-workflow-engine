@@ -27,7 +27,7 @@
 
 1. `{IDE}` = 当前宿主 IDE 目录（= 上表 `IDE` 值）。取值表本轮承诺 **CodeBuddy `.codebuddy` / Claude Code `.claude`** 两值；
    Cursor `.cursor` / Codex `.codex` 已被 hook 识别，但**不承诺**其引擎副本存在。
-2. 实现层路径白名单**必须逐宿主枚举**（`hooks/gate-check.mjs` 的数组字面量），故**不变量化**；`{IDE}` 仅用于文档指代，
+2. 实现层路径白名单**必须逐宿主枚举**（`engine/gate/gate-check.mjs` 的数组字面量），故**不变量化**；`{IDE}` 仅用于文档指代，
    读到「实现未跟随文档」时按本理解读，不得据此改 hook。
 3. ★ **派发时主 Agent 必须把 `{IDE}` 解析为实际目录后再嵌入成员 prompt** —— 成员 prompt 内**不得残留字面量**
    （成员无解析义务，残留会导致照字面创建目录）。

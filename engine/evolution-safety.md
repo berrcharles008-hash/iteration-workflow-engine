@@ -13,7 +13,7 @@
 
 | 文件 | 路径（相对 Skill 根） | 角色 |
 |------|------|------|
-| gate-check.mjs | `hooks/gate-check.mjs`（`.claude/hooks/` 或 `.codebuddy/hooks/`，随宿主） | L3 物理拦截层 |
+| gate-check.mjs | 入口 `hooks/gate-check.mjs`（`.claude/hooks/` 或 `.codebuddy/hooks/`，随宿主，转发 shim）→ 实现 `engine/gate/gate-check.mjs` | L3 物理拦截层 |
 | gate-protocol.md | `engine/gate-protocol.md` | 门禁规则唯一真相源 |
 | state-protocol.md | `engine/state-protocol.md` | 状态文件读写规则 |
 | SKILL.md | `SKILL.md` | Skill 入口 + 路由表 + 门禁摘要 |
