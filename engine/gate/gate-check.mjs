@@ -67,7 +67,7 @@
  *              回归：run-gate-tests.mjs 40/40 通过（2026-10-01）。
  */
 
-import { readFileSync, existsSync, appendFileSync, writeFileSync, statSync, mkdirSync } from 'fs';
+import { readFileSync, existsSync, appendFileSync, writeFileSync, statSync, mkdirSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 import { spawn } from 'child_process';
 
@@ -237,6 +237,8 @@ function matchStageExempt(phase, relPath) {
   const raw = String(relPath || '');
   if (!raw || raw.startsWith('[')) return null;
   const p = raw.replace(/\\/g, '/').replace(/^\/+/, '');
+  // ★ TRAVERSAL-1：含上跳段 ⇒ 不认定豁免（防 `docs/iterations/../../back-end/…` 借前缀越权）
+  if (hasTraversal(p)) return null;
   const hit = (pat) => p.startsWith(pat) || p.includes('/' + pat);
   for (const f of rule.files || []) if (p === f || p.endsWith('/' + f)) return f;
   for (const d of rule.dirs || []) if (hit(d)) return d;
@@ -288,6 +290,8 @@ function handoffLockActive() {
 function isMetaWriteExempt(relPath) {
   const raw = String(relPath || '');
   if (!raw || raw.startsWith('[')) return false;
+  // ★ TRAVERSAL-1：含上跳段 ⇒ 不认定记忆豁免（防 `.codebuddy/memory/../../temp/…` 跳板）
+  if (hasTraversal(raw)) return false;
   const p = raw.replace(/\\/g, '/').replace(/^\/+/, '');
   // ★ GATE-5（2026-09-23）：外置项目记忆（绝对路径，带盘符 / 用户目录前缀）—— 与阶段无关
   if (META_WRITE_EXEMPT_RE.some((re) => re.test(p))) return true;
@@ -804,7 +808,15 @@ if (!BYPASS_DISABLED_FOR_TEST) {
   }
   if (bp && !bp.active) {
     audit('BYPASS_EXPIRED', bp.path + ' mode=' + bp.mode);
-    process.stderr.write('[gate] NOTE: bypass marker EXPIRED -> treated as inactive (rebuild it to open).' + '\n');
+    // GATE-TRV-DEL（2026-10-02-002 收敛案 S-A · QQ#30 用户确认）：过期标记由门禁自清理。
+    // 删除 = 关闸（fail-safe 方向），零新增放行面；根治「会话删不掉过期标记」与
+    // 「rebuild it to open」矛盾话术（原 L811 诱导重建，而重建在 05/06 仍被阶段层拦）。
+    try {
+      unlinkSync(bp.path);
+      process.stderr.write('[gate] NOTE: bypass marker EXPIRED -> auto-removed by gate (reopen via escape hatch by user if needed).' + '\n');
+    } catch {
+      process.stderr.write('[gate] NOTE: bypass marker EXPIRED -> treated as inactive (auto-remove failed; ask user to delete it).' + '\n');
+    }
   }
 }
 
@@ -1367,7 +1379,9 @@ async function gateCheck(fsPath, cmdCtx) {
   //   现与 05/06/07 的 matchStageExempt 守卫口径对齐。
   if (currentPhase === '01' || currentPhase === '02' || currentPhase === '03') {
     const isPseudoPath = String(fsPath || '').startsWith('[');
-    if (!isPseudoPath) {
+    // ★ TRAVERSAL-1：含上跳段 ⇒ 不进入豁免（防 `docs/iterations/../../back-end/…` 借前缀写业务码）
+    const hasJump = hasTraversal(String(fsPath || ''));
+    if (!isPseudoPath && !hasJump) {
       for (const pattern of EXEMPT_PATHS) {
         if (fsPath.startsWith(pattern) || fsPath.includes('/' + pattern)) {
           // ★ FIX-23 配套：放行留痕（与 05/06/07 的 STAGE_ALLOW 对齐，便于事后回溯）
@@ -1392,6 +1406,13 @@ async function gateCheck(fsPath, cmdCtx) {
         ...cmdGateLines(cmdCtx)
       );
     }
+    if (hasJump) {
+      block(
+        '当前阶段写入被拒：路径含上跳段（..），不认定迭代目录豁免。',
+        `本次尝试: ${fsPath}`,
+        '★ 门禁只能字面判定（GATE-6 同口径）：请将路径改写成不含 .. 的字面路径后重试。'
+      );
+    }
     block(
       `当前处于 ${currentPhase} 阶段，仅允许修改迭代产出目录。`,
       `本次尝试: ${fsPath}`,
@@ -1406,14 +1427,20 @@ async function gateCheck(fsPath, cmdCtx) {
   }
 
   // 其他阶段（00/05/06/07）：阻止
+  // GATE-TRV-DEL（2026-10-02-002 收敛案 S-B · QQ#30 用户确认）：06 阶段追加开闸指引，
+  // 消除「建议 rebuild → rebuild 仍被拦」的矛盾话术（★禁用「走 05 回补」措辞——05 同拦 hooks/）。
+  const stageBlockHints = currentPhase === '06'
+    ? ['如需开闸（.gate-bypass）请由用户手动处理；会话内不建议重建。']
+    : [];
   if (cmdCtx) {
     block(
       `当前阶段 ${currentPhase}：该命令含「写/删/变更」语义，已拒绝。`,
       `本次尝试: ${fsPath}`,
-      ...cmdGateLines(cmdCtx)
+      ...cmdGateLines(cmdCtx),
+      ...stageBlockHints
     );
   }
-  block(`当前阶段 ${currentPhase} 不允许进行文件写入操作。`);
+  block(`当前阶段 ${currentPhase} 不允许进行文件写入操作。`, ...stageBlockHints);
 }
 
 // ── ★ FIX-9：删除类操作校验（清单锚定 + 豁免 + 默认禁删）──────
@@ -1459,13 +1486,26 @@ function isInlineDeleteSuspect(seg) {
   return /[\\/]/.test(s) || /\.[A-Za-z0-9]{1,8}\b/.test(s);                  // 含路径或文件名
 }
 
+/**
+ * ★ TRAVERSAL-1（2026-10-02 · 迭代 2026-10-02-001）：路径是否含「上跳段」(`..`)。
+ *   正则与 FIX-26 在 `isAlwaysAllow` 内已验证的实现**逐字一致**，此处抽出为公共函数。
+ *   语义：只认**完整路径段**的 `..`（`a/../b`、`../x`、`x/..`），不误伤 `a..b` / `v1.2..3`。
+ *   用途：所有「前缀 / 包含」型豁免判定**前置调用** ⇒ 含上跳段**不认定豁免**（只收紧、不放宽）。
+ *   依据（探针实测 2026-10-02）：`docs/iterations/../../back-end/…cs` 曾命中豁免直接放行
+ *   （01-03 与 05 均成立）⇒ 存在无需开闸、无 `gate_window` 留痕的写业务码通道。
+ */
+function hasTraversal(p) {
+  return /(?:^|\/)\.\.(?:\/|$)/.test(String(p || ''));
+}
+
 /** 相对路径是否落在工作流 runtime 目录（ALWAYS_ALLOW） */
 function isAlwaysAllow(relPath) {
   const raw = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
   // ★ FIX-26（2026-10-01）：含「上跳段」(`..`) 的路径不认定豁免（fail-closed 收紧）。
   //   原实现只看前缀 ⇒ `<runtime>/../../hooks/x` 会被判为「在 runtime 内」而放行。
   //   本改动只收紧、不放宽：合法 runtime 路径不含 `..`，回归不受影响。
-  if (/(?:^|\/)\.\.(?:\/|$)/.test(raw)) return false;
+  // ★ TRAVERSAL-1：改用公共函数 `hasTraversal()`（正则与行为均不变）。
+  if (hasTraversal(raw)) return false;
   const p = '/' + raw;
   if (RUNTIME_REL && p.startsWith('/' + RUNTIME_REL)) return true;
   return ALWAYS_ALLOW_SEGMENTS.some((seg) => p.includes(seg));
@@ -1475,6 +1515,8 @@ function isAlwaysAllow(relPath) {
 function isDeleteExempt(relPath) {
   const raw = String(relPath || '');
   if (!raw) return false;
+  // ★ TRAVERSAL-1：含上跳段 ⇒ 不认定删除豁免（防 `…/../../node_modules/x` 命中豁免模式）
+  if (hasTraversal(raw)) return false;
   if (isAlwaysAllow(raw)) return true;
   const p = raw.replace(/\\/g, '/').toLowerCase();
   const pSlash = p.endsWith('/') ? p : p + '/';   // 目录本体（如 node_modules）按目录判定
