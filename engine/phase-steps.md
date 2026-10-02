@@ -119,6 +119,16 @@
 | step-2-user-review | 用户审核用例 | — | 可选 |
 | step-3-execute | 自动执行【自动】用例 | ✅ | 始终 |
 | step-4-output | 生成测试报告 | ✅ | 始终 |
+| step-fix-05-1-register | 缺陷登记（写入 `defects[]` + 根因分档 + 判 `design_changed`） | — | 存在 `open` 缺陷 |
+| step-fix-05-2-code | 就地修复编码（**须用户开闸**；涉后端码 ⇒ 不得就地修，回 04） | — | step-fix-05-1-register 完成 |
+| step-fix-05-3-regress | 失败用例回归（含动作链用例；**既有用例结果不回改**，新增续接编号） | — | step-fix-05-2-code 完成 |
+| step-fix-05-4-reclose | 缺陷关闭（置 `fixed` + `verified_by` + 按 §3.3 R8 补 `fix_files`） | — | step-fix-05-3-regress 通过 |
+
+> ★ **05 侧缺陷修复窗口（2026-10-02 E-2 新增；方案 α）**：这四个步骤把历史上「游离自造步骤块」正规化
+> （先例：`2026-09-28-001` 六条缺陷、`2026-09-30-002` 五条缺陷均在 05 就地修但步骤未进 SSOT）。
+> **与 04 侧 `step-fix-*` 的分工**：① 不涉后端码、无需 `/t:Rebuild` 的 L1 小修 ⇒ **05 侧就地**（用户开闸 + `fix_files` 对账）；
+> ② 涉后端码 / 需重跑构建 ⇒ **回 04** 走 `step-fix-1-register` ~ `-5-reclose`（04 是唯一免开闸窗口）。
+> ③ 无论走哪侧，**既有用例结果保留、新增续接编号**（`state-protocol.md` §5.3）。
 
 ---
 

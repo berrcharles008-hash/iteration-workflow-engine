@@ -62,6 +62,9 @@ Agent 准备修改文件
             │   ║                                                  ║
             │   ║  当前阶段：{current_phase} - {phase_status}      ║
             │   ║  代码修改仅在 04-开发实现 阶段允许。             ║
+            │   ║  ★ 05 阶段例外：L1 小修可走「开闸就地修」——      ║
+            │   ║    用户开闸 + gate_window + fix_files 成对留痕    ║
+            │   ║    （§三-C / state-protocol §3.3 R8）。           ║
             │   ║  请选择：                                        ║
             │   ║  1️⃣ 继续推进当前迭代到 04 阶段                   ║
             │   ║  2️⃣ 将本修改作为独立需求新建迭代                 ║
@@ -140,6 +143,27 @@ Agent 准备修改文件
 > ★ **FIX-11（2026-09-16）例外**：`{IDE}/memory/` 属**元层豁免**（见 §四），
 > 其删除在 `ACTIVE=none` 与 00/05/06/07 阶段同样放行；其余豁免目录（`temp/`、`obj/`、`bin/`…）
 > **仍受阶段门禁约束**（例：none 阶段删 `{IDE}/temp/x.md` 仍被拦）。
+
+### E-3 派发白名单校验（`dispatch_whitelist`）（★ 2026-10-02 补章 · R-9 收口）
+
+> 背景：本文件自declare「门禁规则唯一真相源」，但 E-3 白名单细则此前**只**散落在
+> `engine/team-agent-strategy.md` §七（本文件 0 命中）⇒ 规则双源。本章为**补登记**（该实现 2026-09-30 已落，本次未改）。
+
+- **数据源**：`state.yaml` 的 `dispatch_whitelist`（**文件名级**匹配；派发时由主 Agent 写入，双副本同步）。
+- **判定**：04 阶段分支内校验（`gate-check.mjs` 的 `gateCheck` 04 分支；Bash 经 `targets` 传入）；
+  白名单外的写入 ⇒ `BLOCK` + 审计 tag `WHITELIST_BLOCK`。
+- **边界**：① 仅约束**成员派发**场景（未配置 ⇒ 走旧路径，**不默认开启**）；② 删除/移动类**不受**本校验约束
+  （走 §一「删除类操作校验」的前置门）；③ `.tmp` 派生项：条目 + `.tmp` 后缀**豁免**（2026-10-01 用户拍板选 ①，
+  理由 = 原子写 `<目标>.tmp → 改名覆盖` 是派发纪律要求）；**业务区 `back-end|front-end/**/*.tmp` 仍拦**。
+- **录入格式（★ 必须写进拦截话术 —— GATE-DEL-1 教训：格式不在提示里 ⇒ 首次必踩）**：
+
+```yaml
+dispatch_whitelist:
+  - path: "back-end/IntravenousAdmixtureCenter/BLL/PivasUserMgr.cs"
+  - path: "front-end/pivas_admixture_center/src/pages/pivas/dept_ward_list/dept_ward_list.ts"
+```
+
+> ⇒ 必须写成 `- path: "<项目内相对路径>"`（**裸字符串不被识别**；与 `delete_allow` 同构）。
 > 实现：`deleteGate()` 先做豁免过滤，全豁免项交回阶段门禁；`gateCheck()` 再对 memory 放行。
 
 **强度上限（如实声明）**：`runtime/` 属 `ALWAYS_ALLOW` ⇒ `delete_allow` 本身可被 Agent 修改，
@@ -524,6 +548,9 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
     ├── 无 `defects` 字段 或 无 `status == "open"` 条目 → 通过，继续第二步
     └── 存在 `status == "open"` 的缺陷 → **BLOCK**，输出处置选项：
          ① **走 04 修复窗口**（`step-fix-1-register` ~ `-5-reclose`）→ 修完回归、置 `fixed` 后方可推进
+           ★ **05 侧修复窗口（2026-10-02 E-5 新增）**：**不涉后端码、无需 `/t:Rebuild`** 的 L1 小修
+             ⇒ 走 `step-fix-05-1-register` ~ `-4-reclose`（SSOT = `phase-steps.md` §阶段五）；
+             须**用户开闸**，且 `defects[].gate_window` 与 `fix_files` **成对**（机器校验 = `state-protocol.md` §3.3 R8）
          ② **用户显式 defer** → 置 `status: "deferred"` + 写 `defer_reason`（视为通过，但须在 05 报告「遗留问题」节列出）
          ③ **判定为 L2 / L3** → 按阶段回退协议退回 03 / 01，**不得**走修复窗口
         ⚠️ 禁止在存在 open 缺陷时推进 06（防「带未关闭缺陷进上线」）。

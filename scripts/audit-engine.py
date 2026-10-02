@@ -38,8 +38,10 @@ SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEXT_EXTS = ('.md', '.py', '.mjs', '.json', '.yaml', '.yml', '.ps1', '.sh')
 
 # ★ 核心文件（`engine/evolution-safety.md` §一 的清单**以本常量为准**，避免双源漂移）
+# ★ E-3（2026-10-01-002）：实现已由 HOOK-SLIM-1 迁至 `engine/gate/gate-check.mjs`，
+#   `hooks/gate-check.mjs` 降为转发 shim（skill 内该文件已不存在）⇒ 改列真实实现。
 CORE_FILES = [
-    'hooks/gate-check.mjs',
+    'engine/gate/gate-check.mjs',
     'engine/gate-protocol.md',
     'engine/state-protocol.md',
     'SKILL.md',
@@ -59,8 +61,13 @@ TABLE_ID_RE = re.compile(r'^\|\s*(step-[0-9]+x?(?:\.[0-9]+)?(?:-[a-z0-9][a-z0-9.
 HIST_HINT_RE = re.compile(r'更名|原写|原名|已统一|历史|移除|迁移|废弃|曾用|旧')
 
 # A4：预期不在本 skill 内的引用目标（hook / 运行时产物 / 项目与知识库文档）
+# ★ W-1（2026-10-02 迭代 2026-10-01-002）：显式登记 3 项实测外部/宿主侧目标（A4 原报 3 条 WARN）：
+#   `gen_doc_index.py`  = 项目级工具（`tools/gen_doc_index.py`，实测存在）
+#   `wait-answer.ps1`   = 项目级工具（`tools/qqbot/wait-answer.ps1`，实测存在）
+#   `probe-readonly-gate.mjs` = 本 skill 的**运行时产物**，随宿主侧落盘（本仓实测在 `.claude` 侧 runtime/）
 EXTERNAL_TARGETS = {
     'gate-check.mjs', 'gate-notify.json', 'MEMORY.md', 'state.yaml',
+    'gen_doc_index.py', 'wait-answer.ps1', 'probe-readonly-gate.mjs',
     'backup_manifest.yaml', 'CONTEXT.md', 'L1-overview.md', 'L2-module.md',
     'L3-glossary.md', 'AGENTS.md', 'CLAUDE.md', 'oracle_server.py',
     'gen_entity.py', 'run_ddl.py', 'package.json',
@@ -79,6 +86,10 @@ GOV_DOCS = [
 ]
 GOV_STALE_DAYS = 7          # A5-a：内容日期距今超过此值 ⇒ WARN
 GOV_DRIFT_DAYS = 3          # A5-c：mtime 与内容日期背离超过此值 ⇒ WARN
+# ★ W-2（2026-10-02 迭代 2026-10-01-002）：显式「按需刷新」口径 —— 文档首部含本标记 ⇒ 跳过 A5-a/A5-b。
+#   依据（用户 2026-10-01 拍板 Q5）：`runtime/SESSION-HANDOFF.md` 的定位是**交接快照**（按需刷新），
+#   不是低频治理规范；不声明则每迭代都会复报同一条 WARN（该文件实测连续多期报警）。
+A5_ON_DEMAND_MARK = 'A5-ON-DEMAND'
 
 # A4：迭代阶段文档前缀（运行时产物，不在 skill 内）
 STAGE_DOC_RE = re.compile(r'^(?:\d{2}-|[Pp]hase-\d{2}-)')
@@ -411,6 +422,9 @@ def a5_gov_docs():
             err('A5', '%s 不存在' % g)
             continue
         text = read(p)
+        if A5_ON_DEMAND_MARK in text:
+            ok('A5', '%s 声明「按需刷新」（%s）⇒ 跳过时效/联动判定' % (g, A5_ON_DEMAND_MARK))
+            continue
         best = None
         for y, mo, d in re.findall(r'(20\d{2})-(\d{2})-(\d{2})', text):
             try:

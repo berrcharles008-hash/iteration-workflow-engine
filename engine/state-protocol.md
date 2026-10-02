@@ -21,7 +21,7 @@ ITERATION_ID 格式：`YYYY-MM-DD-NNN-中文简述`（与 docs/iterations/ 目�
 
 | 事件 | 动作 | ACTIVE 同步 | Line 2 同步 |
 |------|------|:--:|:--:|
-| 新建迭代（01 阶段启动） | 创建文件，写入初始状态（`iteration_status: "in_progress"`, phase: "01", status: "in_progress"），**写入 `started_at`（当日日期）**【METRICS-AUTO 2026-09-25】，初始化当前阶段的 `phase_steps` | 写入迭代ID | STATUS+PHASE+TASKS+BLOCKERS |
+| 新建迭代（01 阶段启动） | 创建文件，写入初始状态（`iteration_status: "in_progress"`, phase: "01", status: "in_progress"），**写入 `started_at`（立项时刻，`YYYY-MM-DDTHH:MM` 本地时）**【METRICS-AUTO 2026-09-25；★START-PRECISE 2026-10-01 起要求精确到分 —— 同日多迭代（同日第二个及以后）**必须**写时分，否则度量侧按「同日起点不可分」把轮数并入同日先者】，初始化当前阶段的 `phase_steps` | 写入迭代ID | STATUS+PHASE+TASKS+BLOCKERS |
 | 每个阶段完成 | 更新 `current_phase` 和 `phase_status`，初始化新阶段的 `phase_steps`，**追加 `phase_history` 条目：`completed_at` 必须 ISO 带时分（`YYYY-MM-DDTHH:mm` 本地时，允许尾随秒/时区后缀）【PHASE-METRICS 2026-09-25】；跳过的阶段写 `skipped: true` + `skipped_at`（同格式）** | — | PHASE |
 | 每个步骤完成（所有阶段） | 更新 `phase_steps.{step-id}.status` 为 `completed` | — | — |
 | 步骤被跳过 | 更新 `phase_steps.{step-id}.status` 为 `skipped` + 写入 `skip_reason` | — | — |
@@ -117,9 +117,12 @@ version: 5                      # ★ 并发控制版本号（整数自增），
 iteration_id: "2026-06-12-001-体征设备采集映射配置改造"
 iteration_status: "in_progress"  # ★ 迭代整体状态：in_progress | completed | abandoned（06归档时设为completed，07归档后才释放ACTIVE；废弃时设为abandoned）
 # ★ 可选度量字段（2026-09-25 METRICS-AUTO 新增，仿 complexity_actual 先例）：
-# started_at = 01 立项当日日期；ended_at = 06 归档当日日期（废弃时补写 = abandoned_at 日期）
+# started_at = 01 立项时刻；ended_at = 06 归档当日日期（废弃时补写 = abandoned_at 日期）
+# ★ START-PRECISE（2026-10-01）：started_at 写 "YYYY-MM-DDTHH:MM"（本地时、精确到分）。
+#   同日多迭代（同日第二个及以后）**必须**带时分 —— 否则度量侧按「同日起点不可分」把该迭代轮数并入同日先者
+#   （实测 2026-09-30-002 / 2026-10-01-002 曾因此显示 0 轮）。纯日期写法仍兼容（按当日 00:00 锚定）。
 # 不在 §3.3 必填清单内（缺失不视为校验失败）；缺省视为旧版，度量窗口推导走兜底口径
-started_at: "2026-06-12"
+started_at: "2026-06-12T14:30"
 ended_at: "2026-06-19"
 complexity: "🔴"            # 🟢 简单 | 🟡 中等 | 🔴 复杂
 complexity_original: "🟡"   # ★ 初评复杂度（若被调整过，保留初评值用于追溯）
@@ -343,6 +346,7 @@ rollback_checks:
 - `version` / `iteration_id` / `iteration_status` / `complexity` / `current_phase` / `phase_status` / `last_updated`
 
 > ★ `started_at` / `ended_at` 为可选度量字段（2026-09-25 METRICS-AUTO 新增）：**不在必填清单内**，缺失不视为校验失败；旧版 state 无此字段属正常态（向后兼容，同 §review_gate 先例）。
+> ★ START-PRECISE（2026-10-01）：该字段存在时，`started_at` 应写 `YYYY-MM-DDTHH:MM`（本地时）；**同日第二个及以后的迭代必须带时分**（否则度量侧判「同日起点不可分」，轮数并入同日先者）。纯日期写法仅由 `validate-state.py` 报 [R7] WARN（**不阻断**，兼容历史 state 不回溯）。
 > ★ `phase_confirm` 为可选留痕段（2026-10-01 RESUME-3 批次 3 新增）：**不在必填清单内**（观测期向后兼容，同上先例）；`current_phase` 变更时须随写（见 §3.3 枚举区「阶段推进留痕」与 `gate-protocol.md` §三-B）。
 
 > ★ `phase_history` 条目存在时，其 `completed_at` / `skipped_at` 须**包含式匹配** `\d{4}-\d{2}-\d{2}T\d{2}:\d{2}`（允许尾随 `:ss` / 时区后缀，禁止全串匹配）【PHASE-METRICS 2026-09-25】；纯日期视为校验 WARN（**不阻断**，兼容历史 12 state 不回溯；实施后新迭代抽查 WARN=0）。`entered_at` 不引入——阶段起点 = 上一**实做**阶段 `completed_at`，首阶段 = `started_at`；skipped 条目不参与阶段窗界链（仅作注记）。
@@ -380,6 +384,15 @@ rollback_checks:
 - `defects` 为**可选字段**（缺失 = 无缺陷，向后兼容旧 state.yaml）；存在时每条须通过上表枚举校验，且 `id` 唯一；
 - `status == "fixed"` ⇒ 必须有 `fixed_at`；`root_cause_level ∈ {L2, L3}` ⇒ 必须有对应阶段的 `rollback_checks` 条目；
 - ★ **双向对账**：05 报告「缺陷记录」节须与 `defects[].id` 一一对应（报告有、台账无 ⇒ 校验失败）。
+
+**开闸对账校验（★ 2026-10-02 E-1 新增 · 方案 α 核心）**：
+
+> 依据：迭代 `2026-10-01-002` 03 方案 α —— 不新增写权限，改为把「开闸就地修复」的**留痕纪律机械化**。
+
+- 缺陷条目含 `gate_window`（= 用户手动开闸、Agent 在窗口内改码）⇒ **`fix_files` 必填**且为非空列表，
+  每条须为**项目内相对路径**（禁 `..`、盘符、绝对路径）——"窗口内改了哪些文件"必须可机器对账；
+- `status == "fixed"` 且含 `gate_window` ⇒ **`verified_by` 必填**（回归验证人 `user` / `agent`）；
+- 机械化执行：`scripts/validate-state.py` 的 **[R8]**（本规则与脚本**同源**，改一处须同步另一处）。
 
 **多 Story 一致性校验（★ 聚合型）**：
 - 若 state.yaml 含 `stories` 数组，则 `tasks_total` == Σ `stories[].tasks_total`，`tasks_completed` == Σ `stories[].tasks_completed`（top-level 为各 Story 之和，向后兼容旧 reader）
@@ -515,12 +528,19 @@ phase_steps 扫描结果：
   5. rollback_checks 记录一致性检查结果
 ```
 
-### 5.3 缺陷修复窗口与用例资产保留（★ 2026-09-23 DEFECT-1 新增）
+### 5.3 缺陷修复窗口与用例资产保留（★ 2026-09-23 DEFECT-1 新增；★ 2026-10-02 α 口径修订）
 
 > 依据：真实回退记录（12 条 05→04）显示实践**已在用**「修复窗口」，但步骤 ID 自造、未进 SSOT ⇒ 审计与一致性检查看不见。
-> 选项甲已定为**不新增放行面** ⇒ 本窗口**挂在 04 阶段**（04 是唯一免开闸的合法落盘窗口，见 `gate-protocol.md` §一）。
+> ★ **2026-10-02 修订（迭代 `2026-10-01-002` · 方案 α · 用户 QQ#7 裁定）**：**维持「不新增放行面」**
+>   （原选项甲），并把「05 就地修」**正规化 + 对账机械化**：
+>   - **04 侧窗口**：`step-fix-1-register` ~ `-5-reclose` —— **唯一免开闸**的落盘窗口；
+>   - **05 侧窗口**：`step-fix-05-1-register` ~ `-4-reclose`（SSOT = `phase-steps.md` §阶段五）——
+>     仅 **L1 且不涉后端码**的小修，须**用户开闸**，且 `defects[].gate_window` 与 `fix_files` **成对**留痕
+>     （机器校验 = §3.3「开闸对账校验」/ `validate-state.py [R8]`）；涉后端码 / 需 `/t:Rebuild` ⇒ 必须回 04。
 
-- **窗口步骤（SSOT = [phase-steps.md](phase-steps.md)）**：`step-fix-1-register` → `-2-code` → `-3-build` → `-4-regress` → `-5-reclose`；
+- **窗口步骤（SSOT = [phase-steps.md](phase-steps.md)）**：
+  ① 04 侧：`step-fix-1-register` → `-2-code` → `-3-build` → `-4-regress` → `-5-reclose`；
+  ② 05 侧：`step-fix-05-1-register` → `-2-code` → `-3-regress` → `-4-reclose`；
   ★ **禁止**再用游离自造步骤块（历史 `phase_steps_04_d1fix`、`step-d18-*` 均未被 SSOT 收录）。
 - **收口后回 05**：不回退既有用例结果 —— 新增用例**续接编号**，已跑结果**原样保留**（审计留痕）。
 - **推进拦截**：`defects[]` 存在 `status: "open"` ⇒ 禁止推进 06（见 `gate-protocol.md` §三-C）。

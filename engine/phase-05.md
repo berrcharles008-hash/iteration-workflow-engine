@@ -108,3 +108,11 @@
 | step-2-user-review | 用户审核用例 | — | 可选 |
 | step-3-execute | 自动执行【自动】用例 | ✅ | 始终 |
 | step-4-output | 生成测试报告 | ✅ | 始终 |
+| step-fix-05-1-register | 缺陷登记（`defects[]` + 根因分档 + `design_changed`） | — | 存在 `open` 缺陷 |
+| step-fix-05-2-code | 就地修复编码（**须用户开闸**；涉后端码 ⇒ 回 04） | — | 上一步完成 |
+| step-fix-05-3-regress | 失败用例回归（既有结果不回改、新增续接编号） | — | 上一步完成 |
+| step-fix-05-4-reclose | 缺陷关闭（`fixed` + `verified_by` + `fix_files` 对账） | — | 回归通过 |
+
+> ★ **05 侧缺陷修复窗口（2026-10-02 E-2 新增）**：SSOT 见 `phase-steps.md` §阶段五。要点：
+> ① 仅 **L1 且不涉后端码**可就地修（用户开闸，`defects[].gate_window` + `fix_files` 必须成对，机器校验 = §3.3 R8）；
+> ② 涉后端码 / 需 `/t:Rebuild` ⇒ **回 04** 走 `step-fix-*`；③ 禁止再自造游离步骤块。

@@ -9,6 +9,9 @@ SSOT：engine/state-protocol.md §3.3（规则本体）；本脚本为执行通�
   [R4] 缺陷台账（defects 可选）  → §3.3「缺陷台账校验」（id 唯一 / fixed⇒fixed_at / L2L3⇒rollback_checks）
   [R5] 多 Story 聚合             → §3.3「多 Story 一致性校验」（tasks_total/tasks_completed 求和对账）
   [R6] phase_history 时间包含式匹配 → §3.3「必填字段检查」下 ★ PHASE-METRICS 注记（纯日期=WARN 不阻断）
+  [R7] START-PRECISE：started_at 精确到分（纯日期仅 WARN，不阻断）
+  [R8] 开闸留痕对账（★ 2026-10-02 E-1 新增）→ §3.3「开闸对账校验」：有 gate_window ⇒
+       fix_files 必填（非空项目内相对路径，禁 .. 与盘符）；fixed + gate_window ⇒ verified_by 必填
   ★ 显式排除（脚本不覆盖，仍由 Agent 执行）：
     - 双向对账（05 报告「缺陷记录」节 vs defects[].id，§3.3「缺陷台账校验」第 3 条）——单文件入参无法读报告侧
       ⇒ 脚本 exit 0 ≠ §3.3 全过。
@@ -161,6 +164,17 @@ def check_stories(data):
 TS_INCLUSIVE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
 PURE_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
+def check_started_at(data):
+    """[R7] START-PRECISE（2026-10-01）：started_at 建议精确到分。
+    纯日期仅 WARN（不阻断，兼容历史 state）—— 但同日多迭代会失去独立计量（轮数并入同日先者）。"""
+    v = data.get("started_at")
+    if v is None:
+        return
+    if not re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", str(v)):
+        warn("[R7] started_at 为纯日期（%r）：建议写 YYYY-MM-DDTHH:MM —— 同日多迭代须精确到分，"
+             "否则度量侧按「同日起点不可分」把轮数并入同日先者" % v)
+
+
 def check_phase_history(data):
     ph = data.get("phase_history")
     if not ph or not isinstance(ph, list):
@@ -179,6 +193,39 @@ def check_phase_history(data):
             elif not TS_INCLUSIVE.search(s):
                 err("[R6] phase_history[%d].%s = %r 不满足包含式匹配 \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}"
                     % (i, f, s))
+
+# ── [R8] 开闸留痕对账（2026-10-02 E-1；SSOT §3.3「开闸对账校验」）──
+REL_PATH_RE = re.compile(r"^(?![A-Za-z]:)(?!/)(?!.*\.\.(/|$)).+$")
+
+def check_reconcile(data):
+    """[R8] 用户手动开闸就地修复的**对账判据**（方案 α 核心：把留痕纪律从纸面搬进脚本）：
+    ① 缺陷带 gate_window ⇒ fix_files 为非空列表，且每条为项目内相对路径（禁 .. / 盘符 / 绝对路径）；
+    ② status == "fixed" 且带 gate_window ⇒ verified_by 必填（回归验证人）。
+    语义：gate_window 表示「用户手动开闸、Agent 在窗口内改码」——该窗口内**改了哪些文件**必须可机器对账。"""
+    defects = data.get("defects")
+    if not isinstance(defects, list):
+        return
+    for d in defects:
+        if not isinstance(d, dict):
+            continue
+        did = d.get("id")
+        gw = d.get("gate_window")
+        has_gw = bool(gw) and bool(str(gw).strip())
+        if not has_gw:
+            continue
+        ff = d.get("fix_files")
+        if not isinstance(ff, list) or not ff:
+            err("[R8] defects[%r] 有 gate_window 但 fix_files 缺失/为空（开闸窗口内改动文件不可对账）" % did)
+        else:
+            for j, p in enumerate(ff):
+                s = str(p or "").strip().replace("\\", "/")
+                if not s:
+                    err("[R8] defects[%r].fix_files[%d] 为空" % (did, j))
+                elif not REL_PATH_RE.match(s):
+                    err("[R8] defects[%r].fix_files[%d] = %r 非法（须项目内相对路径，禁 .. / 盘符 / 绝对路径）"
+                        % (did, j, p))
+        if d.get("status") == "fixed" and not str(d.get("verified_by") or "").strip():
+            err("[R8] defects[%r] 开闸修复后置 fixed 但缺 verified_by" % did)
 
 def main():
     path_arg = sys.argv[1] if len(sys.argv) > 1 else None
@@ -201,8 +248,10 @@ def main():
         if f not in data:
             err("[R1] 缺必填字段: %s" % f)
     # [R2] started_at/ended_at 为可选度量字段：缺失不视为校验失败（显式豁免，不检查）
+    check_started_at(data)   # [R7] START-PRECISE：建议精确到分（仅 WARN，不阻断）
     check_enum(data)
     check_defects(data)
+    check_reconcile(data)    # [R8] 开闸留痕对账（2026-10-02 E-1）
     check_stories(data)
     check_phase_history(data)
 
@@ -214,7 +263,7 @@ def main():
     for n in notes:
         print("[NOTE] %s" % n)
     print("RESULT : %s (errs=%d warns=%d)" % ("PASS" if not errs else "FAIL", len(errs), len(warns)))
-    print("SCOPE  : 脚本覆盖 R1-R6；双向对账（05 报告 vs defects[].id）仍由 Agent 执行 —— exit 0 ≠ §3.3 全过")
+    print("SCOPE  : 脚本覆盖 R1-R8；双向对账（05 报告 vs defects[].id）仍由 Agent 执行 —— exit 0 ≠ §3.3 全过")
     sys.exit(0 if not errs else 1)
 
 if __name__ == "__main__":

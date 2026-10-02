@@ -66,3 +66,4 @@ python scripts/audit-engine.py --src <源仓库>  # 追加 A6 回流水位（可
 | 2026-07-12 | 1.0 ~ 1.1 | 初始手工清单（12 大类）；首轮扫描修 11 项 |
 | 2026-09-20 | **2.0** | 手工清单 →「本规范页 + `scripts/audit-engine.py`」（A1~A6）；新增两个挂载点（07 `step-3-5-workflow-audit` + 改 skill 收口） |
 | 2026-09-23 | **2.1** | 新增 **A7 状态字段登记闭环**（规范维度，脚本待实现）；由 `runtime/TOOLING-TODO.md` `DEFECT-1` 驱动（`defects[]` 落地 + `delete_allow` 历史漂移反例） |
+| 2026-10-02 | **2.2** | ① **A5 新增「按需刷新」口径**（`A5-ON-DEMAND` 标记；`runtime/SESSION-HANDOFF.md` 为交接快照，不适用 7 天时效/联动判据 ⇒ 消除每迭代复报）；② **A4 `EXTERNAL_TARGETS` 显式登记 3 项**外部/宿主侧目标（`gen_doc_index.py` / `wait-answer.ps1` / `probe-readonly-gate.mjs`）；③ **`CORE_FILES` 改列** `engine/gate/gate-check.mjs`（实现外置后校正，原列 `hooks/` 侧已为 shim）；④ 登记观察项：A2 `STEP_ID_RE` 不匹配 `step-fix-*` 家族（闭环盲区，待排期）。依据：迭代 `2026-10-01-002-引擎窄放行与遗留收口`（W-1 / W-2 / E-3） |

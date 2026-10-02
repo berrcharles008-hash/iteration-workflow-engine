@@ -137,7 +137,11 @@ Agent 准备调用写入类工具时 → **必须先读 `engine/gate-protocol.md
 16. **★ 缺陷处置分档（2026-09-23 DEFECT-1）**：05 发现缺陷先**判根因档**（判据见 `workflow-engine.md` §缺陷根因判定判据）—— L1 实现缺陷（`design_changed=false`）→ 回退 04 走 `step-fix-1-register` ~ `step-fix-5-reclose` 窗口；L2 方案缺陷 → 回退 03（**先改 03 再改码**）；L3 需求缺陷 → 回退 01/02。
     - ★ **不得**用 `03-技术方案` 的 `needs_update` 判档 —— 实践中它被当**修复流水台账**用，恒 `true`、丧失区分力（2026-09-23 评审实证 9/9）。
     - ★ 缺陷台账 SSOT = `state.yaml` 的 `defects[]`，与 05 报告「缺陷记录」节按 `D-xx` **双向对账**；存在 `open` 缺陷时**禁止推进 06**（`gate-protocol.md` §三-C）。
-    - ★ `step-fix-*` 与原则 3 / 6 的边界：小改动豁免 Team Agent，但**涉后端码必须重跑构建验证**（`/t:Rebuild`）；窗口挂 **04**（05 无放行面，除非用户手动开闸并留痕 `gate_window`）。
+    - ★ `step-fix-*` 与原则 3 / 6 的边界：小改动豁免 Team Agent，但**涉后端码必须重跑构建验证**（`/t:Rebuild`）。
+      窗口 = **双窗口（2026-10-02 α 口径）**：① **04 侧** `step-fix-1-register` ~ `-5-reclose` = 唯一**免开闸**窗口；
+      ② **05 侧** `step-fix-05-1-register` ~ `-4-reclose` = **仅 L1 且不涉后端码**的小修，须**用户开闸**，
+      且 `defects[].gate_window` 与 `fix_files` **成对留痕**（机器校验 = `state-protocol.md` §3.3 [R8] / `validate-state.py`）。
+      ★ **不新增写放行面**（方案 α，用户 2026-10-02 QQ#7 裁定）。
 16. **★ 上下文纪律（定点读）**：大文件禁全文入上下文 —— 先定位后定点读、状态文件只读关键区间、源码只读待改片段、单轮 `read_file` ≤ 500 行。详见 `engine/context-discipline.md`。
 17. **★★ 引擎自身修改 = 「引擎演进安全协议」**（用户 2026-09-20 立法，最高优先级）：**任何**对本 skill 的修改（`engine/**`、`scripts/**`、`hooks/**`、`SKILL.md`、模板等）**禁止"先改后报"** —— 四件套前置审批、核心文件快照、收口验证（3 脚本 + 回流水位）**全部**见 `engine/evolution-safety.md`，此处**不再复述**（★ 单点权威，防两份口径漂移）。
 
