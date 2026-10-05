@@ -141,7 +141,7 @@ Agent 必须在 step-1-5-review 完成后，输出以下信息并等待用户确
 
 **交付标准**：用户明确表示"任务清单通过" / "确认" / "开始编码"；**清单版式自检 ERROR 0**（`python scripts/doc_lint.py <清单>`，含 `## 目录` / 相对链接 / Mermaid）。
 
-**★ 等待方式（三选一 A/B/D + 时限/退化/铁律）**：**细则唯一来源 = `engine/waiting-protocol.md`**（2026-10-01 正本化迁移 · RESUME-3；含 A 总时限 30 分钟、QQ-WAKE-1 读回、消费动作、非 team 会话判据）。核心判据：用户在工位→**A**（`ask.js` 登记 + 自轮询）；人离位且会话存活可派 team→**D**（waiter 代等 2×15 分钟）；会话已停或无 team→**B**（headless 接管）。判据与模板见 `tools/qqbot/README.md` 方案 A/B/D。
+**★ 等待方式（三选一 A/B/D + 时限/退化/铁律）**：**细则唯一来源 = `engine/waiting-protocol.md`**（2026-10-01 正本化迁移 · RESUME-3；含 A 总时限 30 分钟、QQ-WAKE-1 读回、消费动作、非 team 会话判据）。核心判据：用户在工位→**A**（`ask.js` 登记 + 自轮询）；人离位且会话存活可派 team→**D**（waiter 代等 2×15 分钟）；会话已停或无 team→**B**（headless 接管）。判据与模板见 `tools/qqbot/README.md` 方案 A/B/D。★ 可选工具前置判据：A/B/D 依赖 `tools/qqbot/`，**无该目录的项目静默跳过** QQ 途径，退化为回合内等待（2026-10-05 tools/qqbot 入库分发后适用）。
 
 **禁止行为**：
 - ❌ Agent 在用户未确认的情况下直接创建 Team 并派发任务
@@ -221,7 +221,7 @@ Start-Process powershell -WindowStyle Hidden -ArgumentList @(
 **交付标准**：用户明确确认后，主 Agent 批量写入**非白名单**文件；**白名单直写文件**以 ② 层
 `svn diff` 核对确认（此后的完整性校验/编译验证等继续按现有流程执行）。
 
-> ★ **等待方式**：细则唯一来源 = `engine/waiting-protocol.md`（A 自轮询 / D 成员代等 / B headless；判据与 waiter 模板见 `tools/qqbot/README.md` 方案 A/B/D）。
+> ★ **等待方式**：细则唯一来源 = `engine/waiting-protocol.md`（A 自轮询 / D 成员代等 / B headless；判据与 waiter 模板见 `tools/qqbot/README.md` 方案 A/B/D；无 `tools/qqbot/` 的项目跳过 QQ 途径，回合内等待）。
 > 本步是**写入前最后一道确认**、窗口通常最长 ⇒ 人已离位且本会话存活时优先 **D（成员代等）**。
 
 > ★ **主 Agent 批量写入必须原子写**（2026-09-24 新增）

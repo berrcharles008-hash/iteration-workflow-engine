@@ -71,6 +71,9 @@ EXTERNAL_TARGETS = {
     'backup_manifest.yaml', 'CONTEXT.md', 'L1-overview.md', 'L2-module.md',
     'L3-glossary.md', 'AGENTS.md', 'CLAUDE.md', 'oracle_server.py',
     'gen_entity.py', 'run_ddl.py', 'package.json',
+    # ★ 2026-10-05 tools/qqbot 入库（引擎顶层 tools/qqbot）：waiting-protocol/phase-04
+    #   引用的可选工具脚本，登记以免 A4 误报（文件现随 tools/qqbot 分发，实测存在）
+    'poll-answer.js', 'ask.js', 'notify.qqbot.js', 'notify-enqueue.js',
     # 迭代阶段产出物（无 `NN-` 前缀的写法 —— 运行时才生成，不在 skill 内）
     '开发任务清单.md', '需求分析.md', '需求记录.md', '需求评审.md',
     '技术方案.md', '测试验证报告.md', '发布上线记录.md',
