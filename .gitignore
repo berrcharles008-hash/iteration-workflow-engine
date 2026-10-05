@@ -110,3 +110,13 @@ dmypy.json
 *.temp
 .env
 .env.local
+
+# ====================
+# tools/qqbot (project instance files & runtime artifacts - sync ships code only)
+# Second defense layer behind sync-skills.ps1 exclusion rules
+# ====================
+tools/qqbot/daemon.config.json
+tools/qqbot/qqbot.creds.json
+tools/qqbot/DECOUPLING-PLAN.md
+tools/qqbot/*.jsonl
+tools/qqbot/runtime/
