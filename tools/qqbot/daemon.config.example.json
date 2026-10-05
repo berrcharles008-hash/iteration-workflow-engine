@@ -1,0 +1,168 @@
+{
+  "_notes": {
+    "usage": "复制为 daemon.config.json 后按需修改；本文件随引擎仓库分发，是各项目实例配置的模板",
+    "headless": "headless.command 依赖 PATH 中的 codebuddy CLI（npm 全局包 @tencent-ai/codebuddy-code）；无 CLI 时 headless 接管不可用，其余功能不受影响",
+    "handoffPrompt": "handoffPrompt 与 watcher.snoozeFile 依赖 iteration-workflow skill 的标准 runtime 布局（.codebuddy/skills/iteration-workflow/runtime）；未部署该 skill 的项目请相应精简",
+    "hub": "hub 段为 session-hub 集成（可选）：无 hub 时 /status 降级提示页，simulateKey 保持空=注入端点关闭",
+    "wake": "wake.taskName 为 Windows 计划任务名，服务会自建自删，各项目可自定义，勿与其他项目重名",
+    "secrets": "openId/httpKey/simulateKey 留空为安全默认；真实凭据放 qqbot.creds.json（gitignore），simulateKey 如启用请仅存于本地实例配置"
+  },
+  "openId": "",
+  "dryRun": false,
+  "listenPort": 18765,
+  "httpKey": "",
+  "requestTimeoutMs": 600000,
+  "hub": {
+    "redirectUrl": "http://127.0.0.1:18766/",
+    "probeTimeoutMs": 1500,
+    "simulateKey": ""
+  },
+  "gateCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/qqbot/actions/log-confirm.ps1",
+  "commandAllowlist": [],
+  "notify": {
+    "mergeWindowMs": 90000,
+    "mergeMax": 5,
+    "quietHours": {
+      "from": 23,
+      "to": 8
+    },
+    "skipNoToolUse": true,
+    "heartbeatMs": 1200000,
+    "onlineNotice": true,
+    "offlineNotice": true,
+    "liveness": {
+      "writeSec": 30,
+      "staleSec": 180,
+      "watchPollSec": 60
+    }
+  },
+  "watcher": {
+    "idleSeconds": 900,
+    "autoQueue": true,
+    "autoHandoff": true,
+    "handoffGuardSec": 120,
+    "autoSupersede": false,
+    "handoffGuardMode": "write-tool",
+    "snoozeFile": ".codebuddy/temp/qqbot-snooze.json",
+    "snoozeDefaultSec": 3600,
+    "snoozeMaxSec": 86400,
+    "idleInviteCooldownSec": 1800,
+    "idleInviteMinGapSec": 600,
+    "taskGate": true,
+    "taskGateRecheckSec": 60,
+    "skipIdleWhenOpenAsk": true,
+    "handoffBrief": "按当前迭代 runtime state 从接续入口继续推进剩余步骤：可逆且方案已确认的工作（编码/验证/文档回写）直接做完；不可逆（写库/提交/发布/删除移动）或改变已确认口径的决策会停下并登记 #N 等你拍板。",
+    "handoffPrompt": "读取 .codebuddy/skills/iteration-workflow/runtime/ACTIVE 得到当前迭代 ID，再读 runtime/<迭代ID>.state.yaml 的 last_session_summary / pause_reason / phase_steps（status 非 completed 的项），从接续入口继续推进当前阶段剩余步骤。原则：可逆的、方案已确认的实现/验证/文档工作可直接做完（含 04 编码、05 验证），无需逐门等待。但遇到下列情况必须停下并输出待确认要点：① 不可逆或破坏性操作（写数据库的 DDL/DML、删除或移动文件、SVN/git 提交推送、部署发布）；② 需要改变已确认口径的决策（需求取舍、方案范围调整、影响面扩大）；③ 出现互斥选项且文档中查不到用户偏好。遵守修改门禁与 .codebuddy/memory/MEMORY.md 铁律。★ 若你需要用户在多个选项中拍板，不要只在输出里写 A/B/C 菜单，应调用 node tools/qqbot/ask.js --prompt \"<问题 + 选项>\" --handoff --handoffPrompt \"<按用户答复继续执行的指令>\" 登记成可回复项（用户可直接在 QQ 回复内容，服务会以该答复起新一轮接管）。完成后输出简报，必须列明：做了什么 ｜ 改了哪些文件 ｜ 越过了哪些确认门及其依据 ｜ 下一步建议。★ 等待用户拍板时除本 CLI 接管（模式 B）外，若 IDE 原会话仍存活，优先考虑模式 D（派团队成员代等 QQ 回复后唤醒原会话，等待期零 token 且上下文不丢；见 tools/qqbot/README.md「方案 D」）。三模式判据与时限/退化细则唯一来源：engine/waiting-protocol.md（A=人在工位自轮询，总时限 30 分钟；D=人离位且 IDE 会话存活可派 team，waiter 代等 2 片×15 分钟；B=会话已停或 headless/无 team 会话，本接管）。"
+  },
+  "headless": {
+    "enabled": true,
+    "mode": "serve",
+    "command": "codebuddy -p --permission-mode acceptEdits \"{prompt}\"",
+    "timeoutMs": 1800000,
+    "replyChars": 600,
+    "handoffDir": ".codebuddy/temp/handoff",
+    "serve": {
+      "port": 19000,
+      "idleTtlMs": 1800000,
+      "coldStartMs": 3000,
+      "maxRestart": 2,
+      "instanceFile": "runtime/serve-instance.json",
+      "alivePollMs": 30000
+    }
+  },
+  "commands": {
+    "heartbeat": {
+      "keywords": [
+        "心跳",
+        "状态",
+        "ping"
+      ]
+    },
+    "shutdown": {
+      "enabled": true,
+      "keywords": [
+        "关机",
+        "关闭电脑",
+        "关闭计算机",
+        "shutdown"
+      ],
+      "delaySec": 90,
+      "confirmWindowSec": 120,
+      "command": "shutdown /s /t {delay}",
+      "cancelCommand": "shutdown /a"
+    },
+    "cancelShutdown": {
+      "keywords": [
+        "中止关机",
+        "取消关机",
+        "abort"
+      ]
+    },
+    "sleep": {
+      "enabled": true,
+      "keywords": [
+        "待机",
+        "睡眠",
+        "sleep"
+      ],
+      "command": "rundll32.exe powrprof.dll,SetSuspendState 0,1,0",
+      "defaultWakeMin": 30,
+      "maxWakeMin": 1440,
+      "confirmWindowSec": 120
+    },
+    "wake": {
+      "keywords": [
+        "开机",
+        "唤醒",
+        "wake"
+      ],
+      "taskName": "QQBot-WakeTimer"
+    }
+  },
+  "actions": {
+    "confirm": {
+      "keywords": [
+        "确认",
+        "继续",
+        "同意",
+        "通过",
+        "方案通过",
+        "评审通过",
+        "批准",
+        "可以",
+        "没问题",
+        "认可",
+        "yes",
+        "ok",
+        "okay",
+        "go",
+        "好"
+      ],
+      "reply": "✅ 已收到确认，开始执行后续任务。",
+      "command": ""
+    },
+    "cancel": {
+      "keywords": [
+        "取消",
+        "中止",
+        "驳回",
+        "不通过",
+        "未通过",
+        "拒绝",
+        "否决",
+        "不要",
+        "否",
+        "no",
+        "stop",
+        "reject"
+      ],
+      "reply": "⛔ 已取消，任务中止。",
+      "command": ""
+    },
+    "freeText": {
+      "enabled": true,
+      "maxChars": 300
+    }
+  },
+  "fallbackReply": "未识别指令。回复「确认#N / 取消#N」处理指定待办；选择题回「选项#N」（如 B#12），唯一待办时也可直接回选项或意见（如「B」）；或回「确认 / 通过 / 取消 / 驳回」。"
+}

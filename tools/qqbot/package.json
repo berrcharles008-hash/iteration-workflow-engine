@@ -1,0 +1,9 @@
+{
+  "name": "qqbot-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "QQ 机器人静配中心通知接入工具",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
