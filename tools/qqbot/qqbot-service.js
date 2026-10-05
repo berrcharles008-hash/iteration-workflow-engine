@@ -3010,10 +3010,14 @@ if (require.main === module && !args.wakeTest && !args.wakeQuery && !args.wakeDe
   } else log('WATCH off (--no-watch)');
 
   if (!args.noDaemon) {
-    let wsOk = true;
-    try { WebSocket = require('ws'); } catch (e) { wsOk = false; }
-    if (!wsOk) log('确认模块跳过：缺少依赖 ws（在 tools/qqbot 执行 npm install）');
-    else { startHttp(); connect(); }
+    try { WebSocket = require('ws'); } catch (e) {
+      // ★ P3 健壮化（2026-10-05）：原为静默半死——wsOk=false 时 HTTP+QQ 双灭但心跳照写，
+      //   watchdog（:77-79 无心跳才告警）永不触发。改 FATAL 退出，宁可崩给 watchdog 看。
+      log('[FATAL] 缺少依赖 ws —— 确认模块无法启动（HTTP ' + (cfg.listenPort || 18765) + ' 与 QQ WebSocket 全灭）。' +
+        '修复：在项目根或 tools/qqbot 执行 npm install ws 后重启服务。');
+      process.exit(1);
+    }
+    startHttp(); connect();
   } else log('DAEMON off (--no-daemon)');
 })().catch((e) => { log('[FATAL] ' + e.message); process.exit(1); });
 }

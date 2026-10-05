@@ -21,6 +21,19 @@ if (-not $nodeExe) {
 }
 if (-not $nodeExe) { Write-Host 'node not found (install Node or add it to PATH)'; exit 1 }
 
+# P3 hardening (2026-10-05): missing 'ws' used to cause a silent half-dead service
+# (HTTP + QQ both down while heartbeat kept running, so the watchdog never alerted).
+# Fail fast at launch instead. Node resolves 'ws' from cwd upward, so probe from $workDir.
+Push-Location $workDir
+& $nodeExe -e "require('ws')" 2>$null
+$wsProbe = $LASTEXITCODE
+Pop-Location
+if ($wsProbe -ne 0) {
+  Write-Host "FATAL: dependency 'ws' is not resolvable from $workDir" -ForegroundColor Red
+  Write-Host "Fix: run 'npm install ws' in the project root (or in tools\qqbot), then retry." -ForegroundColor Red
+  exit 1
+}
+
 # guard: skip if an instance is already running
 # ★ FIX-33（2026-09-19）：加 Name 过滤 —— 原判定只匹配 CommandLine，会把「命令行/脚本文本里
 #   提到 qqbot-service.js 的 powershell 包装进程」误判为服务实例 ⇒ 重启被静默跳过

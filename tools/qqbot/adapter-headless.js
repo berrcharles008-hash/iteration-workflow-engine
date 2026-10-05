@@ -16,7 +16,8 @@
 //   ★ 口令每次启动重新生成：从 stdout 解析 "?password=" 或读 ~/.codebuddy/settings.json 取，
 //     **不得跨实例缓存**（credential() 每次现读）。
 //   ★ 停止：child.kill() 优先；taskkill /T /F 兜底；以端口释放为准（stopChild()）。
-//   ★ node.exe / entry 路径当前硬编码本机 C:\nvm4w\；生产机器须探测（resolvePaths() 兜底）。
+//   ★ node.exe / entry 路径解析（P3 可移植化 2026-10-05）：
+//     config(headless.nodeExe/headless.entryJs) > 真探测（运行中 node 自身 + 全局包定位）> P0 硬编码兜底。
 
 'use strict';
 
@@ -26,9 +27,11 @@ const os = require('os');
 const http = require('http');
 const { spawn, exec } = require('child_process');
 
-// ── P0 定型路径（本机）；生产机器由 resolvePaths() 探测兜底 ─────────────
+// ── P0 兜底路径（仅最后手段；解析顺序 = config > 真探测 > 此处，见 resolvePaths）──
 const NODE_EXE = 'C:\\nvm4w\\nodejs\\node.exe';
 const ENTRY_JS = 'C:\\nvm4w\\nodejs\\node_modules\\@tencent-ai\\codebuddy-code\\bin\\codebuddy';
+// 全局包相对布局（nvm4w：全局包在 node.exe 同级 node_modules 下；标准 npm 全局在 %APPDATA%\npm 下）
+const GLOBAL_PKG_REL = path.join('node_modules', '@tencent-ai', 'codebuddy-code', 'bin', 'codebuddy');
 
 // 分级标签
 const TIER = { A: 'serve', B: 'print-resume', C: 'print' };
@@ -45,20 +48,43 @@ function readGatewayPassword() {
   return null;
 }
 
-// ── 路径探测：硬编码路径失效时，从 shim 反推（生产机器兜底）────────────
-function resolvePaths() {
-  if (fs.existsSync(NODE_EXE) && fs.existsSync(ENTRY_JS)) return { node: NODE_EXE, entry: ENTRY_JS };
-  // 兜底：读 node_modules 下 shim 的 %dp0% 思路 —— 本机实测 .cmd/.ps1 都是包皮，真实入口 = 该 JS；
-  // 此处仅做「同前缀猜测」级兜底（找到 codebuddy-code 包目录即认为可用）。
+// ── 路径解析（P3 可移植化 2026-10-05）：config > 真探测 > P0 硬编码兜底 ────
+//   旧实现为「假探测」：candidates 仅含与 P0 同源的单一硬编码路径，覆盖面为 0。
+function readHeadlessPathConfig() {
   try {
-    const candidates = [
-      'C:\\nvm4w\\nodejs\\node_modules\\@tencent-ai\\codebuddy-code\\bin\\codebuddy',
-    ];
-    for (const e of candidates) {
-      if (fs.existsSync(e)) return { node: NODE_EXE, entry: e };
+    const j = JSON.parse(fs.readFileSync(path.join(__dirname, 'daemon.config.json'), 'utf8').replace(/^\uFEFF/, ''));
+    const h = (j && j.headless) || {};
+    return { nodeExe: h.nodeExe ? String(h.nodeExe) : null, entryJs: h.entryJs ? String(h.entryJs) : null };
+  } catch (e) { return { nodeExe: null, entryJs: null }; }
+}
+
+function probeEntryJs() {
+  const candidates = [];
+  // (a) 与运行本服务的 node.exe 同目录（nvm4w 布局：全局包位于 nodejs\node_modules 下）
+  try { candidates.push(path.join(path.dirname(process.execPath), GLOBAL_PKG_REL)); } catch (e) { /* ignore */ }
+  // (b) 标准 npm 全局根（Windows）
+  try { if (process.env.APPDATA) candidates.push(path.join(process.env.APPDATA, 'npm', GLOBAL_PKG_REL)); } catch (e) { /* ignore */ }
+  // (c) PATH 中疑似 npm/node 目录扫描
+  try {
+    const dirs = String(process.env.PATH || '').split(';');
+    for (const d of dirs) {
+      if (d && /npm|nodejs|node/i.test(d)) candidates.push(path.join(d, GLOBAL_PKG_REL));
     }
   } catch (e) { /* ignore */ }
-  return { node: NODE_EXE, entry: ENTRY_JS };
+  for (const c of candidates) {
+    try { if (c && fs.existsSync(c)) return c; } catch (e) { /* ignore */ }
+  }
+  return null;
+}
+
+let _resolvedPaths = null;
+function resolvePaths() {
+  if (_resolvedPaths) return _resolvedPaths;
+  const cfg = readHeadlessPathConfig();
+  const node = cfg.nodeExe || process.execPath;   // 真探测：运行本服务的 node 自身必然可用
+  const entry = cfg.entryJs || probeEntryJs() || ENTRY_JS;
+  _resolvedPaths = { node: node, entry: entry };
+  return _resolvedPaths;
 }
 
 // ── print 模式默认命令模板（C 档现状；L106/L1070 兜底用）────────────
