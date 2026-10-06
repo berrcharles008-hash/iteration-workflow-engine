@@ -1176,6 +1176,7 @@ function renderRequestText(rec) {
     R.push(' ✓ 回 ' + keys + '（多条并存时带编号：' + opts[0].key + '#' + id + '）→ 记录选择'
       + (rec.handoff ? '并交新会话按选择执行' : '（落盘等 IDE 会话读取；原会话已停时需回 IDE 消费）'));
     R.push(' ✗ 取消#' + id + ' → 本项作废，不执行');
+    R.push(' ↩ 回IDE#' + id + ' → QQ 侧作废本项，回 IDE 原会话拍板');
   } else if (rec.kind === 'sleep') {                    // ★ FIX-38：待机类（必须带编号）
     R.push(' ✓ 确认#' + id + ' → 进入待机；到 ' + (rec.wakeAtMs ? fmtTsMs(rec.wakeAtMs) : '?') + ' 自动唤醒');
     R.push(' ✗ 取消#' + id + ' → 不待机（机器保持运行）');
@@ -1203,6 +1204,7 @@ function renderRequestText(rec) {
   } else {
     R.push(' ✓ 确认#' + id + ' → 登记确认（落盘等 IDE 会话读取；原会话已停时需回 IDE 消费）');
     R.push(' ✗ 取消#' + id + ' → 本项作废，不执行');
+    R.push(' ↩ 回IDE#' + id + ' → QQ 侧作废本项，回 IDE 原会话拍板');
   }
   L.push(MSG_SEP);
   L.push('你的回复 → 结果');
@@ -1298,9 +1300,11 @@ function normalizeCmd(s) {
     .replace(/[\uFF03\uFE5F]/g, '#');
 }
 function parseReply(content) {
-  const m = normalizeCmd(content).match(/^(确认|取消|confirm|cancel)\s*#\s*(\d+)$/i);
+  // ★ 回IDE（2026-10-06）：「回IDE#N」= QQ 侧作废本项、回 IDE 原会话拍板（答案落盘 answer='ide'）
+  const m = normalizeCmd(content).match(/^(确认|取消|回\s*IDE|confirm|cancel)\s*#\s*(\d+)$/i);
   if (!m) return null;
-  const type = (m[1].toLowerCase() === 'cancel' || m[1] === '取消') ? 'cancel' : 'confirm';
+  const k = m[1].replace(/\s+/g, '').toLowerCase();
+  const type = (k === 'cancel' || k === '取消') ? 'cancel' : (k === '回ide' ? 'ide' : 'confirm');
   return { type, id: parseInt(m[2], 10) };
 }
 /**
@@ -1933,6 +1937,17 @@ function doPending(id, type) {
     writeAnswer(p, 'cancel');
     noteSettled(p);                                     // ★ FIX-36：结算 ⇒ 会话冷却
     logInbox({ taskId: id, result: 'cancelled' });
+    return;
+  }
+  // ★ 回IDE（2026-10-06）：QQ 侧作废本项、用户回 IDE 原会话拍板。
+  //   与 cancel 的区别：答案落盘 answer='ide' ⇒ waiter 读回后主 Agent 知道是"回 IDE 处理"
+  //   （应转 IDE 内确认），而非用户否决本项。
+  if (type === 'ide') {
+    p.status = 'ide';
+    send('↩ #' + id + ' 已在 QQ 侧作废：请回 IDE 原会话拍板（本项不再等待 QQ 回复）。').catch(() => {});
+    writeAnswer(p, 'ide');
+    noteSettled(p);
+    logInbox({ taskId: id, result: 'ide' });
     return;
   }
   p.status = 'confirmed';
@@ -2719,6 +2734,17 @@ function handleMessage(m) {
       }
       // 无未决选择题 ⇒ 落到后续
     }
+  }
+  // ★ 回IDE（2026-10-06）：免编号直通 —— 唯一未决「非 idle」项时生效（须早于 route()/freeText，
+  //   否则会被自由文本兜底当成对该项的文字答复）。idle 项不适用：其「回 IDE 操作」= 不影响邀请，语义不同。
+  if (/^回\s*ide$/i.test(normalizeCmd(content))) {
+    const ideList = openList.filter((p) => p.kind !== 'idle');
+    if (ideList.length === 1) { doPending(ideList[0].id, 'ide'); return; }
+    if (ideList.length > 1) {
+      send('当前有 ' + ideList.length + ' 条待确认，请带编号回复（如 回IDE#' + ideList[0].id + '）。').catch(() => {});
+      return;
+    }
+    // 无非 idle 未决项 ⇒ 落到后续（fallback 提示）
   }
   // ★ FIX-37：③ 命令口令（心跳 / 关机 / 中止关机）—— **必须早于 route() 与自由文本兜底**：
   //   否则「中止关机」会被 cancel 关键词（含「中止」）当成某条待办的取消；
