@@ -7,6 +7,8 @@
 //   node tools/qqbot/ask.js --prompt "…" --handoff --handoffPrompt "剩余工作：…"
 //   ★ 选择题（FIX-31）：--options "A=立即实施;B=先实证;C=仅记录" [--recommend B]
 //     ⇒ QQ 端渲染「A/B/C → 后果」对照表；用户回「B」或带编号「B#12」即可（不必回「确认#12」）
+//   ★ 方式2（2026-10-06）：--docPath "<迭代ID>/<文档>.md"（相对 docs/iterations，也可写 --doc-path）
+//     ⇒ QQ 消息尾部自动附「拍板依据」链接（手机可直接打开 hub 只读视图；缺省附列表页）
 //
 // 输出：人类可读两行 + `#id=<n>`（供脚本解析）；加 --json 则只输出 {"id":n,"status":"pending"}
 // 配套：`tools/qqbot/wait-answer.ps1 -Id <n> -TimeoutSec 300`（轮询答案文件，拿到即返回 JSON）
@@ -45,6 +47,7 @@ function parseArgs() {
     else if (k === '--options') a.options = argv[++i];       // ★ FIX-31：`A=label;B=label;…`
     else if (k === '--recommend') a.recommend = argv[++i];   // ★ FIX-31：推荐项键（须在 --options 内）
     else if (k === '--session') a.session = argv[++i];       // ★ session-hub v2：显式关联会话 id（如 hub 的 s-xxx）
+    else if (k === '--docPath' || k === '--doc-path') a.docPath = argv[++i]; // ★ 方式2：拍板依据文档（相对 docs/iterations，如 "2026-10-06-001/03-技术方案.md"；非法/缺省 ⇒ QQ 消息附列表页链接）
   }
   return a;
 }
@@ -94,6 +97,7 @@ const body = JSON.stringify({
   options: OPTIONS,                                        // ★ FIX-31
   recommend: RECOMMEND,                                    // ★ FIX-31
   session: a.session || '',                                // ★ session-hub v2：显式 session 优先于服务端兜底（/request 仅在缺失时补 WATCH.lastConv）
+  docPath: a.docPath || '',                                // ★ 方式2：拍板依据文档链接（服务端校验 + 渲染到 QQ 消息尾部）
 });
 
 const req = http.request({

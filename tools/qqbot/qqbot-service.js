@@ -1137,6 +1137,41 @@ function timeoutLabel(ms) {
   const h = m / 60;
   return (h % 1 ? h.toFixed(1) : String(h)) + ' 小时';
 }
+// ══ 方式2（2026-10-06）：待确认消息自动附阶段文档链接 ══
+// SSOT: 项目管理/PIVAS-阶段产物外网阅读方案评估（hub只读视图+公网穿透）.md §9.3 + 记忆 pivas_hub_remote_doc
+// 配置单源：域名+key 唯一源 = tools/session-hub/hub.config.json → doc.publicUrl/doc.key；
+//   daemon.config.json → docLink 仅为非标准部署的显式覆盖段。每次登记现读不缓存 ⇒ 换 key 免重启。
+const DOC_DIR = path.join(PROJ_ROOT, 'docs', 'iterations');
+/** 登记时的 docPath 校验：相对 docs/iterations、统一正斜杠、拒 .. /绝对路径/\0、后缀 .md/.txt、文件须存在。非法 ⇒ ''（渲染回退列表页） */
+function normalizeDocPath(p) {
+  const raw = String(p || '').trim().replace(/\\/g, '/');
+  if (!raw || raw.indexOf('\0') >= 0 || raw.indexOf('..') >= 0 || /^([a-zA-Z]:)?\//.test(raw)) return '';
+  if (!/\.(md|txt)$/i.test(raw)) return '';
+  try {
+    const abs = path.join(DOC_DIR, raw);
+    if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) return '';
+  } catch (e) { return ''; }
+  return raw;
+}
+/** 链接配置：daemon.config.json → docLink{baseUrl,key} 显式覆盖 > hub.config.json → doc{publicUrl,key} 单源缺省 > null（不附链接） */
+function readDocLinkCfg() {
+  const o = (cfg && cfg.docLink) || {};
+  if (o.baseUrl) return { baseUrl: String(o.baseUrl), key: String(o.key || '') };
+  try {
+    const hub = JSON.parse(fs.readFileSync(path.join(PROJ_ROOT, 'tools', 'session-hub', 'hub.config.json'), 'utf8'));
+    const d = (hub && hub.doc) || {};
+    if (d.publicUrl) return { baseUrl: String(d.publicUrl), key: String(d.key || '') };
+  } catch (e) { /* session-hub 缺席（其他项目分发）⇒ fail-open 不附链接，同 gate-check existsSync 模式 */ }
+  return null;
+}
+/** docPath 合法 → /doc?path=… 精确页；否则 /doc/list 列表页（首屏 ★当前迭代）。未配置 ⇒ '' */
+function buildDocLink(docPath) {
+  const c = readDocLinkCfg();
+  if (!c || !c.baseUrl) return '';
+  const base = c.baseUrl.replace(/\/+$/, '');
+  if (docPath) return base + '/doc?path=' + encodeURIComponent(docPath) + (c.key ? '&key=' + encodeURIComponent(c.key) : '');
+  return base + '/doc/list' + (c.key ? '?key=' + encodeURIComponent(c.key) : '');
+}
 /**
  * ★ FIX-30/31：渲染待确认消息（取代原内联拼接的二元文案）。
  * rec = { id, kind, prompt, command, brief, handoff, options, recommend, nextHint, timeoutMs }
@@ -1221,6 +1256,14 @@ function renderRequestText(rec) {
   for (const r of R) L.push(r);
   const t = timeoutLabel(rec.timeoutMs);
   if (t) L.push('⏳ ' + t + '内有效，超时自动取消');
+  // ★ 方式2（2026-10-06）：尾部附阶段文档链接（hub 只读视图）；sleep/shutdown 为本机操作与迭代文档无关，不附
+  if (rec.kind !== 'sleep' && rec.kind !== 'shutdown') {
+    const docUrl = buildDocLink(rec.docPath);
+    if (docUrl) {
+      L.push('📄 拍板依据：' + docUrl + (rec.docPath ? '' : '（列表页·★当前迭代）'));
+      L.push('（QQ 内若打不开 → 复制链接到系统浏览器打开）');
+    }
+  }
   return L.join('\n');
 }
 /** 请求体携带的命令是否被允许（默认空白名单 = 一律不接受） */
@@ -1274,6 +1317,7 @@ function registerRequest(prompt, command, id, timeoutMs, kind, opts) {
     timeoutMs: t,                                              // ★ FIX-30：供渲染「有效期」
     delaySec: Number(o.delaySec || 0),                         // ★ FIX-37：关机类倒计时（消息预告 + 执行回执用）
     wakeAtMs: Number(o.wakeAtMs || 0),                         // ★ FIX-38：待机类「计划唤醒」时刻（ms）
+    docPath: normalizeDocPath(o.docPath),                      // ★ 方式2：拍板依据文档（相对 docs/iterations；非法自动置空回退列表页）
     originPrompt: '',                                          // ★ FIX-31：接管时保留原题面（doFreeReply/doChoice 填充）
     replyLabel: '',                                            // ★ FIX-31：接管文件里的「你的回复」（取代硬编码）
     createdAt: Date.now(), status: 'pending', timer: null };
@@ -2996,6 +3040,8 @@ module.exports = {
   canReviveSuperseded: canReviveSuperseded,   // ★ FIX-32（供离线自测）
   isWriteTool: isWriteTool,                   // ★ FIX-35（供离线自测）
   parseSnooze: parseSnooze,                   // ★ FIX-36（供离线自测：snooze 语法）
+  normalizeDocPath: normalizeDocPath,         // ★ 方式2（供离线自测：docPath 校验）
+  buildDocLink: buildDocLink,                 // ★ 方式2（供离线自测：文档链接构建）
   isSessionShape: isSessionShape,             // ★ FIX-36（供离线自测：指纹形态白名单）
   noteSettled: noteSettled,                   // ★ FIX-36（供离线自测：结算冷却）
   serveStatus: serveStatus,                   // ★ FIX-34（供离线自测：无实例时返回 null，不抛错）

@@ -17,6 +17,11 @@
     "probeTimeoutMs": 1500,
     "simulateKey": ""
   },
+  "docLink": {
+    "_note": "可选覆盖段：QQ 待确认消息附文档链接（方式2）。缺省自动读 tools/session-hub/hub.config.json → doc.publicUrl/doc.key（单源，推荐）；仅非标准部署（hub 配置不在默认位置/换域名）才在此显式配置 baseUrl+key。两者都缺 = 不附链接（fail-open）。",
+    "baseUrl": "",
+    "key": ""
+  },
   "gateCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/qqbot/actions/log-confirm.ps1",
   "commandAllowlist": [],
   "notify": {

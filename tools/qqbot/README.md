@@ -733,6 +733,26 @@ node tools/qqbot/qqbot-service.js --parse "B#12"        # 解析（打印 reply/
 
 **本批未含（待用户拍板）**：idle 项超时时长 —— 现走默认 `requestTimeoutMs`（600s），与"人不在工位"场景偏短。
 
+## 阶段文档链接自动附加（方式2 · 2026-10-06）
+
+QQ 待确认消息（`sleep`/`shutdown` 除外）尾部自动附「📄 拍板依据」链接 → hub 只读视图，手机看阶段产物后再拍板；QQ 内置浏览器拦未备案 .cn 域名 ⇒ 按消息提示复制链接到系统浏览器打开。
+
+**配置单源**：域名+key 唯一源 = `tools/session-hub/hub.config.json → doc.publicUrl / doc.key`；每次登记现读不缓存，换 key 免重启。`daemon.config.json → docLink {baseUrl, key}` 仅为非标准部署的显式覆盖段（一般不配）；两者都缺 = 不附链接（fail-open，未部署 session-hub 的项目自动跳过）。
+
+**登记精确页**（缺省附列表页，首屏 ★当前迭代）：
+```powershell
+node tools\qqbot\ask.js --prompt "03 技术方案是否通过？" --options "A=通过;B=驳回" `
+  --docPath "2026-xx-xx-001/03-技术方案/03-技术方案.md"
+```
+`--docPath` 相对 `docs/iterations/`（也可写 `--doc-path`）；服务端登记时校验：统一正斜杠、拒 `..`/绝对路径/`\0`、后缀 .md/.txt、文件须存在，非法自动置空回退列表页。
+
+**消息尾部样例**：
+```
+⏳ 30 分钟内有效，超时自动取消
+📄 拍板依据：https://hub.haohaowaner.cn/doc?path=2026-xx-xx-001%2F03-%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md&key=…
+（QQ 内若打不开 → 复制链接到系统浏览器打开）
+```
+
 ## IDE 自动推送兜底：会话历史 Watcher（已被合并服务取代，保留说明供参考）
 
 IDE（插件）版**不提供 hooks**，无法在回合结束时自动触发。本 watcher 作为**机制级兜底**：常驻监控 IDE 会话历史目录（`%LOCALAPPDATA%\CodeBuddyExtension\Data\*\CodeBuddyIDE\*\history`），每 5 秒取最近活跃会话目录下文件的最新修改时间，若写入静止达到 `IdleSeconds`（默认 30s）即判定"一轮完成"，调用 `notify.qqbot.js` 推 QQ。
