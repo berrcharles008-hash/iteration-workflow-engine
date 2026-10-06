@@ -1119,6 +1119,16 @@ function normOptions(list) {
   }
   return out;
 }
+/** ★ 回IDE固定选项（2026-10-06）：取选项列表外第一个可用字母键（A 起），全占返回 null（不追加）。
+ *  渲染（renderRequestText 追加选项行）与判定（doChoice 识别固定键）共用本函数，防双源漂移。 */
+function ideOptionKey(options) {
+  const used = new Set((options || []).map((o) => String(o && o.key || '').toUpperCase()));
+  for (let i = 0; i < 26; i++) {
+    const k = String.fromCharCode(65 + i);
+    if (!used.has(k)) return k;
+  }
+  return null;
+}
 /** 毫秒 → 人类可读有效期（600000 → 「10 分钟」；7200000 → 「2 小时」） */
 function timeoutLabel(ms) {
   const m = Math.round(Number(ms || 0) / 60000);
@@ -1139,12 +1149,14 @@ function renderRequestText(rec) {
   const L = [];
   L.push('🔔 #' + id + ' 待确认 · [' + label + ']');
   L.push(MSG_SEP);
+  const ideKey = opts.length ? ideOptionKey(opts) : null;   // ★ 回IDE固定选项键（与 doChoice 同源）
   if (opts.length) {                                    // ① 选择题（FIX-31）
     L.push('❓ ' + (firstLine(rec.prompt) || '请选择：'));
     for (const o of opts) {
       const tag = (rec.recommend && o.key === String(rec.recommend).toUpperCase()) ? '（推荐）' : '';
       L.push(' ' + choiceMark(o.key) + ' ' + o.key + ' → ' + (o.label || '') + tag);
     }
+    if (ideKey) L.push(' ' + choiceMark(ideKey) + ' ' + ideKey + ' → 回 IDE 原会话拍板（QQ 侧作废本项）');
   } else if (rec.kind === 'idle') {                     // ② 静置自动类（FIX-30）
     L.push('❓ 需要你决定：是否启动新会话接管，继续推进本迭代？');
     L.push('🕐 触发：' + (firstLine(rec.prompt) || '会话静置'));
@@ -1172,11 +1184,10 @@ function renderRequestText(rec) {
   }
   const R = [];
   if (opts.length) {
-    const keys = opts.map((o) => o.key).join(' / ');
+    const keys = opts.map((o) => o.key).concat(ideKey || []).join(' / ');
     R.push(' ✓ 回 ' + keys + '（多条并存时带编号：' + opts[0].key + '#' + id + '）→ 记录选择'
       + (rec.handoff ? '并交新会话按选择执行' : '（落盘等 IDE 会话读取；原会话已停时需回 IDE 消费）'));
     R.push(' ✗ 取消#' + id + ' → 本项作废，不执行');
-    R.push(' ↩ 回IDE#' + id + ' → QQ 侧作废本项，回 IDE 原会话拍板');
   } else if (rec.kind === 'sleep') {                    // ★ FIX-38：待机类（必须带编号）
     R.push(' ✓ 确认#' + id + ' → 进入待机；到 ' + (rec.wakeAtMs ? fmtTsMs(rec.wakeAtMs) : '?') + ' 自动唤醒');
     R.push(' ✗ 取消#' + id + ' → 不待机（机器保持运行）');
@@ -1204,7 +1215,6 @@ function renderRequestText(rec) {
   } else {
     R.push(' ✓ 确认#' + id + ' → 登记确认（落盘等 IDE 会话读取；原会话已停时需回 IDE 消费）');
     R.push(' ✗ 取消#' + id + ' → 本项作废，不执行');
-    R.push(' ↩ 回IDE#' + id + ' → QQ 侧作废本项，回 IDE 原会话拍板');
   }
   L.push(MSG_SEP);
   L.push('你的回复 → 结果');
@@ -1861,6 +1871,10 @@ function doFreeReply(p, content) {
  */
 function doChoice(p, key) {
   const id = p.id;
+  // ★ 回IDE固定选项：命中追加键（如 A/B 被占时的 C）⇒ 不落 choice，走 ide 结算
+  //   （QQ 侧作废本项 + answer='ide' ⇒ waiter 读回后主 Agent 转 IDE 内确认）
+  const ik = ideOptionKey(p.options);
+  if (ik && String(key || '').toUpperCase() === ik) { doPending(id, 'ide'); return; }
   const hit = (p.options || []).filter((o) => o.key === key)[0];
   if (!hit) {
     send('⚠️ #' + id + ' 无选项 ' + key + '（可选：' + (p.options || []).map((o) => o.key).join(' / ') + '）。').catch(() => {});
