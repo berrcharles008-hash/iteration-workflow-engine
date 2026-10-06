@@ -692,12 +692,13 @@ P2 改用 **`{convId}` 目录 mtime**（随消息前进），且 `index.json` **
 | `ask.js` | 新增 `--options "A=…;B=…"` / `--recommend B`（带选项时默认 `kind=decision`） |
 | `daemon.config.json` | `fallbackReply` 补选项语法 |
 
-**回复语法（三类，互不干扰）**：
+**回复语法（四类，互不干扰）**：
 
 | 语法 | 适用 | 效果 |
 |---|---|---|
 | `确认#N` / `取消#N` | 二元项（命令 / 门禁 / 接管邀请） | 执行 / 不执行 |
 | `选项#N`（如 `B#12`）；唯一未决选择题时 `B` | 选择题 | 落 `answer:"choice"` + `choice` + `options`；带 handoff 则按选择起接管 |
+| `回IDE#N`；唯一未决非 idle 项时 `回IDE` | ask / 选择题（模板固定选项） | QQ 侧作废本项，落 `answer:"ide"` ⇒ waiter 读回后回 IDE 原会话拍板；idle 项不适用（其「回 IDE 操作」= 不影响邀请） |
 | 其他文本（≤ `freeText.maxChars`） | 唯一未决项 | 作为指示交接管（`originPrompt` 保留原题面） |
 
 **消息样例**：
@@ -713,6 +714,7 @@ P2 改用 **`{convId}` 目录 mtime**（随消息前进），且 `index.json` **
 你的回复 → 结果
  ✓ 回 A / B / C（多条并存时带编号：A#13）→ 记录选择并交新会话按选择执行
  ✗ 取消#13 → 本项作废，不执行
+ ↩ 回IDE#13 → QQ 侧作废本项，回 IDE 原会话拍板
 ⏳ 30 分钟内有效，超时自动取消
 ```
 
