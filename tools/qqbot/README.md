@@ -56,7 +56,8 @@
 
 ## ⚠ 本地消息注入端点 `POST /simulate-message`（2026-10-04，session-hub 方案 A）
 - 用途：session-hub 页面上的「确认 / 取消 / 选项 / 回复」按钮——**与真实 QQ 消息等价**（注入 `handleMessage` 同一处理链，不绕过任何守卫）。
-- 安全口径：**仅回环** + **独立 `hub.simulateKey` 必配**（`daemon.config.json` → `hub.simulateKey`；空 = 端点关闭）+ 预检拦截：命令类口令（心跳/关机/待机/中止关机）一律 403；带编号目标项的 kind 白名单 `{ask, decision, gate, idle}`，其余（如 shutdown/sleep）403 kind-blocked。
+- 安全口径：**仅回环** + **独立 `hub.simulateKey` 必配**（`daemon.config.json` → `hub.simulateKey`；空 = 端点关闭）+ 预检拦截：命令类口令（心跳/关机/待机/中止关机）一律 403；带编号目标项的 kind 白名单 `{ask, decision, gate, idle, new-iteration}`，其余（如 shutdown/sleep）403 kind-blocked。
+- ★ TOOL-QQNEWITER（2026-10-08）：`POST /request` 同步加 **命令类 kind default-deny**（`new-iteration`/`shutdown`/`sleep` 403）—— 该端点无条件透传 kind+handoff+handoffPrompt（且 httpKey 默认为空），不拦则可被本机任意进程伪造命令类项借用户一次确认执行任意 handoffPrompt；命令类 kind 只能由服务内部口令路径登记。`handoffFile` 亦收口（必须在 `headless.handoffDir` 内，否则丢弃回落默认）。
 - 调用：`POST http://127.0.0.1:18765/simulate-message?key=<simulateKey>`，body `{"content":"确认#3"}`；hub 侧同值配置在 `tools/session-hub/hub.config.json` → `qq.simulateKey`。
 - 审计：`inbox.jsonl` 记 `simulate-inject` / `simulate-blocked-command` / `simulate-blocked-kind`（hub 侧另有 hub-audit.jsonl 两行）。
 
@@ -197,7 +198,7 @@ powershell -File start-service.ps1                     # 仅启动（后台；�
 - **留痕**：`.codebuddy/temp/open-bypass.log`（OPEN / REVOKE / REFUSE）+ `service.log` 的 `[EXEC #N]` / `[EXEC OUT #N]` + 门禁侧 `gate-audit.log` 的 `BYPASS reason=… ttl until=…`；到期自动失效，标记由门禁自清（`gate-check.mjs` GATE-TRV-DEL）。
 - 改 `commandAllowlist` / `gateCommand` **须重启服务**（配置在启动时读取，不热加载）：`stop-service.ps1` → `start-service.ps1`。
 - 首次实测（2026-10-07）：QQ 确认 → 自动开闸 → 闸开期越界写入放行 → TTL 到期自动恢复拦截，8 项正负向取证全绿。
-- **QQ 故障兜底（2026-10-07 补 · 同日补齐 UI）**：本机 **session-hub 页面**（`http://127.0.0.1:18766/`）「待确认明细」里每一项带「确认 / 取消」按钮 —— 走 hub `POST /qq-reply` → qqbot `POST /simulate-message` → `handleMessage`，**与 QQ 回复等价、同一处理链**（服务侧 kind 白名单 `['', 'ask', 'decision', 'gate', 'idle']`）。★ 该按钮 **2026-10-07 新增**：此前 hub 只有只读列表，兜底得手工 `POST /qq-reply`。开闸请求自动带 `kind=gate`，页面会高亮为「🔓 开闸/门禁请求」。首次点击会弹 **hub httpKey 输入框**（`tools/session-hub/hub.config.json` → `httpKey`；写入 sessionStorage，本标签页记住）。
+- **QQ 故障兜底（2026-10-07 补 · 同日补齐 UI）**：本机 **session-hub 页面**（`http://127.0.0.1:18766/`）「待确认明细」里每一项带「确认 / 取消」按钮 —— 走 hub `POST /qq-reply` → qqbot `POST /simulate-message` → `handleMessage`，**与 QQ 回复等价、同一处理链**（服务侧 kind 白名单 `['', 'ask', 'decision', 'gate', 'idle', 'new-iteration']`；hub 前端 `public/index.html` 同源白名单已同步）。★ 该按钮 **2026-10-07 新增**：此前 hub 只有只读列表，兜底得手工 `POST /qq-reply`。开闸请求自动带 `kind=gate`，页面会高亮为「🔓 开闸/门禁请求」。首次点击会弹 **hub httpKey 输入框**（`tools/session-hub/hub.config.json` → `httpKey`；写入 sessionStorage，本标签页记住）。
   ★ **实测状态（2026-10-07 晚）**：**按钮真实点击已端到端通过**（#6：`hub-audit` 记 `action:"confirm" id:6` + `qq-reply-result http:200` → `[EXEC #6] node tools/gate/open-bypass.js --ttl 5` → `bypass OPEN`）。同日另修：公网面板"永远停在加载中"（四请求各 8s 独立超时 + 提示文案）、`pending` 才渲染按钮且全为历史项时给出说明文案。
   ★ **判别证据（哪条路径提交的）**：`inbox.jsonl` 的 `msgId` —— **`hub-local-…` = hub 按钮注入**，**`ROBOT1.0_…` = 真实 QQ 消息**。真失败时兜底 = 手敲 `Set-Content <hooks>/.gate-bypass` 或直接 `POST /simulate-message?key=<simulateKey>` body `{"content":"确认#N"}`。
 - **登记工具自带送达核验**（`request-confirm.js`，2026-10-07 加）：登记后回读 `service.log` 新增行 —— `[ASK #id] HTTP …` = 已发出；`[ASK ERR] …`（**服务侧不带编号**，故按"登记后新增行"界定）= 发送失败。输出 `REGISTERED / DELIVERY ok|FAILED|UNKNOWN`，**退出码 0=已送达、3=未确认送达** ⇒ 失败不再静默等超时。`--no-verify` 可跳过；`--kind` 可覆盖自动判定。
@@ -1132,6 +1133,32 @@ node tools/qqbot/qqbot-service.js --dec-test "net helpmsg 1116"
 ```
 
 > `node -e "…"` 属「解释器内联」⇒ 会被修改门禁拦（02 阶段实测），故行内验证一律走「自有文件 + flag」形式（`--dec-test` 即为此设计）。
+
+## ★ 口令：开新迭代（TOOL-QQNEWITER · 2026-10-08 · opt-in）
+
+**用途**：工位外「从零开工」—— 上一迭代结案、下一迭代未开的窗口期（ACTIVE=none 时静置邀请也被第⑤闸抑制），用 QQ 口令启动新迭代（创建目录/state/ACTIVE 并进入 01 阶段）。
+
+**用法**：
+
+| 你回 | 效果 |
+|---|---|
+| `开新迭代 #23`（或 `新开迭代 23`） | 前置校验（ACTIVE 必须 none）→ 登记待确认项 → 收到 `🔔 #N 待确认 · [开新迭代·需确认]` |
+| `确认#N` | 派发 CLI 接管会话：读 04 登记表定位 #23 → 复述确认（闸 1.5）→ 建迭代 → 跑 01 阶段 → 01 交付即停并 notify |
+| `取消#N` | 作废本项（不创建任何迭代） |
+| 自由文本（「嗯」等） | **不作答**：项作废 + 明确回执（防误开工） |
+| 回「好/ok」（免编号） | **拒绝**（受限 kind，必须带编号） |
+
+**三重防护**：① opt-in（`commands.newIteration.enabled` 默认 `false`）；② 前置闸 ACTIVE 必须 `none`（严格口径：已结案但未释放 ACTIVE 也拒）；③ 二次确认 + 禁免编号直通 + 自由文本不作答。
+
+**启用**：`daemon.config.json` → `commands.newIteration.enabled: true` → `stop-service.ps1` → `start-service.ps1`（配置不热加载）。
+
+**边界**：IDE 无需开着（CLI 独立进程）；服务重启会清 pending（口令项需重发）；派发后 `RUNNING.json` 锁**续期**（job 存活期间有效，回工位想接管可删锁）；job 结束/失败会推 QQ 回执（V2-9）；命令类 kind 禁止经 `/request` 登记（V2-3，防伪造）。
+
+**离线自测**：`node tools/qqbot/qqbot-service.js --newiter-parse "#23"` / `--cmd-parse "开新迭代 #23"`。
+
+**回滚**：`enabled: false` + 重启（零代码改动）。
+
+**评审记录**：`runtime/TOOL-QQNEWITER-四件套.md`（§⑦ v2 修订）+ `runtime/TOOL-QQNEWITER-评审-{A,B,C}.md`。
 
 ## ★ FIX-38：「待机 + 定时唤醒」与「上/下线通知」（2026-09-21）
 

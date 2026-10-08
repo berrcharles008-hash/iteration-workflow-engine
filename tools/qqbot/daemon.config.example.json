@@ -5,7 +5,8 @@
     "handoffPrompt": "handoffPrompt 与 watcher.snoozeFile 依赖 iteration-workflow skill 的标准 runtime 布局（.codebuddy/skills/iteration-workflow/runtime）；未部署该 skill 的项目请相应精简",
     "hub": "hub 段为 session-hub 集成（可选）：无 hub 时 /status 降级提示页，simulateKey 保持空=注入端点关闭",
     "wake": "wake.taskName 为 Windows 计划任务名，服务会自建自删，各项目可自定义，勿与其他项目重名",
-    "secrets": "openId/httpKey/simulateKey 留空为安全默认；真实凭据放 qqbot.creds.json（gitignore），simulateKey 如启用请仅存于本地实例配置"
+    "secrets": "openId/httpKey/simulateKey 留空为安全默认；真实凭据放 qqbot.creds.json（gitignore），simulateKey 如启用请仅存于本地实例配置",
+    "newIteration": "commands.newIteration 为 QQ 口令「开新迭代 #N」（opt-in，默认 false）：仅在无活跃迭代（ACTIVE=none）时可用；口令只登记，回「确认#N」后由 CLI 接管会话创建迭代（目录/state/ACTIVE）并从 01 阶段开工。handoffBrief/handoffPrompt 留空 = 用服务内置模板（一般无需配置）"
   },
   "openId": "",
   "dryRun": false,
@@ -123,6 +124,16 @@
         "wake"
       ],
       "taskName": "QQBot-WakeTimer"
+    },
+    "newIteration": {
+      "enabled": false,
+      "keywords": [
+        "开新迭代",
+        "新开迭代"
+      ],
+      "confirmWindowSec": 1800,
+      "handoffBrief": "",
+      "handoffPrompt": ""
     }
   },
   "actions": {

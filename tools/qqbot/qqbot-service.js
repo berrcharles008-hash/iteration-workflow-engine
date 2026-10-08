@@ -78,7 +78,8 @@ function parseArgs() {
     else if (k === '--render') a.render = argv[++i];   // ★ FIX-30：离线渲染自测（读 rec.json → 打印消息文本）
     else if (k === '--parse') a.parse = argv[++i];     // ★ FIX-31：离线解析自测（打印三类语法解析结果）
     else if (k === '--snooze-parse') a.snoozeParse = argv[++i];   // ★ FIX-36：离线静默解析自测
-    else if (k === '--cmd-parse') a.cmdParse = argv[++i];         // ★ FIX-37：离线口令解析自测（心跳/关机/中止关机）
+    else if (k === '--newiter-parse') a.newiterParse = argv[++i];   // ★ TOOL-QQNEWITER：离线参数校验自测
+  else if (k === '--cmd-parse') a.cmdParse = argv[++i];         // ★ FIX-37：离线口令解析自测（心跳/关机/中止关机）
     else if (k === '--probe') a.probe = true;                     // ★ FIX-37：离线渲染状态探针（不发送）
     else if (k === '--dec-test') a.decTest = argv[++i] || true;   // ★ FIX-37d：离线解码自测（默认跑 net helpmsg 1190）
     else if (k === '--wake-test') a.wakeTest = argv[++i] || '3';  // ★ FIX-38：建 N 分钟后的唤醒定时器 → 查询 → 删除（不待机）
@@ -146,6 +147,17 @@ const DEFAULT_CFG = {
       confirmWindowSec: 120,
     },
     wake: { keywords: ['开机', '唤醒', 'wake'], taskName: 'PIVAS-WakeTimer' },
+    // ★ TOOL-QQNEWITER（2026-10-08）：QQ 口令「开新迭代」—— 无活跃迭代时从工位外启动新迭代（创建 state/ACTIVE/目录并进 01）。
+    //   安全骨架（同关机）：① opt-in 默认关；② 口令只登记，必须回「确认#N」才派发（指令经 handoffPrompt 注入）；
+    //   ③ 前置闸 = ACTIVE 必须为 none（严格口径）；④ 禁免编号直通 + 自由文本不作答（doFreeReply 特判）；
+    //   ⑤ 服务不解析迭代队列（零新 SSOT）—— 编号→主题的定位由接管会话读 04 登记表完成。
+    newIteration: {
+      enabled: false,                                     // opt-in：需显式改 true 并重启服务
+      keywords: ['开新迭代', '新开迭代'],
+      confirmWindowSec: 1800,                             // 待确认有效期（口令由用户主动发起，给足 30 分钟）
+      handoffBrief: '',                                   // 空 = 用内置摘要（见 doNewIterationRequest）
+      handoffPrompt: '',                                  // 空 = 用内置模板（buildNewIterationHandoffPrompt）
+    },
   },
   actions: {
     confirm: { keywords: ['确认', '继续', '是', 'yes', 'ok', '好', 'go', '同意'], reply: '✅ 已收到确认，开始执行后续任务。', command: '' },
@@ -164,7 +176,7 @@ if (loadedCfg) {
   //   文件里只写 shutdown 会把 heartbeat/cancelShutdown 的默认值整个顶掉（缺 keywords ⇒ 口令失效）。
   if (loadedCfg.commands) {
     const C = Object.assign({}, DEFAULT_CFG.commands, loadedCfg.commands);
-    for (const k of ['heartbeat', 'shutdown', 'cancelShutdown']) {
+    for (const k of ['heartbeat', 'shutdown', 'cancelShutdown', 'sleep', 'wake', 'newIteration']) {
       C[k] = Object.assign({}, DEFAULT_CFG.commands[k], loadedCfg.commands[k] || {});
     }
     cfg.commands = C;
@@ -1130,6 +1142,7 @@ const KIND_LABEL = {
   decision: '需你拍板', irreversible: '不可逆·需授权', manual: '人工登记', reply: '答复接管',
   shutdown: '关机·需确认',                 // ★ FIX-37
   sleep: '待机·需确认',                    // ★ FIX-38
+  'new-iteration': '开新迭代·需确认',      // ★ TOOL-QQNEWITER
 };
 const CHOICE_MARK = { A: '🅰', B: '🅱', C: '🅲', D: '🅳', E: '🅴', F: '🅵', G: '🅶', H: '🅷' };
 function choiceMark(k) { return CHOICE_MARK[String(k || '').toUpperCase()] || '▪'; }
@@ -1387,8 +1400,21 @@ function registerRequest(prompt, command, id, timeoutMs, kind, opts) {
   // ★ FIX-35：登记「任务域水位」基线（仅 handoff 项需要；供确认时判断「该迭代是否被推进」）
   const iterId = (o.iterId !== undefined) ? o.iterId : (o.handoff ? readActiveIterationId() : '');
   const taskMarkAt = (o.taskMarkAt !== undefined) ? o.taskMarkAt : (o.handoff ? readTaskMark(iterId) : null);
+  // ★ TOOL-QQNEWITER（V2-3 · 红队 C1）：handoffFile 目录收口 —— 此前 runHeadless 里 path.join(PROJ_ROOT, relFile)
+  //   对任意来源路径不做限制 ⇒ `..` 可穿越写任意可写位置。统一在登记口清洗（全来源生效）：
+  //   非 handoffDir 内 / 含 `..` / 绝对路径 / 含 NUL ⇒ 丢弃并落日志（runHeadless 回落默认 qq-<id>.md）。
+  let handoffFileSafe = '';
+  if (o.handoffFile) {
+    const raw = String(o.handoffFile).replace(/\\/g, '/');
+    const hlDir = String((cfg.headless && cfg.headless.handoffDir) || '.codebuddy/temp/handoff')
+      .replace(/\\/g, '/').replace(/\/+$/, '');
+    const ok = raw.indexOf(hlDir + '/') === 0 && raw.indexOf('..') < 0
+      && !/^[A-Za-z]:/.test(raw) && raw.indexOf('\0') < 0;
+    if (ok) handoffFileSafe = raw;
+    else log('[HANDOFF FILE REJECT] 非法 handoffFile（须在 ' + hlDir + '/ 内）：' + raw.slice(0, 120));
+  }
   const rec = { id, kind: kind || '', prompt: prompt || '', command: command || '', handoff: !!o.handoff,
-    handoffFile: o.handoffFile || '', handoffPrompt: o.handoffPrompt || '',
+    handoffFile: handoffFileSafe, handoffPrompt: o.handoffPrompt || '',
     session: o.session || '',                                  // ★ FIX-17b：来源会话（按会话去重 / 审计定位）
     iterId: iterId,                                            // ★ FIX-35：任务域基线（迭代 ID）
     taskMarkAt: taskMarkAt,                                    // ★ FIX-35：任务域基线（水位 mtime；null = 不可用）
@@ -1540,6 +1566,28 @@ function writeHandoffLock(p, extra) {
 function clearHandoffLock() {
   try { fs.unlinkSync(handoffLockFile()); log('[HANDOFF LOCK] 已释放'); }
   catch (e) { /* 已不存在即视为释放完成 */ }
+}
+/**
+ * ★ TOOL-QQNEWITER（V2-8 · 红队 C6）：接管锁**续期** —— job（常驻 PTY）不随锁 TTL 结束，
+ *   原固定 4h TTL 到期后 fail-open ⇒ 长任务（如 01 阶段 >4h）期间 IDE 侧写入与 job 并行（双写）。
+ *   语义：接管仍在跑 ⇒ 锁不该过期。调用点 = serveTickerTick（探活确认实例存活后）。
+ *   fail-open：续期失败不改行为（TTL 到期仍按原语义失效）。
+ */
+function renewHandoffLock(p) {
+  try {
+    const f = handoffLockFile();
+    let body = null;
+    try { body = JSON.parse(fs.readFileSync(f, 'utf8')); } catch (e) { body = null; }
+    // ★ 锁不存在 ⇒ **不重建** —— 删锁 = 用户要接管（FIX-17e 语义）/ 门禁过期自清，两者都不该被续期覆盖；
+    //   仅"锁在"时续期（job 存活 ⇒ 不因 TTL 到期而 fail-open）。
+    if (!body) return;
+    const hl = cfg.headless || {};
+    let ttl = Number(hl.timeoutMs || 1800000);
+    if (body.mode === 'serve') ttl = Math.max(ttl, 4 * 60 * 60 * 1000);
+    body.expiresAt = Date.now() + ttl;
+    body.renewedAt = Date.now();
+    fs.writeFileSync(f, JSON.stringify(body), 'utf8');
+  } catch (e) { /* fail-open */ }
 }
 // ★ B：headless 接管 —— QQ 确认后用 CLI 非交互会话继续执行剩余任务
 function runHeadless(p) {
@@ -1762,14 +1810,14 @@ function runHeadlessServe(p, hl, relFile) {
         send('🖥 #' + p.id + ' headless 接管已派发：任务正在 Web UI 智能体「' + (job.name || '') + '」中执行。'
           + (hint.open ? hint.open + ' 可实时查看/继续（口令见 ~/.codebuddy/settings.json gateway.password）。' : '')).catch(() => {});
         log('[HEADLESS SERVE #' + p.id + '] job=' + job.id + ' state=' + (job.state || '?') + ' ' + res.webUrl + (res.reused ? ' (reused)' : ' (spawned)'));
-        handoffAliveWatch(p, res);
+        handoffAliveWatch(p, res, job);   // ★ V2-9：带上 jobId 供终态轮询
       });
   });
 }
 
-/** serve 存活监视：HTTP 端口探活代替 exec 回调收尾（serve 死 ⇒ 释放锁 + 回执） */
-function handoffAliveWatch(p, res) {
-  serveHandoff = { id: p.id, port: res.port };
+/** serve 存活监视：HTTP 端口探活 + job 状态轮询（★ TOOL-QQNEWITER V2-9 增 jobId）代替 exec 回调收尾 */
+function handoffAliveWatch(p, res, job) {
+  serveHandoff = { id: p.id, port: res.port, jobId: (job && job.id) ? String(job.id) : '', jobName: (job && job.name) || '' };
   ensureServeTicker();
 }
 
@@ -1789,6 +1837,20 @@ function serveTickerTick() {
   if (!inst || !inst.port) return;
   adapter.probe({ port: inst.port }, (alive) => {
     if (!alive) { onServeDead(inst); return; }
+    // ★ TOOL-QQNEWITER（V2-8 · 红队 C6）：接管中 ⇒ 续期锁（job 存活即锁不该过期；防长任务 TTL fail-open 双写）
+    if (serveHandoff) renewHandoffLock(serveHandoff);
+    // ★ TOOL-QQNEWITER（V2-9 · 红队 C7）：job 状态轮询 —— 终态（done/error/stopped…）⇒ 收尾（notify + 释锁 + 归零）。
+    //   缺 jobId（旧项/派发未返回）或查询失败 ⇒ 不动作（fail-open；端口探活仍是主判据）。
+    if (serveHandoff && serveHandoff.jobId) {
+      adapter.jobStatus({ port: inst.port }, serveHandoff.jobId, (err, job) => {
+        if (err || !job || !serveHandoff) return;
+        const st = String(job.state || '');
+        if (['done', 'error', 'stopped', 'cancelled', 'canceled', 'failed', 'exited'].indexOf(st) >= 0) {
+          finishServeHandoff(serveHandoff, { state: st, detail: job.detail || '' });
+          serveHandoff = null;
+        }
+      });
+    }
     // 活 ⇒ idle 回收检查（决策 4：回收双条件 = idle>TTL 且无 RUNNING.json）
     const idleMs = Date.now() - (inst.lastUsedAt || inst.startedAtMs);
     const ttl = Number(sv.idleTtlMs != null ? sv.idleTtlMs : 1800000);
@@ -1807,11 +1869,24 @@ function onServeDead(inst) {
   if (serveTick) { clearInterval(serveTick); serveTick = null; }
 }
 
+/**
+ * ★ TOOL-QQNEWITER（V2-7 · 红队 C3②）：serve 实例被回收/杀掉时，必须归零接管计数并释放锁。
+ *   此前只有 onServeDead → finishServeHandoff 归零；killServe 直连 after() 绕过它
+ *   ⇒ handoffRunning 可永久 ≥1 ⇒ 之后所有「确认#N」被"已有一个 headless 接管在运行"拒死（只能重启服务）。
+ *   幂等：serveHandoff 为空 ⇒ 不做任何事。
+ */
+function killServeHandoffCleanup() {
+  if (!serveHandoff) return;
+  finishServeHandoff(serveHandoff);
+  serveHandoff = null;
+}
+
 function killServe(inst) {
   const child = serveChild;
   const port = inst && inst.port;
   const after = () => {
     serveChild = null;
+    killServeHandoffCleanup();   // ★ V2-7：回收路径也必须归零（此前漏）
     try { fs.unlinkSync(serveInstanceFile()); } catch (e) { /* ignore */ }
     if (serveTick) { clearInterval(serveTick); serveTick = null; }
   };
@@ -1824,9 +1899,24 @@ function killServe(inst) {
   }
 }
 
-function finishServeHandoff(hf) {
+function finishServeHandoff(hf, extra) {
   handoffRunning = Math.max(0, handoffRunning - 1);
   clearHandoffLock();
+  // ★ TOOL-QQNEWITER（V2-9 · 红队 C7）：job 终态收尾（由 serveTickerTick 的 job 状态轮询触发）——
+  //   此前只探实例端口 ⇒ job 结束/失败无回执、锁与计数不释放（僵尸态：用户以为还在开工）。
+  const st = extra && extra.state ? String(extra.state) : '';
+  if (st) {
+    const tail = extra && extra.detail ? String(extra.detail).slice(0, 300) : '';
+    log('[SERVE END #' + hf.id + '] job ' + st + (tail ? ' detail=' + tail.slice(0, 120) : ''));
+    if (st === 'done') {
+      send('✅ #' + hf.id + ' headless 任务已完成' + (tail ? '：' + tail : '')).catch(() => {});
+    } else {
+      send('❌ #' + hf.id + ' headless 任务已结束（' + st + '）' + (tail ? '：' + tail : '')
+        + '。可在 Web UI 打开会话查看，或重发口令/回工位处理。').catch(() => {});
+    }
+    logInbox({ taskId: hf.id, result: 'serve-job-' + st });
+    return;
+  }
   log('[SERVE END #' + hf.id + '] serve 实例已退出，接管结束');
   send('ℹ️ #' + hf.id + ' Web UI（serve 实例）已退出，headless 接管结束。').catch(() => {});
   logInbox({ taskId: hf.id, result: 'serve-exited' });
@@ -1941,6 +2031,20 @@ function handoffGuard(p) {
 function doFreeReply(p, content) {
   const id = p.id;
   clearTimeout(p.timer);
+  // ★ TOOL-QQNEWITER（V2-1 · 红队 A-其它①）：「开新迭代」项**不接受自由文本答复** ——
+  //   该项 handoff=true，若落到下面的通用分支会直接 runHeadless（= 用户回一句「嗯」就开工，且绕过编号校验）；
+  //   isOfflineKind 只拦 route() 关键词，拦不住自由文本通道。与 shutdown 同款"作废 + 明确回执"，
+  //   但必须**早于** p.status 赋值与后续 handoff 分支。
+  if (p.kind === 'new-iteration') {
+    p.status = 'voided';
+    writeAnswer(p, 'cancel');
+    noteSettled(p);
+    log('[FREEREPLY #' + id + '] new-iteration 项被自由文本作废（未派发）：' + String(content).slice(0, 60));
+    logInbox({ taskId: id, result: 'newiter-voided-by-freetext', text: String(content).slice(0, 60) });
+    send('ℹ️ #' + id + ' 是「开新迭代」确认项：已按作废处理，**未创建任何迭代、未启动会话**。'
+      + '如需开工请重发「开新迭代 #编号」，然后回「确认#新编号」。').catch(() => {});
+    return;
+  }
   p.status = 'replied';
   writeAnswer(p, 'text', content);
   noteSettled(p);                                       // ★ FIX-36：结算 ⇒ 会话冷却
@@ -2064,7 +2168,12 @@ function doPending(id, type) {
       log('[REVIVE #' + id + '] 该项曾被会话活动作废，用户手动确认 ⇒ 重走接管流程（活动闸门兜底）');
       p.status = 'pending';
     } else {
-      send('#' + id + ' 已处理过（' + p.status + '）。').catch(() => {});
+      // ★ TOOL-QQNEWITER（V2-4 · 红队 C5）：按 kind 定制 —— 过期后回「确认#N」若只说"已处理过（expired）"，
+      //   用户会误以为迭代已开工（实际零动作）。开新迭代项必须显式说明"未创建任何迭代"。
+      const hint = (p.kind === 'new-iteration')
+        ? '（**未创建任何迭代、未启动会话**；如需开工请重发「开新迭代 #编号」）'
+        : '';
+      send('#' + id + ' 已处理过（' + p.status + '）。' + hint).catch(() => {});
       return;
     }
   }
@@ -2252,7 +2361,9 @@ function startHttp() {
           res.end('{"ok":false,"error":"command-blocked","hint":"命令类口令只能走 QQ"}'); return;
         }
         // 预检②：带编号的目标项 kind 白名单（命令类/shutdown/sleep 等一律拒绝）
-        const SIM_KINDS = ['', 'ask', 'decision', 'gate', 'idle'];
+        // ★ TOOL-QQNEWITER：加 new-iteration（hub 兜底按钮可用；与 session-hub/public/index.html 的
+        //   前端白名单同源口径 —— 改此处必须同步那一行 + README 两处白名单文本）
+        const SIM_KINDS = ['', 'ask', 'decision', 'gate', 'idle', 'new-iteration'];
         const simPr = parseReply(simContent) || null;
         const simPc = simPr ? null : parseChoiceReply(simContent);
         const simTargetId = simPr ? simPr.id : (simPc && simPc.id != null ? simPc.id : null);
@@ -2354,6 +2465,11 @@ function startHttp() {
                 confirmWindowSec: Number((C.sleep && C.sleep.confirmWindowSec) || 120),
               },
               wake: { keywords: (C.wake && C.wake.keywords) || [], taskName: wakeTaskName() },
+              newIteration: {                                   // ★ TOOL-QQNEWITER
+                enabled: !!(C.newIteration && C.newIteration.enabled),
+                keywords: (C.newIteration && C.newIteration.keywords) || [],
+                confirmWindowSec: Number((C.newIteration && C.newIteration.confirmWindowSec) || 1800),
+              },
               wakeTimer: LAST_WAKE || null,                     // ★ FIX-38：当前唤醒定时器（下次唤醒时刻）
             };
           })()
@@ -2398,6 +2514,18 @@ function startHttp() {
       let body = ''; req.on('data', (c) => body += c);
       req.on('end', () => {
         let data; try { data = JSON.parse(body); } catch (e) { res.writeHead(400); res.end('bad json'); return; }
+        // ★ TOOL-QQNEWITER（V2-3 · 红队 C1）：命令类 kind **禁止经 /request 登记** ——
+        //   /request 无条件透传 kind/handoff/handoffPrompt 进 registerRequest（且 httpKey 默认为空 ⇒ 无鉴权），
+        //   若不拦，本机任意进程可伪造「开新迭代」项，借用户一次「确认#N」执行任意 handoffPrompt。
+        //   命令类（new-iteration/shutdown/sleep）只能由服务内部口令路径登记（doNewIterationRequest 等）。
+        const REQ_KIND_DENY = ['new-iteration', 'shutdown', 'sleep'];
+        if (REQ_KIND_DENY.indexOf(String(data.kind || '')) >= 0) {
+          log('[REQUEST] 命令类 kind 拒绝经 /request 登记：' + data.kind);
+          logInbox({ result: 'request-blocked-kind', kind: String(data.kind || '') });
+          res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end('{"ok":false,"error":"kind-blocked","hint":"命令类口令只能由服务内部登记（QQ 口令）"}');
+          return;
+        }
         // ★ 命令来源优先级：请求体 command（须过白名单）> kind=gate 时的 gateCommand > 空
         let cmd = data.command || '';
         if (cmd && !isCommandAllowed(cmd)) {
@@ -2570,7 +2698,8 @@ function sendOnlineNotice(prev) {
   L.push('服务：端口 ' + (cfg.listenPort || 18765) + ' · dryRun=' + !!cfg.dryRun);
   L.push('迭代：' + (it ? (it.id + '（阶段 ' + (it.phase || '?') + ' · ' + (it.status || '?') + '）') : '（无活跃迭代）'));
   L.push('待确认：' + [...pending.values()].filter((p) => p.status === 'pending').length + ' 条');
-  L.push('口令：关机 ' + (sc.enabled ? 'ON' : 'OFF') + ' · 待机 ' + (sl.enabled ? 'ON' : 'OFF'));
+  const ni = CMDCFG().newIteration || {};
+  L.push('口令：关机 ' + (sc.enabled ? 'ON' : 'OFF') + ' · 待机 ' + (sl.enabled ? 'ON' : 'OFF') + ' · 开新迭代 ' + (ni.enabled ? 'ON' : 'OFF'));
   if (prev && prev.stoppedAt) L.push('上次退出：优雅停止（' + fmtTsMs(prev.stoppedAt) + (prev.reason ? ' · ' + prev.reason : '') + '）');
   else if (prev && prev.ts) L.push('⚠️ 上次退出：异常（心跳停在 ' + fmtTsMs(prev.ts) + '，无下线记录）');
   else L.push('上次退出：无记录');
@@ -2634,13 +2763,20 @@ function parseCommandAction(content) {
   if (sl !== null) return { name: 'sleep', arg: sl };
   const wk = withArg((C.wake || {}).keywords);
   if (wk !== null) return { name: 'wake', arg: wk };
+  // ★ TOOL-QQNEWITER：开新迭代（前缀匹配 + 参数 = 队列编号；「别开新迭代」不以关键词开头 ⇒ 不命中）
+  const ni = withArg((C.newIteration || {}).keywords);
+  if (ni !== null) return { name: 'new-iteration', arg: ni };
   if (hitKeyword((C.shutdown || {}).keywords, content)) return { name: 'shutdown', arg: '' };
   if (hitKeyword((C.cancelShutdown || {}).keywords, content)) return { name: 'shutdown-abort', arg: '' };
   if (hitKeyword((C.heartbeat || {}).keywords, content)) return { name: 'heartbeat', arg: '' };
   return null;
 }
-/** ★ FIX-38：会让机器离线的 kind（免编号直通拦截与关机同款） */
-function isOfflineKind(kind) { return kind === 'shutdown' || kind === 'sleep'; }
+/** ★ FIX-38：受限 kind（免编号直通拦截，与关机同款）—— ★ TOOL-QQNEWITER 增 new-iteration */
+function isOfflineKind(kind) { return kind === 'shutdown' || kind === 'sleep' || kind === 'new-iteration'; }
+/** 受限 kind 的中文标签（免编号直通拒绝回执用；★ TOOL-QQNEWITER 三态化） */
+function offlineKindLabel(kind) {
+  return ({ shutdown: '关机', sleep: '待机', 'new-iteration': '开新迭代' })[kind] || '该操作';
+}
 /** 时长解析：`30` / `30min` / `30分钟` / `2h` / `1.5h` → 分钟；空 ⇒ 默认值；无法识别 ⇒ null */
 function parseDurationMin(s, defMin) {
   const t = String(s || '').replace(/[\s\u3000]/g, '');
@@ -2844,6 +2980,106 @@ function doWakeRequest(content, arg) {
   }
   registerSleepRequest(content, at, '定时唤醒（到点自动恢复，无需登录）');
 }
+/** ★ TOOL-QQNEWITER：口令参数校验（纯函数，供 --newiter-parse 离线自测）—— 只接受 `#?<1~3 位数字>` */
+function normalizeNewIterationArg(arg) {
+  const raw = String(arg || '').trim();
+  const m = raw.match(/^#?\s*(\d{1,3})\s*$/);
+  if (!m) return { ok: false, num: '', reason: raw ? ('无法识别「' + raw.slice(0, 20) + '」') : '参数为空' };
+  const n = parseInt(m[1], 10);
+  if (!(n >= 1 && n <= 999)) return { ok: false, num: '', reason: '编号越界（1~999）' };
+  return { ok: true, num: String(n), reason: '' };
+}
+/**
+ * ★ TOOL-QQNEWITER（2026-10-08）：新迭代接管指令模板（handoffPrompt 内置默认；配置 commands.newIteration.handoffPrompt 可覆盖）。
+ *   只做一件事：把"启动新迭代 #N"讲清楚（闸门 → 创建 → 01 阶段 → 收尾）。服务不解析队列（零新 SSOT）。
+ */
+function buildNewIterationHandoffPrompt(num) {
+  return [
+    '【启动新迭代 · 用户 QQ 口令】',
+    '用户目标：迭代登记表 #' + num,
+    '身份：你 = QQ 确认派发的 CLI 接管会话（模式 B）。按 iteration-workflow skill 执行，从 01 阶段开工。',
+    '',
+    '⚠️ 闸门（必须最先做；任一不符 ⇒ 停止 + `node tools/qqbot/notify.qqbot.js --kind fail --what "开新迭代中止：<原因>"` 报告，不得自行改口径/换目标）：',
+    '1) 读 .codebuddy/skills/iteration-workflow/runtime/ACTIVE ⇒ 必须为 none/不存在（口令侧已校验，此处二次确认）。',
+    '2) 读 项目管理/04-一期迭代计划与排期（汇报版）.md §3.3 迭代登记表，定位 #' + num + ' 的主题与范围；编号不存在/已被占用/行序冲突 ⇒ 停止报告。',
+    '3) **闸 1.5**：先用 ask.js 向用户复述定位结果（编号/主题/拟用迭代 ID 草案）并等一次 QQ 确认（分片轮询见第 10 条），对不上即停止；确认通过后才可创建。',
+    '4) 读 SKILL.md 启动协议 Step A→D（运行时变量表 → 复杂度评估）与 engine/complexity-scoring.md。',
+    '',
+    '创建迭代（按 engine/state-protocol.md §二「新建迭代（01 阶段启动）」）：',
+    '5) 迭代 ID = YYYY-MM-DD-NNN-中文简述（当日日期 + 当日序号 + 登记表主题）。',
+    '6) 用 write_to_file 建 docs/iterations/<ID>/01-需求分析与设计/ 并写 01 产出。',
+    '7) 用 write_to_file 写 runtime/<ID>.state.yaml（初始：iteration_status: in_progress / current_phase: "01" / phase_status: in_progress / started_at）。',
+    '8) 用 write_to_file 写 runtime/ACTIVE（仅一行 <ID>，★ 无 BOM）；若 .claude/skills/iteration-workflow/runtime/ 存在 ⇒ 按 Step B.3 同步双副本。',
+    '',
+    '执行 01 阶段（engine/phase-01.md 全流程）：',
+    '9) 读知识库 L1/L2/L3（缺失/过时按原则 15 自动刷新）；按模板产出 01-需求记录.md。',
+    '10) 需用户拍板时必须登记（模式 A 分片轮询，单片 ≤5 分钟、总 30 分钟）：',
+    '     node tools/qqbot/ask.js --prompt "<问题 + 选项>" --options "A=…;B=…" --timeoutSec 1800',
+    '     powershell -NoProfile -ExecutionPolicy Bypass -File tools\\qqbot\\wait-answer.ps1 -Id N -TimeoutSec 300 -SinceIso <ts>',
+    '     ★ 禁止加 --handoff（本会话已是接管会话；再起 headless 会被锁/互斥拒绝且语义重复）。',
+    '     ★ 分片超时（exit 2）⇒ 可再等 1 片；30 分钟用尽 ⇒ state 标 phase_status=blocked + pause_reason=等待用户超时，停下并 notify，不得自动续做。',
+    '',
+    '纪律：',
+    '11) 写文件一律 write_to_file（01 阶段 shell 写命令会被门禁拦）；不要用 shell 建目录（write_to_file 自动建父目录）；状态写入优先 python scripts/state-apply.py。',
+    '12) 不可逆动作（DDL/DML、SVN/git 提交推送、删除移动、部署发布）与「改变已确认口径」的决策：一律停下并 ask.js 登记（--kind irreversible），禁止自行执行。',
+    '13) 禁止越过 01 进入 02 —— 01 交付后即停（阶段确认属用户/IDE 侧）。',
+    '',
+    '收尾（必须）：',
+    '14) state 回写（phase_status: completed + last_session_summary）+ 输出简报（做了什么 ｜ 改了哪些文件 ｜ 越过了哪些确认门及依据 ｜ 下一步建议）。',
+    '15) `node tools/qqbot/notify.qqbot.js --kind done --what "新迭代 <ID> 01-需求记录已产出，待你确认（附要点）"`。',
+  ].join('\n');
+}
+/**
+ * ★ TOOL-QQNEWITER：QQ 口令「开新迭代 #N」登记器（只登记，不执行；确认后经既有 B 通道派发）。
+ *   设计（四件套 §3.1 + 评审 v2）：① opt-in；② 前置闸 = ACTIVE 必须 none（严格口径）；
+ *   ③ 参数 = 队列编号；④ 幂等；⑤ 项不带 session（避免压掉静置邀请 / 误触 handoffGuard）；
+ *   ⑥ 免编号直通与自由文本均已拦截（isOfflineKind + doFreeReply 特判）。
+ */
+function doNewIterationRequest(content, arg) {
+  const nc = CMDCFG().newIteration || {};
+  if (!nc.enabled) {
+    log('[CMD] new-iteration 口令被忽略（enabled=false）');
+    logInbox({ result: 'newiter-disabled', text: String(content).slice(0, 60) });
+    send('🔒 开新迭代未启用：daemon.config.json → commands.newIteration.enabled 现为 false。如需启用请改为 true 并重启合并服务。').catch(() => {});
+    return;
+  }
+  const pa = normalizeNewIterationArg(arg);
+  if (!pa.ok) {
+    logInbox({ result: 'newiter-bad-arg', text: String(arg || '').slice(0, 40) });
+    send('⚠️ 口令格式：`开新迭代 #编号`（如 `开新迭代 #23`；编号 = 项目管理/04 迭代登记表 §3.3 的编号）。'
+      + '本次未登记（' + pa.reason + '）。').catch(() => {});
+    return;
+  }
+  const num = pa.num;
+  // 前置闸：ACTIVE 必须为 none（严格口径 —— 即使已 completed 但未释放 ACTIVE 也拒，避免两迭代混写）
+  const active = readActiveIterationId();
+  if (active && active !== 'none') {
+    log('[NEWITER REFUSE] active=' + active);
+    logInbox({ result: 'newiter-refused-active', active: active });
+    send('⚠️ 当前有活跃迭代「' + active + '」，不能开新迭代。'
+      + '请先在 IDE 内推进到 07 结案（归档后 ACTIVE 释放），再发口令。').catch(() => {});
+    return;
+  }
+  const dup = [...pending.values()].filter((p) => p.status === 'pending' && p.kind === 'new-iteration')[0];
+  if (dup) {
+    const t = (String(dup.prompt || '').match(/#\d+/) || [''])[0];
+    send('ℹ️ 已有待确认的开新迭代项 #' + dup.id + (t ? '（目标 ' + t + '）' : '') + '。'
+      + '回「确认#' + dup.id + '」执行，或「取消#' + dup.id + '」作废；如需换目标请先取消再重发。').catch(() => {});
+    logInbox({ taskId: dup.id, result: 'newiter-dup' });
+    return;
+  }
+  const win = Math.max(60, Math.min(7200, Math.round(Number(nc.confirmWindowSec) || 1800)));
+  const hp = String(nc.handoffPrompt || '').trim() || buildNewIterationHandoffPrompt(num);
+  const brief = String(nc.handoffBrief || '').trim()
+    || ('启动新迭代 #' + num + '：CLI 会话按 iteration-workflow 从 01 阶段开工（创建迭代目录/state/ACTIVE；01 交付后停下报告）');
+  const id = registerRequest(
+    '【开新迭代】目标：登记表 #' + num + '（' + ts() + '）\n'
+      + '⚠️ 确认后将创建新迭代（目录/state/ACTIVE）并启动 CLI 会话执行 01 阶段；不可自动撤销（如需中止请在 01 内取消）。',
+    '', 0, win * 1000, 'new-iteration',
+    { handoff: true, handoffPrompt: hp, handoffBrief: brief, session: '', iterId: '' });
+  log('[NEWITER #' + id + '] 登记：目标 #' + num + ' · 窗口 ' + win + 's');
+  logInbox({ taskId: id, result: 'newiter-requested', target: num });
+}
 function handleMessage(m) {
   const d = m.d || {};
   const oid = d.author && d.author.user_openid;
@@ -2897,6 +3133,7 @@ function handleMessage(m) {
     if (ca.name === 'shutdown-abort') { doShutdownAbort(); return; }
     if (ca.name === 'sleep') { doSleepRequest(content, ca.arg); return; }
     if (ca.name === 'wake') { doWakeRequest(content, ca.arg); return; }
+    if (ca.name === 'new-iteration') { doNewIterationRequest(content, ca.arg); return; }   // ★ TOOL-QQNEWITER
   }
   // ★ FIX-36：③ 静默指令 —— **必须早于 route()**：否则「取消，并且1h内不再提醒」会被
   //   cancel 关键词的 indexOf('取消') 吞掉（只剩「请带编号」回执）—— 这正是用户实测失效的成因。
@@ -2924,11 +3161,12 @@ function handleMessage(m) {
       //   若唯一未决项恰是关机项，一句闲聊式应答就会断电。取消方向仍放行（不作废更安全）。
       const only = openList[0];
       if (name === 'confirm' && isOfflineKind(only.kind)) {
-        const kLabel = (only.kind === 'sleep') ? '待机' : '关机';
+        // ★ TOOL-QQNEWITER：三态化（关机/待机/开新迭代）—— 标签与审计码统一走 kind 映射，勿再用二态三元式。
+        const kLabel = offlineKindLabel(only.kind);
         log('[GUARD #' + only.id + '] ' + kLabel + '项拒绝免编号直通（原文：' + firstLine(content) + '）');
-        logInbox({ taskId: only.id, result: (only.kind === 'sleep' ? 'sleep' : 'shutdown') + '-bare-keyword-blocked', text: String(content).slice(0, 60) });
+        logInbox({ taskId: only.id, result: String(only.kind || 'restricted') + '-bare-keyword-blocked', text: String(content).slice(0, 60) });
         send('⚠️ #' + only.id + ' 是「' + kLabel + '」确认：为避免误触，本项必须带编号回复「确认#' + only.id
-          + '」；回「取消#' + only.id + '」则不作' + (only.kind === 'sleep' ? '待机' : '关机') + '处理。').catch(() => {});
+          + '」；回「取消#' + only.id + '」则不作' + kLabel + '处理。').catch(() => {});
         return;
       }
       doPending(only.id, name); return;                     // 唯一一条 → 免编号直通
@@ -3033,8 +3271,21 @@ if (args.cmdParse) {
     wakeAt: (nm === 'sleep' && durMin) ? fmtTsMs(Date.now() + durMin * 60000) : (clock ? fmtTsMs(clock.getTime()) : null),
     shutdownEnabled: !!((CMDCFG().shutdown || {}).enabled),
     sleepEnabled: !!sc.enabled,
+    newIterationEnabled: !!((CMDCFG().newIteration || {}).enabled),   // ★ TOOL-QQNEWITER
     route: route(args.cmdParse),          // 回归：口令不得被 route() 关键词吞掉（期望 null）
     reply: parseReply(args.cmdParse),     // 回归：口令不得被误解析成「确认#N」
+  }) + '\n');
+  process.exit(0);
+}
+// ★ TOOL-QQNEWITER：离线参数校验自测 —— `node qqbot-service.js --newiter-parse " #23 "`（不启动服务、不发 QQ）
+if (args.newiterParse !== undefined && args.newiterParse !== false) {
+  const pr = normalizeNewIterationArg(args.newiterParse);
+  process.stdout.write(JSON.stringify({
+    input: args.newiterParse,
+    ok: pr.ok, num: pr.num, reason: pr.reason,
+    enabled: !!((CMDCFG().newIteration || {}).enabled),
+    keywords: ((CMDCFG().newIteration || {}).keywords) || [],
+    promptHead: pr.ok ? buildNewIterationHandoffPrompt(pr.num).split('\n').slice(0, 3) : null,
   }) + '\n');
   process.exit(0);
 }
@@ -3145,6 +3396,8 @@ module.exports = {
   execDecoded: execDecoded,                   // ★ FIX-37d（供离线自测：解码版 exec）
   renderMergeText: renderMergeText,           // ★ FIX-39（供离线自测：n=1 直发原文 / n≥2 摘要）
   summaryLine: summaryLine,                   // ★ FIX-39（供离线自测：超长截断带 …）
+  normalizeNewIterationArg: normalizeNewIterationArg,               // ★ TOOL-QQNEWITER（供离线自测：口令参数校验）
+  buildNewIterationHandoffPrompt: buildNewIterationHandoffPrompt,   // ★ TOOL-QQNEWITER（供隔离实例 E2E 断言模板）
 };
 
 // ── 启动（仅直接运行时；被 require 时只导出纯函数，供自测脚本使用）──────
@@ -3159,6 +3412,11 @@ if (require.main === module && !args.wakeTest && !args.wakeQuery && !args.wakeDe
   log('FIX-37 commands: heartbeat=' + JSON.stringify((CMDCFG().heartbeat || {}).keywords || [])
     + ' · shutdown=' + (_sc.enabled ? ('ON → ' + shutdownPlan().command + '（窗口 ' + (Number(_sc.confirmWindowSec) || 120) + 's）') : 'OFF')
     + ' · abort=' + JSON.stringify((CMDCFG().cancelShutdown || {}).keywords || []));
+  // ★ TOOL-QQNEWITER：开新迭代口令可见性（排查「口令无响应」无需翻配置）
+  const _nc0 = CMDCFG().newIteration || {};
+  log('TOOL-QQNEWITER newIteration=' + (_nc0.enabled ? 'ON' : 'OFF')
+    + ' · keywords=' + JSON.stringify(_nc0.keywords || [])
+    + ' · window=' + (Number(_nc0.confirmWindowSec) || 1800) + 's');
   await getToken();
   log('token OK');
   // ★ FIX-38：心跳 + 上线通知（先读上次心跳判断是否异常退出，再写新心跳）

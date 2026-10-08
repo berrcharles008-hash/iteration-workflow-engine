@@ -158,6 +158,35 @@ function dispatchJob(inst, opts, cb) {
   req.end();
 }
 
+// ── ★ TOOL-QQNEWITER（V2-9）：job 状态查询（GET /api/v1/jobs → 按 id 匹配）────
+//   端点契约（hub 已在用，session-hub/server.js:597）：{data:{jobs:[{id,sessionId,state,detail,name,...}]}}
+//   用途：serve 接管的 job 终态轮询（done/error/… ⇒ 收尾回执 + 释锁 + 归零），替代"只探端口"的僵尸盲区。
+function jobStatus(inst, jobId, cb) {
+  const port = Number(inst && inst.port);
+  if (!port || !jobId) { cb(new Error('jobStatus: 缺 port/jobId')); return; }
+  const req = http.request({
+    host: '127.0.0.1', port: port, path: '/api/v1/jobs', method: 'GET',
+    headers: apiHeaders(), timeout: 15000,
+  }, (res) => {
+    let buf = '';
+    res.setEncoding('utf8');
+    res.on('data', (d) => { buf += d; });
+    res.on('end', () => {
+      let job = null;
+      try {
+        const j = JSON.parse(buf);
+        const arr = (j && j.data && (j.data.jobs || j.data)) || [];
+        if (Array.isArray(arr)) job = arr.filter((x) => String(x && x.id) === String(jobId))[0] || null;
+      } catch (e) { /* fallthrough */ }
+      if (res.statusCode === 200 && job) cb(null, job);
+      else cb(new Error('HTTP ' + res.statusCode + (job ? '' : ' job-not-found')));
+    });
+  });
+  req.on('error', (e) => cb(e));
+  req.on('timeout', () => { try { req.destroy(new Error('jobStatus timeout')); } catch (e) {} });
+  req.end();
+}
+
 // ── 口令（渲染期现读 settings.json.gateway.password，不跨实例缓存）────
 function credential() {
   const value = readGatewayPassword();
@@ -289,6 +318,7 @@ module.exports = {
   resolvePaths: resolvePaths,
   apiHeaders: apiHeaders,
   dispatchJob: dispatchJob,
+  jobStatus: jobStatus,   // ★ TOOL-QQNEWITER（V2-9：job 终态轮询）
   TIER: TIER,
 };
 
