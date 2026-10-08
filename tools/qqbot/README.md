@@ -186,6 +186,23 @@ powershell -File start-service.ps1                     # 仅启动（后台；�
 - 待确认项超时自动取消：**`ask.js` 默认 1800s（30 分钟）**；直接走 HTTP `/request` 且未带 `timeoutMs` 时才用 `requestTimeoutMs`（默认 600000=10 分钟）。同一编号只能被处理一次。
 - ⚠️ 本机制**不能**替你在 IDE 里点「允许」，也不能唤醒 IDE 会话 —— 它执行的是服务自身能跑的本机命令。
 
+### 门禁开闸命令（★ 2026-10-07 用户拍板：需要开闸时提示确认 → 确认后自动开闸）
+
+- **唯一受白名单许可的请求体命令**：`node tools/gate/open-bypass.js --ttl <分钟>`（`daemon.config.json → commandAllowlist` 仅此一条）。
+- 登记示例（Agent 侧）：
+  `node tools/qqbot/request-confirm.js --prompt "开闸请求：<用途 / 迭代 / 改动范围>，TTL 240 分钟" --command "node tools/gate/open-bypass.js --ttl 240"`
+  你回「确认#N」→ 服务执行 → 门禁开闸（`.codebuddy/hooks/.gate-bypass` = `ttlMinutes=240`）。
+- **执行器三重护栏**：① `QQ_CONFIRM_ID` 环境令牌 —— Agent 直跑 ⇒ `REFUSED no_confirm_token`（exit 2），保住「Agent 不得自建逃生口」；② 答复回执 `.codebuddy/temp/qq-answers/<id>.json` 须 `answer=confirm`、≤3 分钟新鲜、未被用过（用后打 `bypassUsedAt`）；③ TTL 有界 2~480 分钟，写完按 hook 同款正则复解析，解析不到**立即删标记**（防内容不合规被 hook 当 forever 处理）。
+- 可选参数：`--status`（只读看标记状态）、`--revoke`（关闸，免确认）。
+- **留痕**：`.codebuddy/temp/open-bypass.log`（OPEN / REVOKE / REFUSE）+ `service.log` 的 `[EXEC #N]` / `[EXEC OUT #N]` + 门禁侧 `gate-audit.log` 的 `BYPASS reason=… ttl until=…`；到期自动失效，标记由门禁自清（`gate-check.mjs` GATE-TRV-DEL）。
+- 改 `commandAllowlist` / `gateCommand` **须重启服务**（配置在启动时读取，不热加载）：`stop-service.ps1` → `start-service.ps1`。
+- 首次实测（2026-10-07）：QQ 确认 → 自动开闸 → 闸开期越界写入放行 → TTL 到期自动恢复拦截，8 项正负向取证全绿。
+- **QQ 故障兜底（2026-10-07 补 · 同日补齐 UI）**：本机 **session-hub 页面**（`http://127.0.0.1:18766/`）「待确认明细」里每一项带「确认 / 取消」按钮 —— 走 hub `POST /qq-reply` → qqbot `POST /simulate-message` → `handleMessage`，**与 QQ 回复等价、同一处理链**（服务侧 kind 白名单 `['', 'ask', 'decision', 'gate', 'idle']`）。★ 该按钮 **2026-10-07 新增**：此前 hub 只有只读列表，兜底得手工 `POST /qq-reply`。开闸请求自动带 `kind=gate`，页面会高亮为「🔓 开闸/门禁请求」。首次点击会弹 **hub httpKey 输入框**（`tools/session-hub/hub.config.json` → `httpKey`；写入 sessionStorage，本标签页记住）。
+  ★ **实测状态（2026-10-07 晚）**：**按钮真实点击已端到端通过**（#6：`hub-audit` 记 `action:"confirm" id:6` + `qq-reply-result http:200` → `[EXEC #6] node tools/gate/open-bypass.js --ttl 5` → `bypass OPEN`）。同日另修：公网面板"永远停在加载中"（四请求各 8s 独立超时 + 提示文案）、`pending` 才渲染按钮且全为历史项时给出说明文案。
+  ★ **判别证据（哪条路径提交的）**：`inbox.jsonl` 的 `msgId` —— **`hub-local-…` = hub 按钮注入**，**`ROBOT1.0_…` = 真实 QQ 消息**。真失败时兜底 = 手敲 `Set-Content <hooks>/.gate-bypass` 或直接 `POST /simulate-message?key=<simulateKey>` body `{"content":"确认#N"}`。
+- **登记工具自带送达核验**（`request-confirm.js`，2026-10-07 加）：登记后回读 `service.log` 新增行 —— `[ASK #id] HTTP …` = 已发出；`[ASK ERR] …`（**服务侧不带编号**，故按"登记后新增行"界定）= 发送失败。输出 `REGISTERED / DELIVERY ok|FAILED|UNKNOWN`，**退出码 0=已送达、3=未确认送达** ⇒ 失败不再静默等超时。`--no-verify` 可跳过；`--kind` 可覆盖自动判定。
+- **失败模式与处置**：① **服务未运行** ⇒ `request-confirm.js` 直接 `exit 2`（"连接 daemon 失败"）且**不登记任何编号**，需先 `start-service.ps1`；② **服务在跑但 QQ 发不出** ⇒ 项已登记（退出码 3），用 hub 页面确认或让用户手动开闸；③ 已登记但无人应答 ⇒ `ask.js` 默认 30 分钟、直接 `/request` 用 `requestTimeoutMs`（默认 10 分钟）后自动置 `expired`。IDE 内**没有**自动确认兜底（IDE 不向本机进程暴露点击事件）。
+
 ## 方案 B：QQ 确认 → headless 接管（2026-09-17）
 
 适用：**会话已经停在输入框等确认**，而你在工位外想让它继续 —— 用一个 CLI 非交互会话把剩余任务接着跑完（原会话上下文不继承，靠 handoff 文件传递）。
@@ -739,12 +756,12 @@ QQ 待确认消息（`sleep`/`shutdown` 除外）尾部自动附「📄 拍板�
 
 **配置单源**：域名+key 唯一源 = `tools/session-hub/hub.config.json → doc.publicUrl / doc.key`；每次登记现读不缓存，换 key 免重启。`daemon.config.json → docLink {baseUrl, key}` 仅为非标准部署的显式覆盖段（一般不配）；两者都缺 = 不附链接（fail-open，未部署 session-hub 的项目自动跳过）。
 
-**登记精确页**（缺省附列表页，首屏 ★当前迭代）：
+**登记精确页**（缺省自动推断「当前阶段文档」；两者都无 ⇒ **整段不附链接** —— 见下方「方式2c」）：
 ```powershell
 node tools\qqbot\ask.js --prompt "03 技术方案是否通过？" --options "A=通过;B=驳回" `
   --docPath "2026-xx-xx-001/03-技术方案/03-技术方案.md"
 ```
-`--docPath` 相对 `docs/iterations/`（也可写 `--doc-path`）；服务端登记时校验：统一正斜杠、拒 `..`/绝对路径/`\0`、后缀 .md/.txt、文件须存在，非法自动置空回退列表页。
+`--docPath` 相对 `docs/iterations/`（也可写 `--doc-path`）；服务端登记时校验：统一正斜杠、拒 `..`/绝对路径/`\0`、后缀 .md/.txt、文件须存在。**非法或未传 ⇒ 自动降级为「当前阶段文档」**（2026-10-07 修 R2，见「方式2c」）；阶段文档也落空 ⇒ **整段不附**（2026-10-07 修 R3：立项期等无依据文档场景不带链接）。
 
 **消息尾部样例**：
 ```
@@ -752,6 +769,38 @@ node tools\qqbot\ask.js --prompt "03 技术方案是否通过？" --options "A=�
 📄 拍板依据：https://hub.haohaowaner.cn/doc?path=2026-xx-xx-001%2F03-%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md&key=…
 （QQ 内若打不开 → 复制链接到系统浏览器打开）
 ```
+
+### 方式2b：静置邀请自动附「当前阶段文档」（2026-10-07）
+
+**缺口**：方式2 只覆盖 `ask.js --docPath` 显式登记；watcher 自动登记的 idle 静置邀请从不传 docPath ⇒ 恒回退列表页（实测 #14 邀请只给 `/doc/list`），而静置恰是最需要在工位外看阶段产物的场景。
+
+**根因**：`state.yaml current_phase` 是纯数字（`"06"`），文档目录名带中文（`06-回顾归档`）⇒ 无静态映射，当时留 fail-open 回退列表页。
+
+**修复**（`qqbot-service.js`）：
+- `pickPhaseDoc(iterDirAbs, phase)`：扫 `docs/iterations/<迭代ID>/<NN>-*/` 取 mtime 最新 `.md/.txt`（可注入目录 ⇒ 离线自测）；
+- `buildPhaseDocPath()`：ACTIVE 迭代 ID + `current_phase` 组装相对路径；
+- idle 登记处补传 `docPath: buildPhaseDocPath()`。
+
+兜底链不变：推断落空 ⇒ `''` → `normalizeDocPath()` 再校验（含文件存在性）→ 渲染回退列表页。**边界**：阶段无文档目录（如 06 回顾归档）时仍回退列表页 = 预期行为。
+
+**验收**：离线自测 21/21（pickPhaseDoc 单元 8 + 实态冒烟 2 + docPath 校验/链接 6 + 渲染层 5）+ 服务重启 `/health ok`。
+
+### 方式2c：全登记口统一兜底 + 列表页标注修复 + 无依据文档不附链接 + 正文完整渲染（2026-10-07 修 R1~R4）
+
+**触发**：用户实测 #3（新迭代立项拍板）——消息附列表页链接，但打开显示「（当前无活跃迭代）」、无 ★当前，与文案「（列表页·★当前迭代）」矛盾。查证三层：① 该条为 `ask.js` 手登记（decision 类），原先只有 idle 静置邀请走 `buildPhaseDocPath` 自动推断 ⇒ 恒列表页；② 发送时迭代刚立项（01 起步），`docs/iterations/<ID>/` 目录尚未创建 ⇒ 即便有兜底也落空；③ 真缺陷在 hub 侧：`readActiveIteration()` 要求目录存在才认活跃迭代 ⇒ 列表页退化为「（当前无活跃迭代）」。
+
+**修复**：
+- 修 R2（`qqbot-service.js`）：新增 `resolveDocPath(explicit, phaseDocFn)` —— 显式指定 → 阶段文档（惰性求值，仅缺省时调用）→ `''`（列表页），出口统一过 `normalizeDocPath`，异常 fail-open；`registerRequest` 全部登记来源（ask.js/notify/门禁/watcher）统一走它，不再只有 idle 有兜底。
+- 修 R1（`tools/session-hub/server.js`）：`readActiveIteration()` 去掉「目录必须存在」门（口径对齐 qqbot 侧 `readActiveIterationId`：只读 ACTIVE 首行、显式判 `none`、剥 BOM）；`docListHtml()` 目录未建时顶部标「当前迭代：<ID>（尚无文档）」+ 列表首行补「★当前（尚无文档）」占位 ⇒ 任何阶段文案「（列表页·★当前迭代）」都兑现。
+
+**验收**：R1 = hub 重启后 HTTP 级 **11/11**（正向 4：顶部标注/不误标「尚无文档」/列表 ★当前；回归 2：精确页 200 / 缺 key 403；负向 5：目录未建 ⇒「（尚无文档）」+ 占位行、ACTIVE=none ⇒「（当前无活跃迭代）」、ACTIVE 字节级恢复）；R2 = 离线自测 **13/13**（`resolveDocPath` 7 用例：显式优先+惰性/缺省降级/非法降级/非函数/抛异常 fail-open/undefined + 2b 既有链回归 6）+ 实态链路 PASS（缺省登记在真实 ACTIVE 下 ⇒ `2026-10-07-001-打印模板配置页/01-需求分析与设计/01-需求记录.md` 精确页，含 key 可外网直开）；两服务重启后 `/health ok`。
+
+**边界**：立项拍板早于 01 产出文档 ⇒ **R3 起不再附链接**（原列表页兜底已废）；如需让立项类拍板直指需求池/计划文档，须扩 hub 白名单（当前只读 `docs/iterations/`，属安全面扩大，未做）。
+
+**★ R3/R4 追加（2026-10-07 20:0x，用户实测 #2「立项期不该带链接 + 范围详情要在对话里」）**：
+- 修 R3（`renderRequestText` 链接门）：由「非 sleep/shutdown 就附」改为「**仅 `docPath` 非空才附**」⇒ 无依据文档整段不附；列表页兜底废除（此时列表页无当前迭代内容可看，且「（列表页·★当前迭代）」承诺与实况不符）。R1 的「（尚无文档）」占位对其它入口仍有效。
+- 修 R4（正文完整渲染）：新增 `clipPrompt()`（上限 900 字符、超限必留「…」，对齐 FIX-39 痕迹原则）；decision 类正文由 `firstLine`（首行硬切 120 且无痕迹 —— 实测 258 字符立项范围只显示到「…+组级」）改为**完整多行渲染**（首行进 ❓ 行、其余行缩进），普通提问分支同护栏。
+- 验收：离线自测 **16/16**（clipPrompt 4 + 链接门 7 + 正文渲染 5）+ 实态渲染演示（#2 真实 258 字符 prompt 完整显示至「详情见IDE。」、无任何链接行）。
 
 ## IDE 自动推送兜底：会话历史 Watcher（已被合并服务取代，保留说明供参考）
 
