@@ -2699,7 +2699,8 @@ function sendOnlineNotice(prev) {
   L.push('迭代：' + (it ? (it.id + '（阶段 ' + (it.phase || '?') + ' · ' + (it.status || '?') + '）') : '（无活跃迭代）'));
   L.push('待确认：' + [...pending.values()].filter((p) => p.status === 'pending').length + ' 条');
   const ni = CMDCFG().newIteration || {};
-  L.push('口令：关机 ' + (sc.enabled ? 'ON' : 'OFF') + ' · 待机 ' + (sl.enabled ? 'ON' : 'OFF') + ' · 开新迭代 ' + (ni.enabled ? 'ON' : 'OFF'));
+  // ★ 2026-10-08 用户实测反馈：`开新迭代 ON` 曾被误当口令原文输入 ⇒ 改中文「已启用/未启用」，减少误读
+  L.push('口令：关机 ' + (sc.enabled ? '已启用' : '未启用') + ' · 待机 ' + (sl.enabled ? '已启用' : '未启用') + ' · 开新迭代 ' + (ni.enabled ? '已启用' : '未启用'));
   if (prev && prev.stoppedAt) L.push('上次退出：优雅停止（' + fmtTsMs(prev.stoppedAt) + (prev.reason ? ' · ' + prev.reason : '') + '）');
   else if (prev && prev.ts) L.push('⚠️ 上次退出：异常（心跳停在 ' + fmtTsMs(prev.ts) + '，无下线记录）');
   else L.push('上次退出：无记录');
@@ -2980,29 +2981,43 @@ function doWakeRequest(content, arg) {
   }
   registerSleepRequest(content, at, '定时唤醒（到点自动恢复，无需登录）');
 }
-/** ★ TOOL-QQNEWITER：口令参数校验（纯函数，供 --newiter-parse 离线自测）—— 只接受 `#?<1~3 位数字>` */
+/** ★ TOOL-QQNEWITER：口令参数校验（纯函数，供 --newiter-parse 离线自测）
+ *   - `#?<1~3 位数字>` ⇒ { ok:true, num:'N', auto:false }（精确模式）
+ *   - **空参数** ⇒ { ok:true, num:'', auto:true }（★ 免参数模式：不知道编号时由接管会话列出候选供选择）
+ *   - 其它 ⇒ { ok:false, reason } */
 function normalizeNewIterationArg(arg) {
   const raw = String(arg || '').trim();
+  if (!raw) return { ok: true, num: '', auto: true, reason: '' };
   const m = raw.match(/^#?\s*(\d{1,3})\s*$/);
-  if (!m) return { ok: false, num: '', reason: raw ? ('无法识别「' + raw.slice(0, 20) + '」') : '参数为空' };
+  if (!m) return { ok: false, num: '', auto: false, reason: '无法识别「' + raw.slice(0, 20) + '」' };
   const n = parseInt(m[1], 10);
-  if (!(n >= 1 && n <= 999)) return { ok: false, num: '', reason: '编号越界（1~999）' };
-  return { ok: true, num: String(n), reason: '' };
+  if (!(n >= 1 && n <= 999)) return { ok: false, num: '', auto: false, reason: '编号越界（1~999）' };
+  return { ok: true, num: String(n), auto: false, reason: '' };
 }
 /**
  * ★ TOOL-QQNEWITER（2026-10-08）：新迭代接管指令模板（handoffPrompt 内置默认；配置 commands.newIteration.handoffPrompt 可覆盖）。
  *   只做一件事：把"启动新迭代 #N"讲清楚（闸门 → 创建 → 01 阶段 → 收尾）。服务不解析队列（零新 SSOT）。
  */
-function buildNewIterationHandoffPrompt(num) {
+function buildNewIterationHandoffPrompt(num, auto) {
+  const isAuto = !!auto || !num;
   return [
     '【启动新迭代 · 用户 QQ 口令】',
-    '用户目标：迭代登记表 #' + num,
+    isAuto
+      ? '用户目标：**未指定编号**（免参数口令）—— 先列出候选供用户选号，选定并复核后再创建。'
+      : ('用户目标：迭代登记表 #' + num),
     '身份：你 = QQ 确认派发的 CLI 接管会话（模式 B）。按 iteration-workflow skill 执行，从 01 阶段开工。',
     '',
     '⚠️ 闸门（必须最先做；任一不符 ⇒ 停止 + `node tools/qqbot/notify.qqbot.js --kind fail --what "开新迭代中止：<原因>"` 报告，不得自行改口径/换目标）：',
     '1) 读 .codebuddy/skills/iteration-workflow/runtime/ACTIVE ⇒ 必须为 none/不存在（口令侧已校验，此处二次确认）。',
-    '2) 读 项目管理/04-一期迭代计划与排期（汇报版）.md §3.3 迭代登记表，定位 #' + num + ' 的主题与范围；编号不存在/已被占用/行序冲突 ⇒ 停止报告。',
-    '3) **闸 1.5**：先用 ask.js 向用户复述定位结果（编号/主题/拟用迭代 ID 草案）并等一次 QQ 确认（分片轮询见第 10 条），对不上即停止；确认通过后才可创建。',
+    isAuto
+      ? '2) **列候选**：读 项目管理/04-一期迭代计划与排期（汇报版）.md §3.3 迭代登记表（按行序）+ docs/iterations/ 现有迭代目录 + runtime/*.state*.yaml（含 archived）现状，列出**接下来 3~5 个可开迭代**（跳过已有迭代目录的、已废弃的【如 #20】；注意 #64 的登记口径 =「#22 收口后 / #23 前」）。每项给：登记表编号 + 主题 + 一行范围。'
+      : ('2) 读 项目管理/04-一期迭代计划与排期（汇报版）.md §3.3 迭代登记表，定位 #' + num + ' 的主题与范围；编号不存在/已被占用/行序冲突 ⇒ 停止报告。'),
+    isAuto
+      ? '2.5) 用 ask.js 把候选项发给用户选择（`--prompt "接下来开哪个迭代？" --options "A=#{编号} {主题};B=…;C=…;D=其它/暂停" --recommend A --timeoutSec 1800`；★ 选项键须 A~Z，数字键会被静默丢弃）+ 分片轮询（见第 10 条）；用户选「其它/暂停」或超时 ⇒ 停止并 notify（**不创建任何迭代**）。'
+      : '',
+    isAuto
+      ? '3) **闸 1.5**：用户选定后，用 ask.js 复述定位结果（编号/主题/拟用迭代 ID 草案）再等一次 QQ 确认；对不上即停止；确认通过后才可创建。'
+      : '3) **闸 1.5**：先用 ask.js 向用户复述定位结果（编号/主题/拟用迭代 ID 草案）并等一次 QQ 确认（分片轮询见第 10 条），对不上即停止；确认通过后才可创建。',
     '4) 读 SKILL.md 启动协议 Step A→D（运行时变量表 → 复杂度评估）与 engine/complexity-scoring.md。',
     '',
     '创建迭代（按 engine/state-protocol.md §二「新建迭代（01 阶段启动）」）：',
@@ -3046,11 +3061,13 @@ function doNewIterationRequest(content, arg) {
   const pa = normalizeNewIterationArg(arg);
   if (!pa.ok) {
     logInbox({ result: 'newiter-bad-arg', text: String(arg || '').slice(0, 40) });
-    send('⚠️ 口令格式：`开新迭代 #编号`（如 `开新迭代 #23`；编号 = 项目管理/04 迭代登记表 §3.3 的编号）。'
-      + '本次未登记（' + pa.reason + '）。').catch(() => {});
+    send('⚠️ 口令格式：`开新迭代 #编号`（如 `开新迭代 #23`；编号 = 项目管理/04 迭代登记表 §3.3）。'
+      + '\n💡 不知道编号？直接回 `开新迭代`（不带编号）—— 会列出接下来可开的几项供你选。'
+      + '\n本次未登记（' + pa.reason + '）。').catch(() => {});
     return;
   }
   const num = pa.num;
+  const isAuto = !!pa.auto;   // ★ 免参数模式（不知道编号）：由接管会话列候选 → 用户选号 → 复核 → 创建
   // 前置闸：ACTIVE 必须为 none（严格口径 —— 即使已 completed 但未释放 ACTIVE 也拒，避免两迭代混写）
   const active = readActiveIterationId();
   if (active && active !== 'none') {
@@ -3063,22 +3080,24 @@ function doNewIterationRequest(content, arg) {
   const dup = [...pending.values()].filter((p) => p.status === 'pending' && p.kind === 'new-iteration')[0];
   if (dup) {
     const t = (String(dup.prompt || '').match(/#\d+/) || [''])[0];
-    send('ℹ️ 已有待确认的开新迭代项 #' + dup.id + (t ? '（目标 ' + t + '）' : '') + '。'
+    send('ℹ️ 已有待确认的开新迭代项 #' + dup.id + (t ? '（目标 ' + t + '）' : '（免参数·列候选）') + '。'
       + '回「确认#' + dup.id + '」执行，或「取消#' + dup.id + '」作废；如需换目标请先取消再重发。').catch(() => {});
     logInbox({ taskId: dup.id, result: 'newiter-dup' });
     return;
   }
   const win = Math.max(60, Math.min(7200, Math.round(Number(nc.confirmWindowSec) || 1800)));
-  const hp = String(nc.handoffPrompt || '').trim() || buildNewIterationHandoffPrompt(num);
+  const hp = String(nc.handoffPrompt || '').trim() || buildNewIterationHandoffPrompt(num, isAuto);
   const brief = String(nc.handoffBrief || '').trim()
-    || ('启动新迭代 #' + num + '：CLI 会话按 iteration-workflow 从 01 阶段开工（创建迭代目录/state/ACTIVE；01 交付后停下报告）');
+    || (isAuto
+      ? '开新迭代（未指定编号）：接管会话读 04 登记表 + 现有迭代现状，列出接下来 3~5 个可开项供你 QQ 选号；选定并复核后再创建迭代'
+      : ('启动新迭代 #' + num + '：CLI 会话按 iteration-workflow 从 01 阶段开工（创建迭代目录/state/ACTIVE；01 交付后停下报告）'));
   const id = registerRequest(
-    '【开新迭代】目标：登记表 #' + num + '（' + ts() + '）\n'
+    '【开新迭代】' + (isAuto ? '目标：待选（免参数 —— 先列候选再选号）' : ('目标：登记表 #' + num)) + '（' + ts() + '）\n'
       + '⚠️ 确认后将创建新迭代（目录/state/ACTIVE）并启动 CLI 会话执行 01 阶段；不可自动撤销（如需中止请在 01 内取消）。',
     '', 0, win * 1000, 'new-iteration',
     { handoff: true, handoffPrompt: hp, handoffBrief: brief, session: '', iterId: '' });
-  log('[NEWITER #' + id + '] 登记：目标 #' + num + ' · 窗口 ' + win + 's');
-  logInbox({ taskId: id, result: 'newiter-requested', target: num });
+  log('[NEWITER #' + id + '] 登记：' + (isAuto ? '免参数（先列候选）' : ('目标 #' + num)) + ' · 窗口 ' + win + 's');
+  logInbox({ taskId: id, result: 'newiter-requested', target: isAuto ? 'auto' : num });
 }
 function handleMessage(m) {
   const d = m.d || {};
@@ -3282,7 +3301,7 @@ if (args.newiterParse !== undefined && args.newiterParse !== false) {
   const pr = normalizeNewIterationArg(args.newiterParse);
   process.stdout.write(JSON.stringify({
     input: args.newiterParse,
-    ok: pr.ok, num: pr.num, reason: pr.reason,
+    ok: pr.ok, num: pr.num, auto: !!pr.auto, reason: pr.reason,
     enabled: !!((CMDCFG().newIteration || {}).enabled),
     keywords: ((CMDCFG().newIteration || {}).keywords) || [],
     promptHead: pr.ok ? buildNewIterationHandoffPrompt(pr.num).split('\n').slice(0, 3) : null,
