@@ -414,6 +414,17 @@ function summaryLine(s) {
   const t = String(s || '').split(/\r?\n/)[0];
   return t.length > MERGE_LINE_MAX ? t.slice(0, MERGE_LINE_MAX - 3) + '…' : t;
 }
+/**
+ * ★ 修 R4（2026-10-07）：待确认消息正文长度护栏（decision/ask 类）。
+ *   缺口（用户实测 #2 立项拍板，19:36）：decision 正文走 firstLine = 首行 + **硬切 120 字符且无痕迹**，
+ *   258 字符的立项范围只显示到「…+组级」即断 ⇒ 用户无法据消息拍板（范围详情丢失）。
+ *   口径：完整渲染（多行保留）；总长超 PROMPT_RENDER_MAX 才截，且必留「…」（对齐 FIX-39 痕迹原则）。
+ */
+const PROMPT_RENDER_MAX = 900;
+function clipPrompt(prompt) {
+  const s = String(prompt || '');
+  return s.length > PROMPT_RENDER_MAX ? s.slice(0, PROMPT_RENDER_MAX - 1) + '…' : s;
+}
 /** ★ FIX-39：汇总文本渲染（纯函数，供离线自测复用）—— n=1 直发原文；n≥2 才摘要 */
 function renderMergeText(items) {
   if (!items || !items.length) return '';
@@ -491,6 +502,14 @@ const WATCH = {
   //   静置不该被当成「人离开了」⇒ 不登记接管邀请（否则用户误确认会起 headless 与原会话撞车）。
   //   默认 true；watcher.skipIdleWhenOpenAsk=false 可关闭。
   skipIdleWhenOpenAsk: !(cfg.watcher && cfg.watcher.skipIdleWhenOpenAsk === false),
+  // ★ FIX-40（2026-10-08）：第 ⑤ 闸 —— 无活跃迭代（ACTIVE=none/缺文件）⇒ 接管没有对象，不登记。
+  //   依据（实证 2026-10-08 #4）：ACTIVE=none 时仍发出「按当前迭代 runtime state 推进」接管邀请；
+  //   接管会话（handoffPrompt）第一步读 ACTIVE 得 none 即空转 ⇒ 登记只会产出「确认了也没事干」的误导项，
+  //   且 handoffBrief 为静态文案、无法反映「无迭代」实况。
+  //   默认 true；watcher.skipIdleWhenNoActive=false 可关闭。判据 readActiveIterationId() 仅读 ACTIVE 首行（102B 级）。
+  //   失效形态（静默性）：若 ACTIVE 未来改为多迭代语义，本闸判据须同步；表现 = 有迭代但邀请被跳过，
+  //   日志锚点「IDLE SKIP: 无活跃迭代」可定位，配置开关可临时摘除本闸。
+  skipIdleWhenNoActive: !(cfg.watcher && cfg.watcher.skipIdleWhenNoActive === false),
   lastIdleInviteAt: 0,
   taskQuiet: { at: 0, ms: -1 },
   taskGateSkips: 0,
@@ -1031,6 +1050,13 @@ function watchLoop() {
             continue;
           }
         }
+        // ★ FIX-40（2026-10-08）：第 ⑤ 闸 —— 无活跃迭代（ACTIVE=none/缺文件）⇒ 不登记接管邀请。
+        //   接管会话第一步读 ACTIVE 得 none 即无迭代可推进，登记=空转邀请（实证 2026-10-08 #4）。
+        //   与第④闸不同源：迭代是工作区全局态，不按会话过滤（同工作区所有会话一致跳过）。
+        if (WATCH.skipIdleWhenNoActive && !readActiveIterationId()) {
+          log('IDLE SKIP: 无活跃迭代（ACTIVE=none）⇒ 不登记 session=' + path.basename(sess).slice(0, 8));
+          continue;
+        }
         // ★ FIX-17：默认「登记可回复项」——你回「确认#N」即可驱动（autoHandoff=true 时由 CLI 新会话接管继续）；
         //          原为每静置周期直发一条不可回复的通知（回复落入黑洞）。
         // ★ QQ-WAKE-1（2026-09-30）：静置角标数据 —— 未决项 id（全局去重；本会话被第④闸跳过时不触达此行，闸门判定不动）
@@ -1040,7 +1066,8 @@ function watchLoop() {
         if (WATCH.autoQueue && !idlePending) {
           const id = registerRequest(buildIdlePrompt(idleSec, sess, idleOpenIds), '', 0, 0, 'idle',
             { handoff: WATCH.autoHandoff, handoffPrompt: WATCH.handoffPrompt, handoffBrief: WATCH.handoffBrief,
-              session: sess, nextHint: buildNextHint() });   // ★ FIX-30：接续入口（如实事实，取代静默省略）
+              session: sess, nextHint: buildNextHint(),
+              docPath: buildPhaseDocPath() });   // ★ 方式2b（2026-10-07）：静置邀请自动附「当前阶段文档」链接（落空 ⇒ '' 回退列表页）
           if (id) WATCH.lastIdleInviteAt = Date.now();   // ★ FIX-36：全局最小间隔基准（id=0 ⇒ 被静默闸拦下，不占基准）
           log('PUSH(QUEUE): idle ' + idleSec + 's → #' + id + (WATCH.autoHandoff ? ' [handoff]' : '')
             + ' session=' + path.basename(sess).slice(0, 8));
@@ -1173,6 +1200,55 @@ function buildDocLink(docPath) {
   return base + '/doc/list' + (c.key ? '?key=' + encodeURIComponent(c.key) : '');
 }
 /**
+ * ★ 方式2b（2026-10-07）：静置邀请自动推断「当前阶段文档」。
+ *   缺口：方式2 只覆盖 ask.js --docPath 显式登记；watcher 自动登记的 idle 邀请无 docPath ⇒ 恒回退列表页，
+ *   而静置场景恰是最需要在工位外看阶段产物的时刻。
+ *   难点：state.yaml 的 current_phase 是纯数字（"06"），文档目录名是「06-回顾归档」带中文 ⇒ 无静态映射，须扫描。
+ *   策略：<迭代目录>/ 下取 <NN>-* 前缀子目录，取其中 mtime 最新的 .md/.txt（多候选取最新）。
+ *   内核 pickPhaseDoc 可注入迭代目录 ⇒ 离线自测不依赖真实 runtime。
+ *   兜底链：任一环节落空 ⇒ '' → registerRequest 端 normalizeDocPath 再校验（含文件存在性）→ 渲染端回退列表页。 */
+function pickPhaseDoc(iterDirAbs, phase) {
+  const m = String(phase || '').match(/^(\d{1,2})/);
+  if (!m || !iterDirAbs) return '';
+  const prefix = ('0' + m[1]).slice(-2) + '-';
+  let dirs = [];
+  try { dirs = fs.readdirSync(iterDirAbs, { withFileTypes: true }); } catch (e) { return ''; }
+  let best = '', bt = 0;
+  for (const d of dirs) {
+    if (!d.isDirectory() || d.name.indexOf(prefix) !== 0) continue;
+    let files = [];
+    try { files = fs.readdirSync(path.join(iterDirAbs, d.name), { withFileTypes: true }); } catch (e) { continue; }
+    for (const f of files) {
+      if (!f.isFile() || !/\.(md|txt)$/i.test(f.name)) continue;
+      let t = 0;
+      try { t = fs.statSync(path.join(iterDirAbs, d.name, f.name)).mtimeMs; } catch (e) { continue; }
+      if (t > bt) { bt = t; best = d.name + '/' + f.name; }
+    }
+  }
+  return best;
+}
+/** 方式2b 组装：ACTIVE 迭代 ID + current_phase → 相对 docs/iterations 的阶段文档路径（正斜杠）；落空 ⇒ '' */
+function buildPhaseDocPath() {
+  try {
+    const it = readIterationContext();
+    if (!it || !it.id || !it.phase) return '';
+    const rel = pickPhaseDoc(path.join(DOC_DIR, it.id), it.phase);
+    return rel ? (it.id + '/' + rel) : '';
+  } catch (e) { return ''; }
+}
+/**
+ * ★ 修 R2（2026-10-07）：登记入口统一的 docPath 解析链 —— 显式指定 → 阶段文档（惰性求值）→ ''（列表页）。
+ *   缺口（实测 2026-10-07 #3 立项拍板）：buildPhaseDocPath 原先只在 idle 静置邀请登记处调用，
+ *   ask.js 手登记（decision/ask 类）漏传 --docPath ⇒ 恒回退列表页，而立项期列表页可能标不出当前迭代（见 server.js 修 R1）。
+ *   语义：显式值先过 normalizeDocPath（非法/不存在 ⇒ 视同缺省）；phaseDocFn 仅在缺省时调用（零冗余 IO）；
+ *   出口再过一次 normalizeDocPath 统一校验；任何异常 fail-open 到 ''。可注入 phaseDocFn ⇒ 离线自测零文件依赖。
+ */
+function resolveDocPath(explicit, phaseDocFn) {
+  const p = normalizeDocPath(explicit);
+  if (p) return p;
+  try { return normalizeDocPath(typeof phaseDocFn === 'function' ? phaseDocFn() : ''); } catch (e) { return ''; }
+}
+/**
  * ★ FIX-30/31：渲染待确认消息（取代原内联拼接的二元文案）。
  * rec = { id, kind, prompt, command, brief, handoff, options, recommend, nextHint, timeoutMs }
  */
@@ -1186,7 +1262,9 @@ function renderRequestText(rec) {
   L.push(MSG_SEP);
   const ideKey = opts.length ? ideOptionKey(opts) : null;   // ★ 回IDE固定选项键（与 doChoice 同源）
   if (opts.length) {                                    // ① 选择题（FIX-31）
-    L.push('❓ ' + (firstLine(rec.prompt) || '请选择：'));
+    const qLines = clipPrompt(rec.prompt).split(/\r?\n/);   // ★ 修 R4：完整渲染（原 firstLine 硬切 120 且无痕迹）
+    L.push('❓ ' + (qLines[0] || '请选择：'));
+    for (const ln of qLines.slice(1)) L.push('   ' + ln);
     for (const o of opts) {
       const tag = (rec.recommend && o.key === String(rec.recommend).toUpperCase()) ? '（推荐）' : '';
       L.push(' ' + choiceMark(o.key) + ' ' + o.key + ' → ' + (o.label || '') + tag);
@@ -1213,8 +1291,8 @@ function renderRequestText(rec) {
     L.push('❓ 需要你决定：是否执行下述命令？');
     L.push('⚠️ 将执行：' + rec.command);
     if (rec.prompt) L.push('📎 事项：' + firstLine(rec.prompt));
-  } else {                                              // ④ 普通提问（原样多行）
-    for (const ln of String(rec.prompt || '').split(/\r?\n/)) L.push(ln);
+  } else {                                              // ④ 普通提问（原样多行；★ 修 R4 统一长度护栏）
+    for (const ln of clipPrompt(rec.prompt).split(/\r?\n/)) L.push(ln);
     if (rec.handoff && rec.brief) L.push('📋 确认后将执行：' + rec.brief);
   }
   const R = [];
@@ -1256,11 +1334,14 @@ function renderRequestText(rec) {
   for (const r of R) L.push(r);
   const t = timeoutLabel(rec.timeoutMs);
   if (t) L.push('⏳ ' + t + '内有效，超时自动取消');
-  // ★ 方式2（2026-10-06）：尾部附阶段文档链接（hub 只读视图）；sleep/shutdown 为本机操作与迭代文档无关，不附
-  if (rec.kind !== 'sleep' && rec.kind !== 'shutdown') {
+  // ★ 方式2 + 修 R3（2026-10-07 用户口径）：仅当有精确页（docPath 非空）才附链接；
+  //   无依据文档（立项期/阶段无产出）⇒ 整段省略 —— 原列表页兜底已废（此时列表页无当前迭代内容可看，
+  //   且「（列表页·★当前迭代）」承诺与实况不符，用户实测 #2 明确要求不带）。
+  //   sleep/shutdown 为本机操作与迭代文档无关，同样不附。
+  if (rec.kind !== 'sleep' && rec.kind !== 'shutdown' && rec.docPath) {
     const docUrl = buildDocLink(rec.docPath);
     if (docUrl) {
-      L.push('📄 拍板依据：' + docUrl + (rec.docPath ? '' : '（列表页·★当前迭代）'));
+      L.push('📄 拍板依据：' + docUrl);
       L.push('（QQ 内若打不开 → 复制链接到系统浏览器打开）');
     }
   }
@@ -1317,7 +1398,7 @@ function registerRequest(prompt, command, id, timeoutMs, kind, opts) {
     timeoutMs: t,                                              // ★ FIX-30：供渲染「有效期」
     delaySec: Number(o.delaySec || 0),                         // ★ FIX-37：关机类倒计时（消息预告 + 执行回执用）
     wakeAtMs: Number(o.wakeAtMs || 0),                         // ★ FIX-38：待机类「计划唤醒」时刻（ms）
-    docPath: normalizeDocPath(o.docPath),                      // ★ 方式2：拍板依据文档（相对 docs/iterations；非法自动置空回退列表页）
+    docPath: resolveDocPath(o.docPath, buildPhaseDocPath),     // ★ 方式2 + 修 R2：显式 → 阶段文档（惰性）→ ''（渲染端回退列表页）
     originPrompt: '',                                          // ★ FIX-31：接管时保留原题面（doFreeReply/doChoice 填充）
     replyLabel: '',                                            // ★ FIX-31：接管文件里的「你的回复」（取代硬编码）
     createdAt: Date.now(), status: 'pending', timer: null };
@@ -2219,6 +2300,7 @@ function startHttp() {
             idleMinGapSec: WATCH.idleMinGapMs / 1000, idleCooldownSec: WATCH.idleCooldownMs / 1000,
             taskGate: WATCH.taskGate, taskGateRecheckSec: WATCH.taskGateRecheckMs / 1000,
             skipIdleWhenOpenAsk: WATCH.skipIdleWhenOpenAsk,          // ★ RESUME-1：模式 D 等待期豁免（有未决拍板项则不登记静置邀请）
+            skipIdleWhenNoActive: WATCH.skipIdleWhenNoActive,        // ★ FIX-40：无活跃迭代豁免（ACTIVE=none ⇒ 不登记静置接管邀请）
             taskGateSkips: WATCH.taskGateSkips,
             taskQuietSec: (WATCH.taskQuiet.ms >= 0 ? Math.round(WATCH.taskQuiet.ms / 1000) : -1),
             idleInviteLastAt: WATCH.lastIdleInviteAt ? Math.round((Date.now() - WATCH.lastIdleInviteAt) / 1000) : 0,
@@ -3042,6 +3124,10 @@ module.exports = {
   parseSnooze: parseSnooze,                   // ★ FIX-36（供离线自测：snooze 语法）
   normalizeDocPath: normalizeDocPath,         // ★ 方式2（供离线自测：docPath 校验）
   buildDocLink: buildDocLink,                 // ★ 方式2（供离线自测：文档链接构建）
+  pickPhaseDoc: pickPhaseDoc,                 // ★ 方式2b（供离线自测：数字 phase → 阶段目录最新文档，可注入迭代目录）
+  buildPhaseDocPath: buildPhaseDocPath,       // ★ 方式2b（供离线自测：静置邀请阶段文档自动推断）
+  resolveDocPath: resolveDocPath,             // ★ 修 R2（供离线自测：显式 → 阶段文档 → 列表页 解析链）
+  clipPrompt: clipPrompt,                     // ★ 修 R4（供离线自测：正文长度护栏 + 截断痕迹）
   isSessionShape: isSessionShape,             // ★ FIX-36（供离线自测：指纹形态白名单）
   noteSettled: noteSettled,                   // ★ FIX-36（供离线自测：结算冷却）
   serveStatus: serveStatus,                   // ★ FIX-34（供离线自测：无实例时返回 null，不抛错）
@@ -3090,6 +3176,7 @@ if (require.main === module && !args.wakeTest && !args.wakeQuery && !args.wakeDe
     log('FIX-36 params: taskGate=' + WATCH.taskGate + ' minGap=' + (WATCH.idleMinGapMs / 1000) + 's cooldown='
       + (WATCH.idleCooldownMs / 1000) + 's taskGateRecheck=' + (WATCH.taskGateRecheckMs / 1000) + 's snoozeFile=' + snoozeFilePath());
     log('RESUME-1 params: skipIdleWhenOpenAsk=' + WATCH.skipIdleWhenOpenAsk);   // ★ 模式 D 等待期豁免（有未决拍板项则不登记静置邀请）
+    log('FIX-40 params: skipIdleWhenNoActive=' + WATCH.skipIdleWhenNoActive);   // ★ 第⑤闸：无活跃迭代（ACTIVE=none）不登记静置接管邀请
     loadSnooze();
     if (SNOOZE.until > Date.now()) log('[SNOOZE] 生效中 scope=' + SNOOZE.scope + ' 至 ' + snoozeLabel(SNOOZE.until));
     watchLoop();

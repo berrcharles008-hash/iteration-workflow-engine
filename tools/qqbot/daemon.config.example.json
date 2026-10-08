@@ -48,6 +48,7 @@
     "handoffGuardSec": 120,
     "autoSupersede": false,
     "handoffGuardMode": "write-tool",
+    "skipIdleWhenNoActive": true,
     "snoozeFile": ".codebuddy/temp/qqbot-snooze.json",
     "snoozeDefaultSec": 3600,
     "snoozeMaxSec": 86400,
