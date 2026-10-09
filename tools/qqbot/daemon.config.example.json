@@ -6,7 +6,11 @@
     "hub": "hub 段为 session-hub 集成（可选）：无 hub 时 /status 降级提示页，simulateKey 保持空=注入端点关闭",
     "wake": "wake.taskName 为 Windows 计划任务名，服务会自建自删，各项目可自定义，勿与其他项目重名",
     "secrets": "openId/httpKey/simulateKey 留空为安全默认；真实凭据放 qqbot.creds.json（gitignore），simulateKey 如启用请仅存于本地实例配置",
-    "newIteration": "commands.newIteration 为 QQ 口令「开新迭代 #N」（opt-in，默认 false）：仅在无活跃迭代（ACTIVE=none）时可用；口令只登记，回「确认#N」后由 CLI 接管会话创建迭代（目录/state/ACTIVE）并从 01 阶段开工。handoffBrief/handoffPrompt 留空 = 用服务内置模板（一般无需配置）"
+    "newIteration": "commands.newIteration 为 QQ 口令「开新迭代 #N」（opt-in，默认 false）：仅在无活跃迭代（ACTIVE=none）时可用；口令只登记，回「确认#N」后由 CLI 接管会话创建迭代（目录/state/ACTIVE）并从 01 阶段开工。handoffBrief/handoffPrompt 留空 = 用服务内置模板（一般无需配置）",
+    "continueIteration": "commands.continueIteration 为 QQ 口令「继续迭代 [模型名]」（opt-in，默认 false）：与开新迭代互为镜像 —— 要求 ACTIVE **存在**（none 时回执引导「开新迭代」）；口令只登记，回「确认#N」后由 CLI 接管会话按接续入口继续推进**登记时快照的那个迭代**。模型名可选且**硬校验**（须命中 CLI --help 清单；CLI 对错模型名静默接受，故必须服务侧校验）。handoffPrompt 留空 = 复用 watcher.handoffPrompt（D-3=A）+ 自动注入目标迭代 ID 自检前缀",
+    "iterationDetail": "commands.iterationDetail 为**只读**口令「查看迭代」（默认 true）：回执含迭代 ID/阶段/卡点/全量待办/接管状态；不登记 #N、不受静默影响",
+    "modelList": "commands.modelList 为**只读**口令「模型列表」（默认 true）：清单单一来源 = CLI `--help`（cacheSec 为 TTL 秒）；解析失败回落 headless.fallbackModels，再不可用 ⇒ 明确拒绝（不静默报空）",
+    "fallbackModels": "headless.fallbackModels 为「继续迭代」模型校验的**兜底清单**（可选）：CLI --help 解析失败时用它，并在回执里标注「内置兜底清单」；留空 = 解析失败即拒绝登记并提示省略模型名"
   },
   "openId": "",
   "dryRun": false,
@@ -68,6 +72,7 @@
     "timeoutMs": 1800000,
     "replyChars": 600,
     "handoffDir": ".codebuddy/temp/handoff",
+    "fallbackModels": [],
     "serve": {
       "port": 19000,
       "idleTtlMs": 1800000,
@@ -134,6 +139,32 @@
       "confirmWindowSec": 1800,
       "handoffBrief": "",
       "handoffPrompt": ""
+    },
+    "continueIteration": {
+      "enabled": false,
+      "keywords": [
+        "继续迭代",
+        "推进迭代"
+      ],
+      "confirmWindowSec": 1800,
+      "handoffBrief": "",
+      "handoffPrompt": ""
+    },
+    "iterationDetail": {
+      "enabled": true,
+      "keywords": [
+        "查看迭代",
+        "迭代状态",
+        "当前迭代"
+      ]
+    },
+    "modelList": {
+      "enabled": true,
+      "keywords": [
+        "模型列表",
+        "模型清单"
+      ],
+      "cacheSec": 600
     }
   },
   "actions": {

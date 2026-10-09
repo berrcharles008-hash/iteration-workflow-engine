@@ -86,6 +86,9 @@ function parseArgs() {
     else if (k === '--wake-query') a.wakeQuery = true;            // ★ FIX-38：查询当前唤醒定时器
     else if (k === '--wake-del') a.wakeDel = true;                // ★ FIX-38：删除唤醒定时器
     else if (k === '--merge-test') a.mergeTest = true;            // ★ FIX-39：离线汇总渲染自测（n=1 直发 / n≥2 摘要 / 超长截断）
+    else if (k === '--help-render') a.helpRender = true;          // ★ /help：离线渲染指令清单（不发送；核对文案与长度）
+    else if (k === '--help-test') a.helpTest = true;              // ★ /help：探针自测（清单语法 ↔ 各解析器一致性 + 负向不误触）
+    else if (k === '--contparse') a.contparse = argv[++i];        // ★ TOOL-QQCONT：离线模型名校验自测（形态 + 清单）
   }
   return a;
 }
@@ -158,12 +161,36 @@ const DEFAULT_CFG = {
       handoffBrief: '',                                   // 空 = 用内置摘要（见 doNewIterationRequest）
       handoffPrompt: '',                                  // 空 = 用内置模板（buildNewIterationHandoffPrompt）
     },
+    // ★ TOOL-QQCONT（2026-10-09）：QQ 口令「继续迭代 [模型名]」—— 续推当前**活跃**迭代
+    //   （镜像「开新迭代」，前置闸取反：ACTIVE 必须存在；=none ⇒ 回执引导「开新迭代」）。
+    //   安全骨架：① opt-in 默认关；② 口令只登记，须回「确认#N」才派发；③ 模型名**硬校验**（D-2=A，
+    //   探针实证 CLI 对错模型名静默接受 ⇒ 不校验等于静默退化）；④ 禁免编号直通 + 自由文本不作答
+    //   （isOfflineKind + doFreeReply 特判）；⑤ 服务不解析迭代队列（零新 SSOT）。
+    //   ★ 模型传递形态（D-1 收敛）：随 job payload 逐 job 下发（`adapter.dispatchJob` 的 model 字段），
+    //     serve 实例**不换型、不重启**（探针实证 jobs API 原生支持 model，见四件套 §4.2.1）。
+    continueIteration: {
+      enabled: false,                                     // opt-in：需显式改 true 并重启服务
+      keywords: ['继续迭代', '推进迭代'],
+      confirmWindowSec: 1800,                             // 待确认有效期（口令由用户主动发起，给足 30 分钟）
+      handoffBrief: '',                                   // 空 = 用内置摘要（见 doContinueIterationRequest）
+      handoffPrompt: '',                                  // 空 = 复用 WATCH.handoffPrompt（D-3=A）+ 目标迭代 ID 前缀
+    },
+    // ★ TOOL-QQCONT：只读口令（help 先例：默认开、零风险、不设闸；不登记、不落 pending）
+    iterationDetail: {
+      enabled: true,
+      keywords: ['查看迭代', '迭代状态', '当前迭代'],
+    },
+    modelList: {
+      enabled: true,
+      keywords: ['模型列表', '模型清单'],
+      cacheSec: 600,                                      // 清单 TTL 缓存（--help 冷启 4.4s，实测）
+    },
   },
   actions: {
     confirm: { keywords: ['确认', '继续', '是', 'yes', 'ok', '好', 'go', '同意'], reply: '✅ 已收到确认，开始执行后续任务。', command: '' },
     cancel: { keywords: ['取消', '否', 'no', 'stop', '不要', '中止'], reply: '⛔ 已取消，任务中止。', command: '' }
   },
-  fallbackReply: '未识别指令。如需确认某条待办，请回复「确认#编号」或「取消#编号」。'
+  fallbackReply: '未识别指令。回「/help」（或「指令」）查看全部指令；确认某条待办回「确认#编号 / 取消#编号」。'
 };
 function loadCfgFile(p) { try { if (p && fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) {} return null; }
 const cfg = JSON.parse(JSON.stringify(DEFAULT_CFG));
@@ -176,7 +203,9 @@ if (loadedCfg) {
   //   文件里只写 shutdown 会把 heartbeat/cancelShutdown 的默认值整个顶掉（缺 keywords ⇒ 口令失效）。
   if (loadedCfg.commands) {
     const C = Object.assign({}, DEFAULT_CFG.commands, loadedCfg.commands);
-    for (const k of ['heartbeat', 'shutdown', 'cancelShutdown', 'sleep', 'wake', 'newIteration']) {
+    // ★ /help（2026-10-09）：新增命令段必须同步加入本清单 —— 否则文件里只写部分字段时，
+    //   该段的默认值（如 keywords）会被整体顶掉 ⇒ 口令失效（FIX-37 事故类的复发面）。
+    for (const k of ['heartbeat', 'shutdown', 'cancelShutdown', 'sleep', 'wake', 'newIteration', 'continueIteration', 'iterationDetail', 'modelList', 'help']) {
       C[k] = Object.assign({}, DEFAULT_CFG.commands[k], loadedCfg.commands[k] || {});
     }
     cfg.commands = C;
@@ -693,14 +722,14 @@ function topConvDirs(wsDir, n) {
 // ★ FIX-26：每个工作区容器最多下钻多少个会话目录（性能护栏；176 个会话的容器实测存在）
 const CONV_SCAN_N = Number((cfg.watcher && cfg.watcher.convScanN) || 10);
 
-function readIterationContext() {
+function readIterationContext(opts) {
   try {
     const rel = (cfg.watcher && cfg.watcher.contextDir) || '.codebuddy/skills/iteration-workflow/runtime';
     const rt = path.join(PROJ_ROOT, rel.split(String.fromCharCode(92)).join('/'));
     let id = '';
     try { id = fs.readFileSync(path.join(rt, 'ACTIVE'), 'utf8').replace(/^\uFEFF/, '').trim().split(/\r?\n/)[0].trim(); } catch (e) {}
     if (!id || id === 'none') return null;
-    const out = { id, phase: '', status: '', pending: [], more: 0 };
+    const out = { id, phase: '', status: '', pending: [], more: 0, all: [] };
     let raw = '';
     try { raw = fs.readFileSync(path.join(rt, id + '.state.yaml'), 'utf8'); } catch (e) { return out; }
     const pick = (re) => { const m = raw.match(re); return m ? String(m[1]).trim() : ''; };
@@ -716,8 +745,12 @@ function readIterationContext() {
       if (mn) { curName = mn[1]; continue; }
       if (/^\s*status:\s*"?pending"?\s*$/.test(ln) && curId) list.push(curId + (curName ? ' ' + curName : ''));
     }
-    out.pending = list.slice(0, 3);
-    out.more = Math.max(0, list.length - 3);
+    // ★ TOOL-QQCONT：「查看迭代」需要**全量**待办（state.yaml ~3KB，IO 可忽略）；
+    //   其余调用方（心跳/静置邀请/上线通知）保持原「≤3 条 + 余量」口径 ⇒ 消息长度不变（读全文）。
+    out.all = list.slice();
+    const cap = (opts && opts.full) ? list.length : 3;
+    out.pending = list.slice(0, cap);
+    out.more = Math.max(0, list.length - cap);
     return out;
   } catch (e) { return null; }
 }
@@ -1143,6 +1176,7 @@ const KIND_LABEL = {
   shutdown: '关机·需确认',                 // ★ FIX-37
   sleep: '待机·需确认',                    // ★ FIX-38
   'new-iteration': '开新迭代·需确认',      // ★ TOOL-QQNEWITER
+  'continue-iteration': '继续迭代·需确认',  // ★ TOOL-QQCONT
 };
 const CHOICE_MARK = { A: '🅰', B: '🅱', C: '🅲', D: '🅳', E: '🅴', F: '🅵', G: '🅶', H: '🅷' };
 function choiceMark(k) { return CHOICE_MARK[String(k || '').toUpperCase()] || '▪'; }
@@ -1300,6 +1334,13 @@ function renderRequestText(rec) {
     L.push('⚠️ 将执行：' + (rec.command || '(未配置命令)'));
     L.push('⚠️ 关机后本机离线，需现场上电（不支持远程开机）');
     if (rec.prompt) L.push('📎 来源：' + firstLine(rec.prompt));
+  } else if (rec.kind === 'continue-iteration') {       // ★ TOOL-QQCONT：继续迭代（FIX-28 精神：不盲签）
+    L.push('❓ 需要你决定：是否启动 CLI 接管会话，继续推进当前迭代？');
+    L.push('🎯 目标迭代：' + (rec.iterId || '（登记时快照）'));
+    L.push('🤖 模型：' + (rec.model ? rec.model : 'CLI 默认（未指定模型名）'));
+    L.push('⚠️ 确认后启动接管会话推进上述迭代；若 IDE/其它会话正在推进该迭代，或登记后该迭代被推进，'
+      + '确认会被安全闸拒绝（本项即消费、不派发；可重发口令重新登记）。');
+    if (rec.prompt) L.push('📎 来源：' + firstLine(rec.prompt));
   } else if (rec.command) {                             // ③ 命令/门禁类
     L.push('❓ 需要你决定：是否执行下述命令？');
     L.push('⚠️ 将执行：' + rec.command);
@@ -1334,6 +1375,10 @@ function renderRequestText(rec) {
     // ★ FIX-36：静默入口写进消息本身（用户要求「xxh/xxmin 内不再提醒」必须照办）
     R.push(' ⏸ 回「静默 2h」/「120min 内不再提醒」→ 期间不再发静置邀请（只掐本类；拍板/失败仍推）');
     R.push(' ⏸ 回「全部静默 1h」→ 连完成通知与门禁通知一并静默（回「取消静默」解除）');
+  } else if (rec.kind === 'continue-iteration') {       // ★ TOOL-QQCONT：继续迭代（必须带编号）
+    R.push(' ✓ 确认#' + id + ' → 启动 CLI 接管会话继续推进（接管前自动复查：该迭代未被推进、无其它接管）');
+    R.push(' ✗ 取消#' + id + ' → 本项作废，不启动任何会话');
+    R.push(' ⚠️ 本项不支持免编号回复（「好 / 可以 / ok」一律不生效）；自由文本按作废处理（不派发）');
   } else if (rec.handoff) {
     R.push(' ✓ 确认#' + id + ' → 由新会话接管执行（接管前自动复查是否有人在动）');
     R.push(' 💬 其他文本 → 作为指示交新会话执行（仅当只有 1 条未决项时）');
@@ -1417,6 +1462,7 @@ function registerRequest(prompt, command, id, timeoutMs, kind, opts) {
     handoffFile: handoffFileSafe, handoffPrompt: o.handoffPrompt || '',
     session: o.session || '',                                  // ★ FIX-17b：来源会话（按会话去重 / 审计定位）
     iterId: iterId,                                            // ★ FIX-35：任务域基线（迭代 ID）
+    model: String(o.model || ''),                              // ★ TOOL-QQCONT：本次指定模型（渲染/派发用；空 = CLI 默认）
     taskMarkAt: taskMarkAt,                                    // ★ FIX-35：任务域基线（水位 mtime；null = 不可用）
     options: normOptions(o.options),                           // ★ FIX-31：选择题选项（A/B/C + 含义）
     recommend: o.recommend ? String(o.recommend).toUpperCase() : '',   // ★ FIX-31：推荐项
@@ -1443,7 +1489,15 @@ function registerRequest(prompt, command, id, timeoutMs, kind, opts) {
       // ★ RESUME-1·D（2026-09-29）：非 idle 超时 = 模式 D 等待结束 ⇒ 必须说清后续路径（原会话还在 / 静置后可代跑）。
       //   原文案「已自动取消」会被读成"没路了"；★ 不承诺具体时间（snooze `:1219-1226` 可能吞掉后续邀请、
       //   且冷却叠加 idleSeconds+idleInviteMinGapSec+idleInviteCooldownSec 使实际延迟远大于 30 分钟）。
-      if (p.kind !== 'idle') send('⏰ #' + id + ' 等待已超时（无回复），已停止等待。回工位可在 IDE 原会话继续；若需代跑，静置后会再发接管邀请（受静默/冷却影响，不承诺时间）。').catch(() => {});
+      // ★ TOOL-QQCONT（W2-7 · B-P-B3）：continue-iteration 的原文案两个承诺都不成立 ——
+      //   ①「回 IDE 原会话继续」：本口令的使用场景恰是人不在工位（IDE 侧可能已停）；
+      //   ②「静置后会再发接管邀请」：本项是用户主动发起的续推，不在静置邀请链上。
+      const toText = (p.kind === 'continue-iteration')
+        ? ('⏰ #' + id + ' 等待已超时（无回复），已停止等待：**未启动任何接管会话、未推进迭代**。'
+          + '如需续推，重发「继续迭代」（可带模型名）即可重新登记。')
+        : ('⏰ #' + id + ' 等待已超时（无回复），已停止等待。回工位可在 IDE 原会话继续；'
+          + '若需代跑，静置后会再发接管邀请（受静默/冷却影响，不承诺时间）。');
+      if (p.kind !== 'idle') send(toText).catch(() => {});
       logInbox({ taskId: id, result: 'expired' });
     }
   }, t);
@@ -1640,10 +1694,17 @@ function runHeadless(p) {
  */
 function runHeadlessPrint(p, hl, relFile) {
   const promptText = '读取 ' + relFile + ' 并严格按其「剩余工作」小节执行（若无该小节则只输出摘要、不要修改任何文件）。';
-  const cmd = String(hl.command || adapter.defaultCommand())   // ★ FIX-34：兜底命令改调 adapter（原硬编码移走）
+  let cmd = String(hl.command || adapter.defaultCommand())   // ★ FIX-34：兜底命令改调 adapter（原硬编码移走）
     .replace(/\{prompt\}/g, promptText).replace(/\{handoff\}/g, relFile).replace(/\{id\}/g, String(p.id));
+  // ★ TOOL-QQCONT（F2-c）：print 路径的模型注入（adapter 内锚定 CLI 名前缀；注入失败 ⇒ 如实回执，不静默假装生效）
+  let modelNote = '';
+  if (p.model) {
+    const ap = adapter.applyModelToCommand(cmd, p.model);
+    if (ap.applied) cmd = ap.command;
+    else modelNote = '（⚠️ 指定模型 ' + p.model + ' 未能注入 print 模板 ⇒ 本次按模板默认模型执行）';
+  }
   log('[HEADLESS #' + p.id + '] ' + cmd);
-  send('🤖 #' + p.id + ' 已启动 headless 接管（CLI 新会话执行剩余任务），完成后回执。').catch(() => {});
+  send('🤖 #' + p.id + ' 已启动 headless 接管（CLI 新会话执行剩余任务），完成后回执。' + modelNote).catch(() => {});
   handoffRunning++;                                  // ★ FIX-17c③：接管互斥计数
   writeHandoffLock(p);                               // ★ FIX-17e：加跨进程锁（hook 据此拦其它会话写入）
   const hlEnv = Object.assign({}, execEnv(p.id, 'handoff', p.prompt), { PIVAS_HANDOFF_OWNER: String(p.id) });
@@ -1793,11 +1854,15 @@ function runHeadlessServe(p, hl, relFile) {
       return;
     }
     handoffRunning++;                                  // ★ FIX-17c③：接管互斥计数
-    writeHandoffLock(p, { mode: 'serve', webUrl: res.webUrl, port: res.port });
+    // ★ TOOL-QQCONT：锁体增 model（「查看迭代」可回显本次接管所用模型；仍不含口令/直链 —— W2-12）
+    writeHandoffLock(p, { mode: 'serve', webUrl: res.webUrl, port: res.port, model: p.model || '' });
     const hint = adapter.humanHint({ webUrl: res.webUrl });
     // 与 print 模式完全同款的提交语（读 handoff 文件按「剩余工作」执行）
     const promptText = '读取 ' + relFile + ' 并严格按其「剩余工作」小节执行（若无该小节则只输出摘要、不要修改任何文件）。';
-    adapter.dispatchJob({ port: res.port }, { prompt: promptText, name: 'qq-' + p.id + ' 接管', cwd: PROJ_ROOT },
+    // ★ TOOL-QQCONT（D-1 收敛形态）：模型随 **job payload 逐 job** 下发（探针实证 POST /api/v1/jobs
+    //   原生支持 model，CLI 侧转 --model）⇒ serve 实例**不换型、不重启**，其它 job/其它会话不受影响。
+    adapter.dispatchJob({ port: res.port },
+      { prompt: promptText, name: 'qq-' + p.id + ' 接管', cwd: PROJ_ROOT, model: p.model || '' },
       (err, job) => {
         if (err) {
           log('[HEADLESS SERVE #' + p.id + '] job 派发失败：' + err.message + ' ⇒ 降级 print');
@@ -1809,7 +1874,8 @@ function runHeadlessServe(p, hl, relFile) {
         }
         send('🖥 #' + p.id + ' headless 接管已派发：任务正在 Web UI 智能体「' + (job.name || '') + '」中执行。'
           + (hint.open ? hint.open + ' 可实时查看/继续（口令见 ~/.codebuddy/settings.json gateway.password）。' : '')).catch(() => {});
-        log('[HEADLESS SERVE #' + p.id + '] job=' + job.id + ' state=' + (job.state || '?') + ' ' + res.webUrl + (res.reused ? ' (reused)' : ' (spawned)'));
+        log('[HEADLESS SERVE #' + p.id + '] job=' + job.id + ' state=' + (job.state || '?') + ' ' + res.webUrl
+          + (res.reused ? ' (reused)' : ' (spawned)') + (p.model ? (' model=' + p.model) : ''));
         handoffAliveWatch(p, res, job);   // ★ V2-9：带上 jobId 供终态轮询
       });
   });
@@ -2045,6 +2111,19 @@ function doFreeReply(p, content) {
       + '如需开工请重发「开新迭代 #编号」，然后回「确认#新编号」。').catch(() => {});
     return;
   }
+  // ★ TOOL-QQCONT（同 V2-1 红队 A-其它① 同型）： 「继续迭代」项同样**不接受自由文本答复** ——
+  //   该项 handoff=true，落到下面的通用分支会直接 runHeadless（用户回一句「嗯」即起接管，且绕过模型校验/前置闸）。
+  //   必须**早于** p.status 赋值与 handoff 分支（与 shutdown / new-iteration 同款"作废 + 明确回执"）。
+  if (p.kind === 'continue-iteration') {
+    p.status = 'voided';
+    writeAnswer(p, 'cancel');
+    noteSettled(p);
+    log('[FREEREPLY #' + id + '] continue-iteration 项被自由文本作废（未派发）：' + String(content).slice(0, 60));
+    logInbox({ taskId: id, result: 'cont-voided-by-freetext', text: String(content).slice(0, 60) });
+    send('ℹ️ #' + id + ' 是「继续迭代」确认项：已按作废处理，**未启动任何接管会话、未推进迭代**。'
+      + '如需续推请重发「继续迭代」（可带模型名），然后回「确认#新编号」。').catch(() => {});
+    return;
+  }
   p.status = 'replied';
   writeAnswer(p, 'text', content);
   noteSettled(p);                                       // ★ FIX-36：结算 ⇒ 会话冷却
@@ -2170,9 +2249,12 @@ function doPending(id, type) {
     } else {
       // ★ TOOL-QQNEWITER（V2-4 · 红队 C5）：按 kind 定制 —— 过期后回「确认#N」若只说"已处理过（expired）"，
       //   用户会误以为迭代已开工（实际零动作）。开新迭代项必须显式说明"未创建任何迭代"。
+      // ★ TOOL-QQCONT（W2-7）：continue-iteration 同款定制 —— 过期后只说"已处理过"会被读成"已在推进"（实际零动作）。
       const hint = (p.kind === 'new-iteration')
         ? '（**未创建任何迭代、未启动会话**；如需开工请重发「开新迭代 #编号」）'
-        : '';
+        : ((p.kind === 'continue-iteration')
+          ? '（**未启动任何接管会话、未推进迭代**；如需续推请重发「继续迭代」重新登记）'
+          : '');
       send('#' + id + ' 已处理过（' + p.status + '）。' + hint).catch(() => {});
       return;
     }
@@ -2212,6 +2294,21 @@ function doPending(id, type) {
         log('[HANDOFF SKIP #' + id + '] ' + g.reason);
         send('🟡 #' + id + ' 未启动 headless：' + g.reason + '。本项已消费（重复确认无效）；如需重试请让 agent 确认工位安静后重新登记。').catch(() => {});
         logInbox({ taskId: id, result: 'handoff-skipped-active', reason: g.reason });
+        return;
+      }
+    }
+    // ★ TOOL-QQCONT（W2-6 · 红队 C-P-C5）：ACTIVE 漂移双守卫之一 —— 确认这一刻**复读** ACTIVE，
+    //   与登记时快照（p.iterId）不符 ⇒ 拒绝派发。动因：用户 A 时点发口令、B 时点才回确认，
+    //   期间迭代可能已换/已释放 ⇒ 否则会去推一个"已不是当前迭代"的目标（且白拿一次接管窗口）。
+    //   其二在 handoffPrompt 前缀内（接管会话自检并在不符时停止报告 —— 纵深防御）。
+    if (p.kind === 'continue-iteration') {
+      const cur = readActiveIterationId();
+      if (!cur || cur !== String(p.iterId || '')) {
+        log('[HANDOFF SKIP #' + id + '] continue-iteration ACTIVE 漂移：登记=' + p.iterId + ' 现值=' + cur);
+        send('🟡 #' + id + ' 未启动接管：目标迭代已变化（登记时 ' + (p.iterId || '(空)')
+          + ' → 现值 ' + (cur || '(无活跃迭代)') + '）。本项已消费（重复确认无效）；'
+          + '如需推进请按当前迭代重发「继续迭代」重新登记。').catch(() => {});
+        logInbox({ taskId: id, result: 'cont-refused-active-drift', was: String(p.iterId || ''), now: cur });
         return;
       }
     }
@@ -2363,7 +2460,8 @@ function startHttp() {
         // 预检②：带编号的目标项 kind 白名单（命令类/shutdown/sleep 等一律拒绝）
         // ★ TOOL-QQNEWITER：加 new-iteration（hub 兜底按钮可用；与 session-hub/public/index.html 的
         //   前端白名单同源口径 —— 改此处必须同步那一行 + README 两处白名单文本）
-        const SIM_KINDS = ['', 'ask', 'decision', 'gate', 'idle', 'new-iteration'];
+        // ★ TOOL-QQCONT：加 continue-iteration（同源口径，hub 徽章/按钮兜底确认）
+        const SIM_KINDS = ['', 'ask', 'decision', 'gate', 'idle', 'new-iteration', 'continue-iteration'];
         const simPr = parseReply(simContent) || null;
         const simPc = simPr ? null : parseChoiceReply(simContent);
         const simTargetId = simPr ? simPr.id : (simPc && simPc.id != null ? simPc.id : null);
@@ -2470,6 +2568,20 @@ function startHttp() {
                 keywords: (C.newIteration && C.newIteration.keywords) || [],
                 confirmWindowSec: Number((C.newIteration && C.newIteration.confirmWindowSec) || 1800),
               },
+              continueIteration: {                              // ★ TOOL-QQCONT（写类，opt-in）
+                enabled: !!(C.continueIteration && C.continueIteration.enabled),
+                keywords: (C.continueIteration && C.continueIteration.keywords) || [],
+                confirmWindowSec: Number((C.continueIteration && C.continueIteration.confirmWindowSec) || 1800),
+              },
+              iterationDetail: {                                // ★ TOOL-QQCONT（只读）
+                enabled: readOnlyCmdCfg('iterationDetail').enabled,
+                keywords: (C.iterationDetail && C.iterationDetail.keywords) || [],
+              },
+              modelList: {                                      // ★ TOOL-QQCONT（只读；清单来源 = CLI --help）
+                enabled: readOnlyCmdCfg('modelList').enabled,
+                keywords: (C.modelList && C.modelList.keywords) || [],
+                cacheSec: Number((C.modelList && C.modelList.cacheSec) || 600),
+              },
               wakeTimer: LAST_WAKE || null,                     // ★ FIX-38：当前唤醒定时器（下次唤醒时刻）
             };
           })()
@@ -2517,8 +2629,11 @@ function startHttp() {
         // ★ TOOL-QQNEWITER（V2-3 · 红队 C1）：命令类 kind **禁止经 /request 登记** ——
         //   /request 无条件透传 kind/handoff/handoffPrompt 进 registerRequest（且 httpKey 默认为空 ⇒ 无鉴权），
         //   若不拦，本机任意进程可伪造「开新迭代」项，借用户一次「确认#N」执行任意 handoffPrompt。
-        //   命令类（new-iteration/shutdown/sleep）只能由服务内部口令路径登记（doNewIterationRequest 等）。
-        const REQ_KIND_DENY = ['new-iteration', 'shutdown', 'sleep'];
+        //   命令类（new-iteration/continue-iteration/shutdown/sleep）只能由服务内部口令路径登记
+        //   （doNewIterationRequest / doContinueIterationRequest 等）。
+        //   ★ TOOL-QQCONT：必须加 continue-iteration —— 否则本机任意进程可伪造该项，
+        //   借用户一次「确认#N」把自己的 handoffPrompt 塞进接管会话。
+        const REQ_KIND_DENY = ['new-iteration', 'continue-iteration', 'shutdown', 'sleep'];
         if (REQ_KIND_DENY.indexOf(String(data.kind || '')) >= 0) {
           log('[REQUEST] 命令类 kind 拒绝经 /request 登记：' + data.kind);
           logInbox({ result: 'request-blocked-kind', kind: String(data.kind || '') });
@@ -2699,8 +2814,12 @@ function sendOnlineNotice(prev) {
   L.push('迭代：' + (it ? (it.id + '（阶段 ' + (it.phase || '?') + ' · ' + (it.status || '?') + '）') : '（无活跃迭代）'));
   L.push('待确认：' + [...pending.values()].filter((p) => p.status === 'pending').length + ' 条');
   const ni = CMDCFG().newIteration || {};
+  const ci = CMDCFG().continueIteration || {};
   // ★ 2026-10-08 用户实测反馈：`开新迭代 ON` 曾被误当口令原文输入 ⇒ 改中文「已启用/未启用」，减少误读
-  L.push('口令：关机 ' + (sc.enabled ? '已启用' : '未启用') + ' · 待机 ' + (sl.enabled ? '已启用' : '未启用') + ' · 开新迭代 ' + (ni.enabled ? '已启用' : '未启用'));
+  // ★ TOOL-QQCONT：补「继续迭代」（写类 opt-in）+ 只读口令默认开（不逐条占位，只标写类开关）
+  L.push('口令：关机 ' + (sc.enabled ? '已启用' : '未启用') + ' · 待机 ' + (sl.enabled ? '已启用' : '未启用')
+    + ' · 开新迭代 ' + (ni.enabled ? '已启用' : '未启用') + ' · 继续迭代 ' + (ci.enabled ? '已启用' : '未启用')
+    + ' · 查看迭代/模型列表 已启用');
   if (prev && prev.stoppedAt) L.push('上次退出：优雅停止（' + fmtTsMs(prev.stoppedAt) + (prev.reason ? ' · ' + prev.reason : '') + '）');
   else if (prev && prev.ts) L.push('⚠️ 上次退出：异常（心跳停在 ' + fmtTsMs(prev.ts) + '，无下线记录）');
   else L.push('上次退出：无记录');
@@ -2767,16 +2886,36 @@ function parseCommandAction(content) {
   // ★ TOOL-QQNEWITER：开新迭代（前缀匹配 + 参数 = 队列编号；「别开新迭代」不以关键词开头 ⇒ 不命中）
   const ni = withArg((C.newIteration || {}).keywords);
   if (ni !== null) return { name: 'new-iteration', arg: ni };
+  // ★ TOOL-QQCONT：继续迭代（前缀 + 可选模型名）——★ 必须在此命令块内、**早于 route()**：
+  //   route() 对 actions.confirm.keywords 用 **indexOf 子串**匹配（含「继续」）⇒ 落到 route 必被吞。
+  //   withArg 为前缀匹配：「继续迭代」命中新口令；单独发「继续」不以「继续迭代」开头 ⇒ 仍走 confirm。
+  const ct = withArg((C.continueIteration || {}).keywords);
+  if (ct !== null) return { name: 'continue-iteration', arg: ct };
   if (hitKeyword((C.shutdown || {}).keywords, content)) return { name: 'shutdown', arg: '' };
   if (hitKeyword((C.cancelShutdown || {}).keywords, content)) return { name: 'shutdown-abort', arg: '' };
   if (hitKeyword((C.heartbeat || {}).keywords, content)) return { name: 'heartbeat', arg: '' };
+  // ★ TOOL-QQCONT：只读口令（整条精确；enabled=false ⇒ 不识别，走 fallback）
+  const IDC = readOnlyCmdCfg('iterationDetail');
+  if (IDC.enabled && hitKeyword(IDC.keywords, content)) return { name: 'iteration-detail', arg: '' };
+  const MLC = readOnlyCmdCfg('modelList');
+  if (MLC.enabled && hitKeyword(MLC.keywords, content)) return { name: 'model-list', arg: '' };
+  // ★ /help（2026-10-09）：指令清单口令（只读）—— 整条精确匹配；enabled=false ⇒ 不识别（走 fallback）
+  const HC = helpCfg();
+  if (HC.enabled && hitKeyword(HC.keywords, content)) return { name: 'help', arg: '' };
   return null;
 }
-/** ★ FIX-38：受限 kind（免编号直通拦截，与关机同款）—— ★ TOOL-QQNEWITER 增 new-iteration */
-function isOfflineKind(kind) { return kind === 'shutdown' || kind === 'sleep' || kind === 'new-iteration'; }
-/** 受限 kind 的中文标签（免编号直通拒绝回执用；★ TOOL-QQNEWITER 三态化） */
+/** ★ TOOL-QQCONT：只读口令配置（enabled 缺省视为开；与 helpCfg 同口径） */
+function readOnlyCmdCfg(name) {
+  const c = (CMDCFG() || {})[name] || {};
+  return { enabled: c.enabled !== false, keywords: Array.isArray(c.keywords) ? c.keywords : [] };
+}
+/** ★ FIX-38：受限 kind（免编号直通拦截，与关机同款）—— ★ TOOL-QQNEWITER 增 new-iteration；★ TOOL-QQCONT 增 continue-iteration */
+function isOfflineKind(kind) {
+  return kind === 'shutdown' || kind === 'sleep' || kind === 'new-iteration' || kind === 'continue-iteration';
+}
+/** 受限 kind 的中文标签（免编号直通拒绝回执用；★ TOOL-QQNEWITER 三态化；★ TOOL-QQCONT 四态） */
 function offlineKindLabel(kind) {
-  return ({ shutdown: '关机', sleep: '待机', 'new-iteration': '开新迭代' })[kind] || '该操作';
+  return ({ shutdown: '关机', sleep: '待机', 'new-iteration': '开新迭代', 'continue-iteration': '继续迭代' })[kind] || '该操作';
 }
 /** 时长解析：`30` / `30min` / `30分钟` / `2h` / `1.5h` → 分钟；空 ⇒ 默认值；无法识别 ⇒ null */
 function parseDurationMin(s, defMin) {
@@ -2871,6 +3010,49 @@ function buildStatusProbe() {
     L.push('最近会话：' + label + (idleMs >= 0 ? ('（静置 ' + Math.round(idleMs / 1000) + 's）') : ''));
   }
   return L.join('\n');
+}
+// ══════════════════════════════════════════════════════════════
+// ★ /help（2026-10-09）：QQ 侧指令清单（只读自检，与「心跳」同路径）
+//   需求取证（非臆测）：inbox.jsonl 2026-10-08T10:34:48 用户真发「指令」、10:34:56 再发
+//     「有哪些指令」（间隔 8 秒，两条均无有效响应）；同期还在摸索「开新迭代/开机/关机」。
+//   设计约束：
+//     ① 分支必须在 route() 与 freeText **之前**（否则有唯一待办时「指令」会被当答复吃掉）；
+//     ② 触发词 = 整条精确匹配（hitKeyword 语义）⇒「帮助我改代码」「按指令执行」不误触；
+//     ③ 只读：不登记 #N、不落 pending、不受静默/免打扰影响（与心跳一致，直发 send）；
+//     ④ 开关状态从配置**现读** ⇒ 关机/待机/开新迭代未启用时清单自动标注，无第二真相；
+//     ⑤ 长度受控（send() 无截断，超长会被平台拒收）⇒ HELP_MAX_CHARS 护栏 + --help-render 打印。
+//   ★ 维护约定（防漂移）：新增/改任何 QQ 口令 ⇒ 同步更新本清单与 --help-test 探针；
+//     探针可发现「help 写了但代码不认」；反向（代码支持但 help 漏登记）需人工对照。
+// ══════════════════════════════════════════════════════════════
+const HELP_MAX_CHARS = 600;
+/** help 默认触发词（daemon.config.json → commands.help.keywords 覆盖；enabled=false = 不识别） */
+const HELP_DEFAULT_KEYWORDS = ['/help', '／help', 'help', '帮助', '指令', '指令清单', '有哪些指令', '有什么指令'];
+function helpCfg() {
+  const h = (CMDCFG().help) || {};
+  return { enabled: h.enabled !== false, keywords: Array.isArray(h.keywords) ? h.keywords : HELP_DEFAULT_KEYWORDS };
+}
+/** 渲染指令清单（doHelp 与 --help-render 共用；未启用的口令组动态标注） */
+function buildHelpText() {
+  const C = CMDCFG();
+  const off = (b) => (b ? '' : '（未启用）');
+  return [
+    '📖 QQ 指令清单（回复口令即可；#编号 = 待确认消息里的编号）',
+    MSG_SEP,
+    '【待办】确认#编号 / 取消#编号 ｜ 回IDE#编号（作废本项，回 IDE 拍板）',
+    '　　　　选择题回 A（多条并存写 A#编号）',
+    '【查询】心跳（状态 / ping）｜ 查看迭代' + off(readOnlyCmdCfg('iterationDetail').enabled)
+      + ' ｜ 模型列表' + off(readOnlyCmdCfg('modelList').enabled) + ' ｜ 静默2h ｜ 全部静默1h ｜ 取消静默',
+    '【电源·须 确认#编号】待机 30min' + off((C.sleep || {}).enabled) + ' ｜ 开机 07:30 ｜ 关机' + off((C.shutdown || {}).enabled) + ' ｜ 中止关机',
+    '【迭代】开新迭代 #23' + off((C.newIteration || {}).enabled) + '（无活跃迭代时；不带编号先列候选）',
+    '　　　　继续迭代 [模型名]' + off((C.continueIteration || {}).enabled) + '（有活跃迭代时；须 确认#编号）',
+    '【其他】只有一条待办时，可直接回你的意见文字',
+  ].join('\n');
+}
+function doHelp() {
+  const text = buildHelpText();
+  log('[CMD] help 清单 ' + text.length + ' 字');
+  logInbox({ result: 'cmd-help' });
+  send(text).then((st) => log('[CMD] help HTTP ' + st)).catch((e) => log('[CMD ERR] help: ' + e.message));
 }
 function doHeartbeat() {
   const text = buildStatusProbe();
@@ -3099,6 +3281,219 @@ function doNewIterationRequest(content, arg) {
   log('[NEWITER #' + id + '] 登记：' + (isAuto ? '免参数（先列候选）' : ('目标 #' + num)) + ' · 窗口 ' + win + 's');
   logInbox({ taskId: id, result: 'newiter-requested', target: isAuto ? 'auto' : num });
 }
+// ══════════════════════════════════════════════════════════════
+// ★ TOOL-QQCONT（2026-10-09）：QQ 口令「继续迭代 [模型名]」/「查看迭代」/「模型列表」
+//   共同口径：① 三口令在 handleMessage 命令块内分发（早于 route()/自由文本 —— 防 confirm「继续」
+//     子串吞并、防"唯一未决项时被自由文本当答复吃掉"）；
+//   ② 服务只做「校验 + 登记」，不解析迭代队列（零新 SSOT）；
+//   ③ 指定模型随 job payload **逐 job** 下发（adapter.dispatchJob 的 model 字段）——
+//      serve 实例不换型/不重启（探针实证 jobs API 原生支持 model，见四件套 §4.2.1）；
+//   ④ 只读口令（查看迭代/模型列表）不登记、不落 pending、不受静默影响（与心跳同路径）。
+// ══════════════════════════════════════════════════════════════
+
+/** 口令参数 = 可选模型名：**形态**校验（纯函数，供 --contparse 离线自测）；白名单校验在 resolveModelList 内（异步） */
+function normalizeModelArg(arg) {
+  // ★ 只 trim 首尾（**不**吞内部空白）：QQ 路径上 parseCommandAction 的 normPhrase 已去全部空白，
+  //   此处保持"原始形态即契约"——`--contparse "glm 5.3"` 应报非法字符（V1 判据），
+  //   而不是被静默改写成 `glm5.3` 再去撞清单。
+  const raw = String(arg || '').trim();
+  if (!raw) return { ok: true, model: '', reason: '' };          // 空 = CLI 默认模型（现状行为）
+  if (!adapter.isValidModelName(raw)) {
+    return { ok: false, model: '', reason: '模型名含非法字符（仅允许字母/数字/._:-）：「' + raw.slice(0, 24) + '」' };
+  }
+  return { ok: true, model: raw, reason: '' };
+}
+/**
+ * 取「可选模型清单」：adapter.fetchModelList（CLI --help）→ 失败回落 cfg.headless.fallbackModels。
+ *   返回 { ok, models, source:'help'|'cache'|'fallback'|'none', reason }
+ *   ★ W2-1：**不静默报空** —— 三态各自可辨（真实清单 / 内置兜底 / 不可用），文案随之不同（W2-11 双文案）。
+ */
+function resolveModelList(cb) {
+  const mc = CMDCFG().modelList || {};
+  const cacheSec = Number(mc.cacheSec || 600);
+  adapter.fetchModelList((r) => {
+    if (r && r.ok) { cb({ ok: true, models: r.models, source: r.source }); return; }
+    const fb = Array.isArray((cfg.headless || {}).fallbackModels)
+      ? (cfg.headless || {}).fallbackModels.map((x) => String(x || '').trim()).filter(Boolean) : [];
+    if (fb.length) { cb({ ok: true, models: fb, source: 'fallback', reason: (r && r.reason) || '' }); return; }
+    cb({ ok: false, models: [], source: 'none', reason: (r && r.reason) || '清单不可用' });
+  }, cacheSec);
+}
+/** 未决的 continue-iteration 项（幂等预检用） */
+function findPendingContinueIteration() {
+  return [...pending.values()].filter((p) => p.status === 'pending' && p.kind === 'continue-iteration')[0] || null;
+}
+/** 幂等回执（与 new-iteration 同款语义：只提示，不覆盖已登记项） */
+function sendContinueDup(dup, iterId) {
+  send('ℹ️ 已有待确认的继续迭代项 #' + dup.id + '（目标 ' + (dup.iterId || iterId || '?')
+    + (dup.model ? (' · 模型 ' + dup.model) : '') + '）。回「确认#' + dup.id
+    + '」执行，或「取消#' + dup.id + '」作废；如需换模型请先取消再重发。').catch(() => {});
+  logInbox({ taskId: dup.id, result: 'cont-dup' });
+}
+/**
+ * ★ TOOL-QQCONT（D-3=A）：接管指令 = 复用 `watcher.handoffPrompt` 全文（防两份模板漂移，
+ *   护栏文本已在产验证）+ **前缀注入**目标迭代 ID 自检与模型行（W2-6 之一）。
+ *   配置 `commands.continueIteration.handoffPrompt` 非空 ⇒ 整体覆盖（逃生口）。
+ */
+function buildContinueIterationHandoffPrompt(iterId, model) {
+  const cc = CMDCFG().continueIteration || {};
+  const base = String(cc.handoffPrompt || '').trim() || String(WATCH.handoffPrompt || '').trim();
+  const head = [
+    '【继续迭代 · 用户 QQ 口令】本次目标迭代 = ' + (iterId || '(快照缺失)'),
+    '★ 闸门（必须最先做）：读 .codebuddy/skills/iteration-workflow/runtime/ACTIVE —— 若其值与上述目标迭代'
+      + '不符（或为 none）⇒ **立即停止**：不得改推别的迭代、不得创建新迭代，用 '
+      + 'node tools/qqbot/notify.qqbot.js --kind fail --what "继续迭代中止：ACTIVE=<x> 与目标 <y> 不符" 报告。',
+    model ? ('★ 本次接管使用模型 ' + model + '（用户 QQ 口令指定；已在 job 层生效）。') : '',
+    '',
+  ].filter(Boolean).join('\n');
+  const fallback = base ? base
+    : ('读取 runtime/' + (iterId || '<ID>') + '.state.yaml 的 last_session_summary / pause_reason / phase_steps'
+      + '（status 非 completed 的项），从接续入口继续推进当前阶段剩余步骤。'
+      + '可逆且方案已确认的编码/验证/文档工作可直接做完；不可逆（写库/提交/发布/删除移动）'
+      + '或改变已确认口径的决策必须停下并登记 ask.js 等你拍板；完成后输出简报（做了什么 ｜ 改了哪些文件 ｜ '
+      + '越过了哪些确认门及依据 ｜ 下一步建议）。');
+  return head + fallback;
+}
+/**
+ * ★ TOOL-QQCONT：QQ 口令「继续迭代 [模型名]」登记器（**只登记，不执行**；确认后经既有 B 通道派发）。
+ *   前置闸（顺序；任一不符 ⇒ 回执拒绝、**不登记**）：
+ *     ① opt-in（commands.continueIteration.enabled，默认 false）；
+ *     ② ACTIVE 必须**存在**（与「开新迭代」互为镜像闸；=none ⇒ 引导「开新迭代」）；
+ *     ③ 模型名：形态校验（同步）→ 清单白名单（异步，D-2=A 硬拒绝；探针实证 CLI 对错名**静默接受**，
+ *        不硬校验＝用户拼错时静默跑默认模型）；
+ *     ④ 幂等：进入即**同步预检** dup（W2-5 之一）+ 异步回调内**复检**再登记（之二，防校验窗口内连发双登记）。
+ *   登记后：`registerRequest` 传**真实 iterId** ⇒ 任务域水位基线（FIX-35 条件②）自动生效（比开新迭代更严）。
+ */
+function doContinueIterationRequest(content, arg) {
+  const cc = CMDCFG().continueIteration || {};
+  if (!cc.enabled) {
+    log('[CMD] continue-iteration 口令被忽略（enabled=false）');
+    logInbox({ result: 'cont-disabled', text: String(content).slice(0, 60) });
+    send('🔒 继续迭代未启用：daemon.config.json → commands.continueIteration.enabled 现为 false。'
+      + '如需启用请改为 true 并重启合并服务。').catch(() => {});
+    return;
+  }
+  // 前置闸②：ACTIVE 必须存在
+  const active0 = readActiveIterationId();
+  if (!active0) {
+    log('[CONT REFUSE] 无活跃迭代（ACTIVE=none）');
+    logInbox({ result: 'cont-refused-no-active', text: String(content).slice(0, 60) });
+    send('⚠️ 当前无活跃迭代（ACTIVE=none）。「继续迭代」只能续推**已存在**的迭代；'
+      + '若要开工请发「开新迭代」（带 #编号，或不带编号先列候选）。本次未登记。').catch(() => {});
+    return;
+  }
+  // 前置闸③a：模型名形态（同步）
+  const ma = normalizeModelArg(arg);
+  if (!ma.ok) {
+    logInbox({ result: 'cont-bad-model', text: String(arg || '').slice(0, 40), why: 'shape' });
+    send('⚠️ ' + ma.reason + '\n💡 回「模型列表」查看支持清单；省略模型名则用 CLI 默认模型。本次未登记。').catch(() => {});
+    return;
+  }
+  // 前置闸④a（W2-5）：**立即同步预检** dup（先于异步模型校验 —— 否则窗口内连发会双登记）
+  const dup0 = findPendingContinueIteration();
+  if (dup0) { sendContinueDup(dup0, active0); return; }
+  // 前置闸③b + ④b：清单白名单（异步）→ 回调内复检 dup → 复读 ACTIVE → 登记
+  resolveModelList((ml) => {
+    if (ma.model) {
+      if (!ml.ok) {
+        logInbox({ result: 'cont-bad-model', model: ma.model, why: 'list-unavailable' });
+        send('⏳ 模型清单暂不可用（CLI 探测失败：' + String(ml.reason || '').slice(0, 80) + '）。'
+          + '\n💡 可省略模型名（= CLI 默认）重发「继续迭代」，或稍后重试。本次未登记。').catch(() => {});
+        return;
+      }
+      if (ml.models.indexOf(ma.model) < 0) {
+        logInbox({ result: 'cont-bad-model', model: ma.model, source: ml.source });
+        send('⚠️ 「' + ma.model + '」不在支持清单' + (ml.source === 'fallback' ? '（内置兜底清单）' : '') + '：\n· '
+          + ml.models.slice(0, 12).join('、') + (ml.models.length > 12 ? (' …（共 ' + ml.models.length + ' 项）') : '')
+          + '\n💡 回「模型列表」看全量；省略模型名则用 CLI 默认模型。本次未登记。').catch(() => {});
+        return;
+      }
+    }
+    const dup1 = findPendingContinueIteration();
+    if (dup1) { sendContinueDup(dup1, active0); return; }
+    // 异步窗口内 ACTIVE 漂移 ⇒ 不登记（防"登记即错目标"）
+    const active1 = readActiveIterationId();
+    if (!active1 || active1 !== active0) {
+      log('[CONT DRIFT] 登记窗口内 ACTIVE 变化：' + active0 + ' → ' + active1);
+      logInbox({ result: 'cont-refused-active-drift', was: active0, now: active1 });
+      send('🟡 登记期间 ACTIVE 已变化（' + active0 + ' → ' + (active1 || '(无活跃迭代)')
+        + '）⇒ 本次未登记。请按当前迭代重发「继续迭代」。').catch(() => {});
+      return;
+    }
+    const win = Math.max(60, Math.min(7200, Math.round(Number(cc.confirmWindowSec) || 1800)));
+    const hp = buildContinueIterationHandoffPrompt(active1, ma.model);
+    const brief = String(cc.handoffBrief || '').trim()
+      || ('续推当前迭代 ' + active1 + '：接管会话从接续入口继续推进剩余步骤'
+        + (ma.model ? ('（模型 ' + ma.model + '）') : '（CLI 默认模型）'));
+    const modelLine = ma.model ? ('（模型：' + ma.model + '）') : '（模型：CLI 默认）';
+    const id = registerRequest(
+      '【继续迭代】目标：' + active1 + ' ' + modelLine + '（' + ts() + '）\n'
+        + '⚠️ 确认后将启动 CLI 接管会话（Web UI 可视化）继续推进该迭代；登记后若该迭代被推进、'
+        + 'ACTIVE 变化、或已有接管在跑 ⇒ 确认会被安全闸拒绝（本项即消费、不派发）。',
+      '', 0, win * 1000, 'continue-iteration',
+      { handoff: true, handoffPrompt: hp, handoffBrief: brief, session: '', iterId: active1, model: ma.model });
+    const rec = pending.get(id) || {};
+    log('[CONT #' + id + '] 登记：iter=' + active1 + ' · model=' + (ma.model || '(默认)')
+      + ' · 清单来源=' + (ma.model ? ml.source : 'n/a') + ' · window=' + win + 's'
+      + ' · taskMarkAt=' + (rec.taskMarkAt == null ? 'null' : rec.taskMarkAt));   // ★ W2-14：基线可观测
+    logInbox({ taskId: id, result: 'cont-requested', iter: active1, model: ma.model || '', source: ml.source });
+  });
+}
+/** ★ TOOL-QQCONT：QQ 口令「查看迭代」（只读；不登记、不落 pending、不受静默/免打扰影响 —— 与心跳同路径） */
+function doIterationDetail() {
+  const L = ['📋 当前迭代 · ' + ts()];
+  L.push(MSG_SEP);
+  const it = readIterationContext({ full: true });
+  if (!it) {
+    L.push('（无活跃迭代：ACTIVE=none 或 runtime/ACTIVE 不可读）');
+    L.push('💡 要开工请发「开新迭代」（带 #编号，或不带编号先列候选）。');
+  } else {
+    L.push('迭代：' + it.id);
+    L.push('阶段：' + (it.phase || '?') + '（' + (it.status || '?') + '）');
+    if (it.status === 'blocked' && it.pauseReason) L.push('当前卡点：' + it.pauseReason);
+    const all = it.all || [];
+    if (all.length) L.push('待办步骤（' + all.length + '）：' + all.join(' ｜ '));
+    else {
+      const hint = buildNextHint();
+      L.push('待办步骤：无 pending' + (hint ? ('（' + hint + '）') : ''));
+    }
+  }
+  // ★ W2-12 回显红线：仅取 lock 的 id/剩余分钟/mode/model（**禁** directUrl / credential() / 口令字样）
+  const lock = readHandoffLock();
+  L.push('接管：' + (lock
+    ? ('🔒 接管中 #' + lock.id + '（剩余约 ' + Math.max(0, Math.round((Number(lock.expiresAt) - Date.now()) / 60000))
+      + ' 分钟' + (lock.mode ? (' · ' + lock.mode) : '') + (lock.model ? (' · 模型 ' + lock.model) : '') + '）')
+    : ('空闲（handoffRunning=' + handoffRunning + '）')));
+  const inst = readServeInstance();
+  L.push('Web UI：' + (inst && inst.port ? ('127.0.0.1:' + inst.port) : '（无 serve 实例）'));
+  const cc = CMDCFG().continueIteration || {};
+  L.push('续推入口：' + (cc.enabled ? '「继续迭代」（可带模型名）' : '未启用（commands.continueIteration.enabled=false）'));
+  const text = L.join('\n');
+  log('[CMD] iteration-detail ' + text.length + ' 字');
+  logInbox({ result: 'cmd-iteration-detail', iter: it ? it.id : '' });
+  send(text).then((st) => log('[CMD] iteration-detail HTTP ' + st)).catch((e) => log('[CMD ERR] iteration-detail: ' + e.message));
+}
+/** ★ TOOL-QQCONT：QQ 口令「模型列表」（只读；清单单一来源 = CLI `--help`，TTL 缓存） */
+function doModelList() {
+  resolveModelList((ml) => {
+    const L = ['🤖 支持模型清单' + (ml.source === 'fallback' ? '（内置兜底清单）' : '') + ' · ' + ts()];
+    L.push(MSG_SEP);
+    if (!ml.ok) {
+      L.push('暂不可用：' + String(ml.reason || '').slice(0, 120));
+      L.push('💡 稍后重试；或直接用「继续迭代」（省略模型名 = CLI 默认模型）。');
+    } else {
+      L.push(ml.models.join('、'));
+      L.push(MSG_SEP);
+      L.push('用法：回「继续迭代 模型名」（省略模型名 = CLI 默认模型）。');
+      L.push('来源：' + (ml.source === 'help' ? 'CLI --help（实时探测）'
+        : (ml.source === 'cache' ? 'CLI --help（TTL 缓存）' : '内置兜底清单')));
+    }
+    const text = L.join('\n');
+    log('[CMD] model-list source=' + ml.source + ' n=' + ml.models.length + ' chars=' + text.length);
+    logInbox({ result: 'cmd-model-list', source: ml.source, count: ml.models.length });
+    send(text).then((st) => log('[CMD] model-list HTTP ' + st)).catch((e) => log('[CMD ERR] model-list: ' + e.message));
+  });
+}
 function handleMessage(m) {
   const d = m.d || {};
   const oid = d.author && d.author.user_openid;
@@ -3148,11 +3543,15 @@ function handleMessage(m) {
   if (ca) {
     // （各 do* 自行落 inbox 审计，此处不重复记）★ FIX-38：`ca` 改为 {name, arg}
     if (ca.name === 'heartbeat') { doHeartbeat(); return; }
+    if (ca.name === 'help') { doHelp(); return; }                                      // ★ /help（2026-10-09）
     if (ca.name === 'shutdown') { doShutdownRequest(content); return; }
     if (ca.name === 'shutdown-abort') { doShutdownAbort(); return; }
     if (ca.name === 'sleep') { doSleepRequest(content, ca.arg); return; }
     if (ca.name === 'wake') { doWakeRequest(content, ca.arg); return; }
     if (ca.name === 'new-iteration') { doNewIterationRequest(content, ca.arg); return; }   // ★ TOOL-QQNEWITER
+    if (ca.name === 'continue-iteration') { doContinueIterationRequest(content, ca.arg); return; }  // ★ TOOL-QQCONT
+    if (ca.name === 'iteration-detail') { doIterationDetail(); return; }                            // ★ TOOL-QQCONT（只读）
+    if (ca.name === 'model-list') { doModelList(); return; }                                        // ★ TOOL-QQCONT（只读）
   }
   // ★ FIX-36：③ 静默指令 —— **必须早于 route()**：否则「取消，并且1h内不再提醒」会被
   //   cancel 关键词的 indexOf('取消') 吞掉（只剩「请带编号」回执）—— 这正是用户实测失效的成因。
@@ -3291,6 +3690,9 @@ if (args.cmdParse) {
     shutdownEnabled: !!((CMDCFG().shutdown || {}).enabled),
     sleepEnabled: !!sc.enabled,
     newIterationEnabled: !!((CMDCFG().newIteration || {}).enabled),   // ★ TOOL-QQNEWITER
+    continueIterationEnabled: !!((CMDCFG().continueIteration || {}).enabled),   // ★ TOOL-QQCONT（可见性第 4 处）
+    iterationDetailEnabled: readOnlyCmdCfg('iterationDetail').enabled,          // ★ TOOL-QQCONT（只读）
+    modelListEnabled: readOnlyCmdCfg('modelList').enabled,                      // ★ TOOL-QQCONT（只读）
     route: route(args.cmdParse),          // 回归：口令不得被 route() 关键词吞掉（期望 null）
     reply: parseReply(args.cmdParse),     // 回归：口令不得被误解析成「确认#N」
   }) + '\n');
@@ -3307,6 +3709,28 @@ if (args.newiterParse !== undefined && args.newiterParse !== false) {
     promptHead: pr.ok ? buildNewIterationHandoffPrompt(pr.num).split('\n').slice(0, 3) : null,
   }) + '\n');
   process.exit(0);
+}
+// ★ TOOL-QQCONT：离线模型名校验自测 —— `node qqbot-service.js --contparse "glm-5.3-flash"`（不启动服务、不发 QQ）
+//   形态校验（纯函数）同步出结果；形态通过时再跑清单校验（真实探测 CLI --help，冷启 ~4.4s，实测）。
+if (args.contparse !== undefined && args.contparse !== false) {
+  const ma = normalizeModelArg(args.contparse);
+  const emit = (ml) => {
+    const inList = !!(ml && ml.ok && ma.model && ml.models.indexOf(ma.model) >= 0);
+    process.stdout.write(JSON.stringify({
+      input: args.contparse, ok: ma.ok, model: ma.model, reason: ma.reason,
+      enabled: !!((CMDCFG().continueIteration || {}).enabled),
+      keywords: ((CMDCFG().continueIteration || {}).keywords) || [],
+      listSource: ml ? ml.source : 'skipped', listOk: !!(ml && ml.ok),
+      listCount: ml ? ml.models.length : 0,
+      inList: ma.model ? inList : null,          // 空模型名 ⇒ null（= 用 CLI 默认，无需在清单内）
+      activeIteration: readActiveIterationId() || '(none)',
+      promptHead: buildContinueIterationHandoffPrompt(readActiveIterationId() || '<ID>', ma.model)
+        .split('\n').slice(0, 2).map((s) => s.slice(0, 150)),   // 离线展示用截断（正文仍全量注入）
+    }) + '\n');
+    process.exit(ma.ok ? 0 : 1);
+  };
+  if (!ma.ok) emit(null);
+  else resolveModelList(emit);
 }
 // ★ FIX-37：离线渲染状态探针 —— `node qqbot-service.js --probe`（不发送；核对文案与长度）
 if (args.probe) {
@@ -3337,6 +3761,90 @@ if (args.mergeTest) {
   out.push('121 → ' + JSON.stringify(summaryLine('x'.repeat(121))) + '（117 字 + …）');
   process.stdout.write(out.join('\n') + '\n');
   process.exit(0);
+}
+// ★ /help（2026-10-09）：离线渲染指令清单 —— `node qqbot-service.js --help-render`（不发送；核对文案与长度）
+if (args.helpRender) {
+  const t = buildHelpText();
+  process.stdout.write(t + '\n[长度 ' + t.length + ' / 上限 ' + HELP_MAX_CHARS + ' 字]\n');
+  process.exit(0);
+}
+// ★ /help：探针自测 —— 清单里承诺的每条语法都必须真能被对应解析器识别（防「help 写了代码不认」）；
+//   负向用例确保触发词为整条精确匹配，且不会被更早的语法分支劫持。
+if (args.helpTest) {
+  const POS = [
+    { input: '确认#1', via: 'reply', want: 'confirm' },
+    { input: '取消#1', via: 'reply', want: 'cancel' },
+    { input: '回IDE#1', via: 'reply', want: 'ide' },
+    { input: 'B#1', via: 'choice', want: 'B' },
+    { input: '心跳', via: 'cmd', want: 'heartbeat' },
+    { input: '待机 30min', via: 'cmd', want: 'sleep' },
+    { input: '开机 07:30', via: 'cmd', want: 'wake' },
+    { input: '关机', via: 'cmd', want: 'shutdown' },
+    { input: '中止关机', via: 'cmd', want: 'shutdown-abort' },
+    { input: '开新迭代 #23', via: 'cmd', want: 'new-iteration' },
+    // ★ TOOL-QQCONT：三口令（含前缀参数形态与命中）
+    { input: '继续迭代', via: 'cmd', want: 'continue-iteration' },
+    { input: '继续迭代 glm-5.3-flash', via: 'cmd', want: 'continue-iteration' },
+    { input: '推进迭代', via: 'cmd', want: 'continue-iteration' },
+    { input: '查看迭代', via: 'cmd', want: 'iteration-detail' },
+    { input: '迭代状态', via: 'cmd', want: 'iteration-detail' },
+    { input: '当前迭代', via: 'cmd', want: 'iteration-detail' },
+    { input: '模型列表', via: 'cmd', want: 'model-list' },
+    { input: '模型清单', via: 'cmd', want: 'model-list' },
+    // ★ TOOL-QQCONT：路由隔离（A-P-A3 / W2-15）—— 断言「**分发优先级**」而非 route 单函数：
+    //   route() 用 **indexOf 子串**匹配 confirm 关键词（含「继续」）⇒ route('继续迭代') 事实返回 'confirm'
+    //   （这正是必须在 handleMessage 里让命令块**早于** route() 的原因）；不变式 = 命中口令 ⇒ 永不落 route。
+    { input: '继续', via: 'precedence', want: 'confirm' },
+    { input: '继续迭代', via: 'precedence', want: 'cmd:continue-iteration' },
+    { input: '继续迭代 glm-5.3-flash', via: 'precedence', want: 'cmd:continue-iteration' },
+    { input: '/help', via: 'cmd', want: 'help' },
+    { input: 'help', via: 'cmd', want: 'help' },
+    { input: '指令', via: 'cmd', want: 'help' },
+    { input: '有哪些指令', via: 'cmd', want: 'help' },
+    { input: '静默2h', via: 'snooze', want: 'set' },
+    { input: '全部静默1h', via: 'snooze', want: 'set' },
+    { input: '取消静默', via: 'snooze', want: 'clear' },
+  ];
+  const NEG = [
+    { input: '帮助我改代码', via: 'cmd', want: null },
+    { input: '按指令执行', via: 'cmd', want: null },
+    { input: '别关机', via: 'cmd', want: null },
+    { input: '别继续迭代', via: 'cmd', want: null },    // ★ TOOL-QQCONT：非前缀 ⇒ 不命中（负向）
+    { input: '不要继续迭代', via: 'cmd', want: null },  // ★ TOOL-QQCONT：同上
+    { input: '静默安装依赖', via: 'snooze', want: null },
+    { input: '确认啥时候好', via: 'reply', want: null },
+    { input: '/help', via: 'reply', want: null },      // help 不得被更早的语法分支认领
+    { input: '指令', via: 'choice', want: null },
+    { input: '/help', via: 'snooze', want: null },
+  ];
+  const run = (c) => {
+    if (c.via === 'reply') { const r = parseReply(c.input); return r ? r.type : null; }
+    if (c.via === 'choice') { const r = parseChoiceReply(c.input); return r ? r.key : null; }
+    if (c.via === 'cmd') { const r = parseCommandAction(c.input); return r ? r.name : null; }
+    if (c.via === 'snooze') { const r = parseSnooze(c.input); return r ? r.action : null; }
+    if (c.via === 'route') { return route(c.input); }   // ★ TOOL-QQCONT：route 单函数（留痕用）
+    // ★ TOOL-QQCONT：**分发优先级**（handleMessage 实测顺序：命令块 → route → 自由文本）
+    //   —— 命中命令口令 ⇒ 返回 'cmd:<name>'（此时 route 根本不会被调用）；未命中 ⇒ 落 route。
+    if (c.via === 'precedence') {
+      const ca = parseCommandAction(c.input);
+      return ca ? ('cmd:' + ca.name) : route(c.input);
+    }
+    return null;
+  };
+  const out = []; let fail = 0;
+  for (const c of POS.concat(NEG)) {
+    const got = run(c);
+    const ok = got === c.want;
+    if (!ok) fail++;
+    out.push((ok ? 'PASS' : 'FAIL') + ' [' + c.via + '] ' + JSON.stringify(c.input) + ' → ' + JSON.stringify(got) + (ok ? '' : '（期望 ' + JSON.stringify(c.want) + '）'));
+  }
+  const t = buildHelpText();
+  const lenOk = t.length <= HELP_MAX_CHARS;
+  if (!lenOk) fail++;
+  out.push((lenOk ? 'PASS' : 'FAIL') + ' [len] 清单 ' + t.length + ' 字 ≤ ' + HELP_MAX_CHARS);
+  out.push('— 共 ' + (POS.length + NEG.length + 1) + ' 项 · fail=' + fail + ' —');
+  process.stdout.write(out.join('\n') + '\n');
+  process.exit(fail ? 1 : 0);
 }
 // ★ FIX-37d：离线解码自测 —— `node qqbot-service.js --dec-test ["net helpmsg 1190"]`
 //   跑一条**无副作用**的中文输出命令，对比 GBK / UTF-8 解码（证明乱码根因与修法；同步执行，不会启动服务）。
@@ -3417,12 +3925,21 @@ module.exports = {
   summaryLine: summaryLine,                   // ★ FIX-39（供离线自测：超长截断带 …）
   normalizeNewIterationArg: normalizeNewIterationArg,               // ★ TOOL-QQNEWITER（供离线自测：口令参数校验）
   buildNewIterationHandoffPrompt: buildNewIterationHandoffPrompt,   // ★ TOOL-QQNEWITER（供隔离实例 E2E 断言模板）
+  normalizeModelArg: normalizeModelArg,                             // ★ TOOL-QQCONT（供离线自测：模型名形态校验）
+  buildContinueIterationHandoffPrompt: buildContinueIterationHandoffPrompt,  // ★ TOOL-QQCONT（供 E2E 断言模板）
+  resolveModelList: resolveModelList,                               // ★ TOOL-QQCONT（供 E2E 断言清单来源四态）
+  findPendingContinueIteration: findPendingContinueIteration,       // ★ TOOL-QQCONT（供离线自测：幂等预检）
 };
 
 // ── 启动（仅直接运行时；被 require 时只导出纯函数，供自测脚本使用）──────
 // ★ FIX-38：异步自测（`--wake-test` / `--wake-query` / `--wake-del`）在回调里才 process.exit，
 //   若不在守卫里排除 ⇒ 会一路启动整套服务（实测：误起第二个实例并尝试抢占 18765 端口）。
-if (require.main === module && !args.wakeTest && !args.wakeQuery && !args.wakeDel) {
+// ★ TOOL-QQCONT（2026-10-09）：`--contparse` 同为**异步**自测（清单校验要 spawn CLI --help ≈4.4s）
+//   ⇒ **必须**加进本守卫。实测教训（本次实施期）：漏加时它会起整套服务 —— 连 QQ 发上线通知、
+//   写心跳文件、并尝试抢占 18765（端口被生产实例占用故未夺权，但已产生噪音副作用）。
+//   ★ 维护约定：**今后新增任何在回调里 process.exit 的自测入口，都必须加入本清单**。
+const ASYNC_SELF_TESTS = [args.wakeTest, args.wakeQuery, args.wakeDel, args.contparse];
+if (require.main === module && !ASYNC_SELF_TESTS.some(Boolean)) {
 (async () => {
   log('=== qqbot-service start pid=' + process.pid + ' ===');
   log('creds: appId=' + mask(appId) + ' openId=' + mask(OPENID) + ' source=' + creds.from + ' dryRun=' + !!cfg.dryRun);
@@ -3436,6 +3953,16 @@ if (require.main === module && !args.wakeTest && !args.wakeQuery && !args.wakeDe
   log('TOOL-QQNEWITER newIteration=' + (_nc0.enabled ? 'ON' : 'OFF')
     + ' · keywords=' + JSON.stringify(_nc0.keywords || [])
     + ' · window=' + (Number(_nc0.confirmWindowSec) || 1800) + 's');
+  // ★ TOOL-QQCONT：三口令可见性（启动日志 = B 路评审点名的"可见性三处"之一）
+  const _ci0 = CMDCFG().continueIteration || {};
+  const _idc0 = readOnlyCmdCfg('iterationDetail'), _mlc0 = readOnlyCmdCfg('modelList');
+  log('TOOL-QQCONT continueIteration=' + (_ci0.enabled ? 'ON' : 'OFF')
+    + ' · keywords=' + JSON.stringify(_ci0.keywords || [])
+    + ' · window=' + (Number(_ci0.confirmWindowSec) || 1800) + 's'
+    + ' | iterationDetail=' + (_idc0.enabled ? 'ON' : 'OFF') + ' ' + JSON.stringify(_idc0.keywords)
+    + ' | modelList=' + (_mlc0.enabled ? 'ON' : 'OFF') + ' ' + JSON.stringify(_mlc0.keywords)
+    + ' (cache ' + (Number((CMDCFG().modelList || {}).cacheSec) || 600) + 's)'
+    + ' | 模型下发=per-job（serve 不换型）');
   await getToken();
   log('token OK');
   // ★ FIX-38：心跳 + 上线通知（先读上次心跳判断是否异常退出，再写新心跳）

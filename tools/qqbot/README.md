@@ -56,8 +56,8 @@
 
 ## ⚠ 本地消息注入端点 `POST /simulate-message`（2026-10-04，session-hub 方案 A）
 - 用途：session-hub 页面上的「确认 / 取消 / 选项 / 回复」按钮——**与真实 QQ 消息等价**（注入 `handleMessage` 同一处理链，不绕过任何守卫）。
-- 安全口径：**仅回环** + **独立 `hub.simulateKey` 必配**（`daemon.config.json` → `hub.simulateKey`；空 = 端点关闭）+ 预检拦截：命令类口令（心跳/关机/待机/中止关机）一律 403；带编号目标项的 kind 白名单 `{ask, decision, gate, idle, new-iteration}`，其余（如 shutdown/sleep）403 kind-blocked。
-- ★ TOOL-QQNEWITER（2026-10-08）：`POST /request` 同步加 **命令类 kind default-deny**（`new-iteration`/`shutdown`/`sleep` 403）—— 该端点无条件透传 kind+handoff+handoffPrompt（且 httpKey 默认为空），不拦则可被本机任意进程伪造命令类项借用户一次确认执行任意 handoffPrompt；命令类 kind 只能由服务内部口令路径登记。`handoffFile` 亦收口（必须在 `headless.handoffDir` 内，否则丢弃回落默认）。
+- 安全口径：**仅回环** + **独立 `hub.simulateKey` 必配**（`daemon.config.json` → `hub.simulateKey`；空 = 端点关闭）+ 预检拦截：命令类口令（心跳/关机/待机/中止关机/开新迭代/继续迭代/查看迭代/模型列表）一律 403；带编号目标项的 kind 白名单 `{ask, decision, gate, idle, new-iteration, continue-iteration}`，其余（如 shutdown/sleep）403 kind-blocked。
+- ★ TOOL-QQNEWITER（2026-10-08）：`POST /request` 同步加 **命令类 kind default-deny**（`new-iteration`/`shutdown`/`sleep` 403）—— 该端点无条件透传 kind+handoff+handoffPrompt（且 httpKey 默认为空），不拦则可被本机任意进程伪造命令类项借用户一次确认执行任意 handoffPrompt；命令类 kind 只能由服务内部口令路径登记。`handoffFile` 亦收口（必须在 `headless.handoffDir` 内，否则丢弃回落默认）。★ TOOL-QQCONT（2026-10-09）：deny 清单扩为 `new-iteration`/`continue-iteration`/`shutdown`/`sleep` —— 同理，不拦则可借用户一次「确认#N」塞任意 handoffPrompt 起接管。
 - 调用：`POST http://127.0.0.1:18765/simulate-message?key=<simulateKey>`，body `{"content":"确认#3"}`；hub 侧同值配置在 `tools/session-hub/hub.config.json` → `qq.simulateKey`。
 - 审计：`inbox.jsonl` 记 `simulate-inject` / `simulate-blocked-command` / `simulate-blocked-kind`（hub 侧另有 hub-audit.jsonl 两行）。
 
@@ -198,7 +198,7 @@ powershell -File start-service.ps1                     # 仅启动（后台；�
 - **留痕**：`.codebuddy/temp/open-bypass.log`（OPEN / REVOKE / REFUSE）+ `service.log` 的 `[EXEC #N]` / `[EXEC OUT #N]` + 门禁侧 `gate-audit.log` 的 `BYPASS reason=… ttl until=…`；到期自动失效，标记由门禁自清（`gate-check.mjs` GATE-TRV-DEL）。
 - 改 `commandAllowlist` / `gateCommand` **须重启服务**（配置在启动时读取，不热加载）：`stop-service.ps1` → `start-service.ps1`。
 - 首次实测（2026-10-07）：QQ 确认 → 自动开闸 → 闸开期越界写入放行 → TTL 到期自动恢复拦截，8 项正负向取证全绿。
-- **QQ 故障兜底（2026-10-07 补 · 同日补齐 UI）**：本机 **session-hub 页面**（`http://127.0.0.1:18766/`）「待确认明细」里每一项带「确认 / 取消」按钮 —— 走 hub `POST /qq-reply` → qqbot `POST /simulate-message` → `handleMessage`，**与 QQ 回复等价、同一处理链**（服务侧 kind 白名单 `['', 'ask', 'decision', 'gate', 'idle', 'new-iteration']`；hub 前端 `public/index.html` 同源白名单已同步）。★ 该按钮 **2026-10-07 新增**：此前 hub 只有只读列表，兜底得手工 `POST /qq-reply`。开闸请求自动带 `kind=gate`，页面会高亮为「🔓 开闸/门禁请求」。首次点击会弹 **hub httpKey 输入框**（`tools/session-hub/hub.config.json` → `httpKey`；写入 sessionStorage，本标签页记住）。
+- **QQ 故障兜底（2026-10-07 补 · 同日补齐 UI）**：本机 **session-hub 页面**（`http://127.0.0.1:18766/`）「待确认明细」里每一项带「确认 / 取消」按钮 —— 走 hub `POST /qq-reply` → qqbot `POST /simulate-message` → `handleMessage`，**与 QQ 回复等价、同一处理链**（服务侧 kind 白名单 `['', 'ask', 'decision', 'gate', 'idle', 'new-iteration', 'continue-iteration']`；hub 前端 `public/index.html` 同源白名单已同步）。★ 该按钮 **2026-10-07 新增**：此前 hub 只有只读列表，兜底得手工 `POST /qq-reply`。开闸请求自动带 `kind=gate`，页面会高亮为「🔓 开闸/门禁请求」。首次点击会弹 **hub httpKey 输入框**（`tools/session-hub/hub.config.json` → `httpKey`；写入 sessionStorage，本标签页记住）。
   ★ **实测状态（2026-10-07 晚）**：**按钮真实点击已端到端通过**（#6：`hub-audit` 记 `action:"confirm" id:6` + `qq-reply-result http:200` → `[EXEC #6] node tools/gate/open-bypass.js --ttl 5` → `bypass OPEN`）。同日另修：公网面板"永远停在加载中"（四请求各 8s 独立超时 + 提示文案）、`pending` 才渲染按钮且全为历史项时给出说明文案。
   ★ **判别证据（哪条路径提交的）**：`inbox.jsonl` 的 `msgId` —— **`hub-local-…` = hub 按钮注入**，**`ROBOT1.0_…` = 真实 QQ 消息**。真失败时兜底 = 手敲 `Set-Content <hooks>/.gate-bypass` 或直接 `POST /simulate-message?key=<simulateKey>` body `{"content":"确认#N"}`。
 - **登记工具自带送达核验**（`request-confirm.js`，2026-10-07 加）：登记后回读 `service.log` 新增行 —— `[ASK #id] HTTP …` = 已发出；`[ASK ERR] …`（**服务侧不带编号**，故按"登记后新增行"界定）= 发送失败。输出 `REGISTERED / DELIVERY ok|FAILED|UNKNOWN`，**退出码 0=已送达、3=未确认送达** ⇒ 失败不再静默等超时。`--no-verify` 可跳过；`--kind` 可覆盖自动判定。
@@ -1160,6 +1160,89 @@ node tools/qqbot/qqbot-service.js --dec-test "net helpmsg 1116"
 **回滚**：`enabled: false` + 重启（零代码改动）。
 
 **评审记录**：`runtime/TOOL-QQNEWITER-四件套.md`（§⑦ v2 修订）+ `runtime/TOOL-QQNEWITER-评审-{A,B,C}.md`。
+
+## ★ 口令：继续迭代 [模型名] / 查看迭代 / 模型列表（TOOL-QQCONT · 2026-10-09）
+
+**用途**：工位外「续推当前迭代」的**确定性入口**（此前只有静置邀请这条启发式通道），以及两个只读口令（看状态、看模型清单）。与「开新迭代」互为镜像：开新迭代要求 ACTIVE=none，继续迭代要求 ACTIVE **存在**。
+
+**用法**：
+
+| 你回 | 效果 |
+|---|---|
+| `继续迭代` | 前置闸 → 登记待确认项 → 收到 `🔔 #N 待确认 · [继续迭代·需确认]`（模型 = CLI 默认） |
+| `继续迭代 glm-5.3-flash`（或 `推进迭代 …`） | 同上；模型须**命中清单**（回「模型列表」看全量），否则拒绝登记 |
+| `确认#N` | 派发 CLI 接管会话（Web UI 可视化）：读 handoff 文件按「剩余工作」继续推进**登记时快照的那个迭代** |
+| `取消#N` | 作废本项（不启动任何会话） |
+| 自由文本（「嗯」等） | **不作答**：项作废 + 明确回执（「未启动任何接管会话、未推进迭代」） |
+| 回「好/ok」（免编号） | **拒绝**（受限 kind，必须带编号） |
+| `查看迭代`（`迭代状态` / `当前迭代`） | 只读回执：迭代 ID / 阶段+状态 / blocked 卡点 / **全量待办步骤** / 接管状态（lock 的 #N·剩余分钟·mode·模型）/ Web UI 端口 |
+| `模型列表`（`模型清单`） | 只读回执：支持模型清单（**单一来源 = CLI `--help`**，TTL 缓存 600s）+ 来源标注 |
+
+**前提与防护**：
+1. **opt-in**：`commands.continueIteration.enabled` 默认 `false`（写类动作；两个只读口令默认 `true` —— 与 `/help` 同口径）。
+2. **模型硬校验（D-2=A）**：CLI 对错模型名**静默接受**（实测：`--model not-a-model` 起服 stderr 空、照跑）⇒ 不校验就等于用户拼错时静默跑默认模型。清单不可用时**不静默报空**（回执区分「清单暂不可用（CLI 探测失败）」/「不在支持清单（附清单）」/「内置兜底清单」）。
+3. **模型下发形态（D-1 收敛）**：随 job payload **逐 job** 下发（`POST /api/v1/jobs {model}` → CLI 自行 `--model`）—— 探针实证该字段被消费（API 契约 + handler 双证）⇒ **serve 实例不换型、不重启**（换型族整族取消）。print 降级路径走 `adapter.applyModelToCommand`（注入失败会在回执里**如实说明**）。
+4. **幂等 + 防漂移**：进入即同步预检 dup，异步校验回调内**复检**（防校验窗口内连发双登记）；确认时**复读 ACTIVE** 与登记快照比对，不符 ⇒ 拒绝派发并回执两个 ID；handoffPrompt 前缀注入目标迭代 ID 自检（接管会话发现不符即停止报告）。
+5. **命令类口径**：`/simulate-message` 注入本口令被预检①自动 403（命令类只能走 QQ）；`/request` 命令类 default-deny 已含 `continue-iteration`；「继续迭代」在 `parseCommandAction` 内解析（**早于** `route()`）⇒ 不会被 confirm 的「继续」子串吞掉，而裸「继续」仍走 confirm。
+6. **回显红线**：只读回执与消息**不含** Web UI 明文直链/口令（只给端口）。
+
+**启用**：`daemon.config.json` → `commands.continueIteration.enabled: true` → `stop-service.ps1` → `start-service.ps1`（配置不热加载）。
+
+**边界**：IDE 无需开着；服务重启清 pending（口令项需重发）；模型清单来自 CLI `--help` 解析（CLI 升级导致措辞变化 ⇒ 回落 `headless.fallbackModels`，再不可用 ⇒ 明确拒绝而非放行）。
+
+**离线自测**：
+```powershell
+node tools/qqbot/qqbot-service.js --cmd-parse "继续迭代 glm-5.3-flash"   # 口令解析 + 三开关可见性
+node tools/qqbot/qqbot-service.js --contparse "glm 5.3"                  # 形态非法 ⇒ ok:false
+node tools/qqbot/qqbot-service.js --contparse "glm-5.3-flash"           # 清单校验（冷启 ~4.4s）
+node tools/qqbot/adapter-headless.js --modellist --no-cache              # 清单提取（22 项）
+```
+
+**回滚**：`enabled: false` + 重启（零代码改动）；模型能力无需回滚（不传 model 即旧行为）。
+
+**评审记录**：`runtime/TOOL-QQCONT-四件套.md`（§⑦ v2 必修 15 项 + §4.2.1 探针实测）+ `runtime/TOOL-QQCONT-评审-{A,B,C}.md`。
+
+## ★ /help：QQ 指令清单（2026-10-09）
+
+**起因（实证，非臆测）**：`inbox.jsonl` 2026-10-08T10:34:48 用户真发「指令」、10:34:56 再发「有哪些指令」（间隔 8 秒，两条均无有效响应）；同日 10:05~10:42 还在连续摸索「开新迭代 / 开机 / 关机 / 确认#3」。QQ 侧指令已达 15 类语法族、50+ 写法 ⇒ 靠人记不可行（README 1300+ 行亦无速查）。
+
+**用法**：QQ 里回 `/help`（或 `help` / `帮助` / `指令` / `指令清单` / `有哪些指令`）→ 立即收到分组指令清单（实测 258 字）。
+
+**特性**：
+- 只读自检：不登记 `#N`、不落 pending、不受静默/免打扰影响（与「心跳」同路径，直发 `send()`）。
+- 开关**现读配置**：关机/待机/开新迭代/继续迭代未启用时清单自动标注「（未启用）」；改 `commands.*.keywords` 后 `/help` 自动同步（无第二真相）。
+- 触发词 = **整条精确匹配**（`hitKeyword`）⇒「帮助我改代码」「按指令执行」「别关机」均不误触。
+- 未识别兜底带引导：`fallbackReply` 已改为「回 /help（或「指令」）查看全部指令…」⇒ 忘了口令随便发一句也能自愈。
+- 分支位置在 `parseCommandAction`（**早于 `route()` / 自由文本兜底**）⇒ 有待办挂着时回「指令」不会被当成答复吃掉。
+
+**指令速查表**（工位侧对照；活口径 = `qqbot-service.js` 的 `buildHelpText()` —— 改口令必须同步该函数与 `--help-test` 探针）：
+
+| 组 | 口令 | 效果 |
+|---|---|---|
+| 待办 | `确认#编号` / `取消#编号` | 执行 / 作废第 N 项 |
+| 待办 | `回IDE#编号`（唯一非 idle 待办可免编号） | QQ 侧作废本项，回 IDE 原会话拍板 |
+| 待办 | `A` / `A#编号` | 选择题作答（多条并存时带编号） |
+| 查询 | `心跳`（`状态` / `ping`） | 状态探针：服务/迭代/接管/静默 |
+| 查询 | `查看迭代`（`迭代状态` / `当前迭代`） | ★ TOOL-QQCONT：迭代 ID/阶段/卡点/全量待办/接管状态（只读） |
+| 查询 | `模型列表`（`模型清单`） | ★ TOOL-QQCONT：支持模型清单（来源 = CLI `--help`，只读） |
+| 查询 | `静默2h` ｜ `全部静默1h` ｜ `取消静默` | 静置邀请 / 全部通知 的静默与解除 |
+| 电源 | `待机 30min` ｜ `开机 07:30` | S3 待机（带定时唤醒）/ 注册唤醒并立即待机 |
+| 电源 | `关机` ｜ `中止关机` | 90s 倒计时关机 / 取消倒计时 |
+| 迭代 | `开新迭代 #23`（不带编号先列候选） | ACTIVE=none 时从工位外启动新迭代 |
+| 迭代 | `继续迭代 [模型名]` | ★ TOOL-QQCONT：ACTIVE 存在时续推当前迭代（模型可选，须命中清单） |
+| 帮助 | `/help`（`指令` / `帮助`） | 本清单 |
+
+> 电源与迭代口令均需二次确认（回 `确认#编号`）；关机/待机/开新迭代/继续迭代项**禁止免编号直通**（回「好/ok」不生效），继续迭代项的自由文本按作废处理。
+
+**配置**（`daemon.config.json → commands.help`）：`enabled`（默认 true；false = 不识别本口令、落回兜底）、`keywords`（触发词表，整条精确匹配；含全角 `／help`）。
+
+**离线自测**：
+```powershell
+node tools/qqbot/qqbot-service.js --help-render   # 渲染清单 + 字数（上限 600）
+node tools/qqbot/qqbot-service.js --help-test     # 探针：清单每条语法被对应解析器识别 + 负向不误触 + 分发优先级 + 长度护栏（现 39 项）
+```
+
+**实测（2026-10-09）**：`--help-test` 26/26 PASS；★ TOOL-QQCONT 落地后 **39/39 PASS**（新增三口令 8 项 + 分发优先级 3 项 + 负向 2 项 + 长度护栏）；既有回归 `--parse` / `--cmd-parse`（关机/待机/开新迭代）/ `--snooze-parse` / `--newiter-parse` / `--probe` / `--merge-test` 全绿；服务重启后真实 QQ 端到端（`/help`、`心跳`、未识别兜底）见 `service.log`。
 
 ## ★ FIX-38：「待机 + 定时唤醒」与「上/下线通知」（2026-09-21）
 

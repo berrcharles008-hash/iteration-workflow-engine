@@ -92,6 +92,103 @@ function defaultCommand() {
   return 'codebuddy -p --permission-mode acceptEdits "{prompt}"';
 }
 
+// ── 控制台字节 → 文本（GBK 优先，无 ICU 时回退 UTF-8；对齐 qqbot-service decodeConsoleBytes）──
+let _gbkDecoder = null, _gbkTried = false;
+function decodeConsoleBytes(buf) {
+  if (buf == null) return '';
+  if (!Buffer.isBuffer(buf)) return String(buf);
+  if (!buf.length) return '';
+  if (!_gbkTried) {
+    _gbkTried = true;
+    try { _gbkDecoder = new TextDecoder('gbk'); } catch (e) { _gbkDecoder = null; }
+  }
+  try { return _gbkDecoder ? _gbkDecoder.decode(buf) : buf.toString('utf8'); }
+  catch (e) { return buf.toString('utf8'); }
+}
+
+// ── ★ TOOL-QQCONT（W2-1）：模型清单 —— 唯一来源 = CLI `--help` 内嵌清单 ──────────
+//   取证（2026-10-09 探针，见 runtime/TOOL-QQCONT-四件套.md §4.2.1）：
+//     `--model <model>` 描述行含 "Currently supported: (hy4-preview, hy3, …)"（22 项）。
+//   ★ P-A1（高）：entry 是**无扩展名**的 node 脚本（…/bin/codebuddy）
+//     ⇒ 必须 spawn(node, [entry,'--help'])；直接 spawn(entry) 在 Windows 不成立。
+//   ★ 实测：冷启动 4.4s · exit 0 · stderr 空；清单为纯 ASCII ⇒ GBK/UTF-8 解码同结果
+//     （仍统一走 decodeConsoleBytes —— CLI 其余输出含中文）。
+//   ★ 失败必须**显式**（ok:false + reason），**不得静默回空清单** ——
+//     否则 QQ 会回「清单为空」（误导用户以为 CLI 不支持任何模型）。
+//   ★ 缓存：TTL 内存缓存（默认 600s）——单次调用 4.4s，不宜每次口令都冷启。
+const HELP_MODEL_RE = /Currently supported:\s*\(([^)]+)\)/;
+let _modelCache = { at: 0, models: [] };
+/** 从 --help 全文提取模型清单（去重、保序；无匹配 ⇒ []） */
+function parseModelList(text) {
+  const m = String(text || '').match(HELP_MODEL_RE);
+  if (!m) return [];
+  const out = [];
+  for (const raw of m[1].split(/[,\r\n]+/)) {
+    const s = String(raw).trim();
+    if (s && out.indexOf(s) < 0) out.push(s);
+  }
+  return out;
+}
+/** 模型名形态校验（防串参；**白名单**校验在业务层做 —— D-2=A） */
+function isValidModelName(m) {
+  return /^[\w.:\-]{1,64}$/.test(String(m || ''));
+}
+/**
+ * 取模型清单（异步；cb 只回调一次）。
+ *   ok:true  ⇒ { ok, models:[…], source:'help'|'cache' }
+ *   ok:false ⇒ { ok:false, models:[], source:'none', reason }（调用方决定是否回落内置兜底清单）
+ */
+function fetchModelList(cb, cacheSec, force) {
+  cb = cb || (() => {});
+  const ttl = Math.max(30, Number(cacheSec) || 600) * 1000;
+  if (!force && _modelCache.models.length && (Date.now() - _modelCache.at) < ttl) {
+    cb({ ok: true, models: _modelCache.models.slice(), source: 'cache' });
+    return;
+  }
+  const p = resolvePaths();
+  if (!p.node || !fs.existsSync(p.node)) { cb({ ok: false, models: [], source: 'none', reason: 'node.exe 不存在：' + p.node }); return; }
+  if (!p.entry || !fs.existsSync(p.entry)) { cb({ ok: false, models: [], source: 'none', reason: 'CLI entry 不存在：' + p.entry }); return; }
+  let child;
+  try { child = spawn(p.node, [p.entry, '--help'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }); }
+  catch (e) { cb({ ok: false, models: [], source: 'none', reason: 'spawn 失败：' + e.message }); return; }
+  const outChunks = [], errChunks = [];
+  let done = false;
+  const fin = (r) => { if (done) return; done = true; clearTimeout(timer); cb(r); };
+  const timer = setTimeout(() => {
+    try { child.kill(); } catch (e) { /* ignore */ }
+    fin({ ok: false, models: [], source: 'none', reason: '--help 超时（15s）' });
+  }, 15000);
+  if (child.stdout) child.stdout.on('data', (d) => outChunks.push(Buffer.from(d)));
+  if (child.stderr) child.stderr.on('data', (d) => errChunks.push(Buffer.from(d)));
+  child.on('error', (e) => fin({ ok: false, models: [], source: 'none', reason: 'spawn error：' + e.message }));
+  child.on('exit', () => {
+    const outText = decodeConsoleBytes(Buffer.concat(outChunks));
+    const errText = decodeConsoleBytes(Buffer.concat(errChunks)).trim();
+    const models = parseModelList(outText);
+    if (models.length) {
+      _modelCache = { at: Date.now(), models: models.slice() };
+      fin({ ok: true, models: models, source: 'help' });
+      return;
+    }
+    fin({ ok: false, models: [], source: 'none',
+      reason: '未能从 --help 解析清单' + (errText ? ('；stderr：' + errText.slice(0, 120)) : '') });
+  });
+}
+
+// ── ★ TOOL-QQCONT（F2-c）：print 降级路径的模型注入 ────────────────────────────
+//   仅当命令行**以 CLI 名开头**时注入（正则锚定，CLI 字面量只在本文件）；
+//   模板已自带 --model / 形态非法 / 非 CLI 开头 ⇒ applied:false（调用方据此**如实回执**，
+//   不得静默假装生效）。
+function applyModelToCommand(cmd, model) {
+  const m = String(model || '');
+  const s = String(cmd || '');
+  if (!isValidModelName(m)) return { command: s, applied: false };
+  if (/(^|\s)--model(\s|=)/.test(s)) return { command: s, applied: false };
+  const mm = s.match(/^(\s*)(\S*codebuddy\S*)(\s+)/i);
+  if (!mm) return { command: s, applied: false };
+  return { command: mm[0] + '--model ' + m + ' ' + s.slice(mm[0].length), applied: true };
+}
+
 // ── 启动（A 档 serve）：返回 spawn 所需三要素（纯函数，spawn 由调用方执行）──
 //    opts = { port, cwd }
 //    ★ FIX-34b（2026-10-03）：args 增加 --permission-mode acceptEdits ——
@@ -126,11 +223,18 @@ function apiHeaders() {
 function dispatchJob(inst, opts, cb) {
   const port = Number(inst && inst.port);
   if (!port) { cb(new Error('dispatchJob: 缺 port')); return; }
-  const payload = JSON.stringify({
+  // ★ TOOL-QQCONT（D-1 收敛形态）：逐 job 模型 —— 探针实测（2026-10-09）
+  //   POST /api/v1/jobs 请求体原生支持 `model`，CLI 侧 `el.model && eg.push("--model", el.model)`
+  //   ⇒ 该 job 的 CLI 带 --model 启动；**serve 实例无需换型/重启**（原方案换型族已取消）。
+  //   形态非法（含串参面）直接丢弃而非抛错：白名单校验已在业务层完成（D-2=A），此处只防串参。
+  const body = {
     prompt: String(opts.prompt || ''),
     name: String(opts.name || ''),
     cwd: String(opts.cwd || process.cwd()),
-  });
+  };
+  const model = isValidModelName(opts.model) ? String(opts.model) : '';
+  if (model) body.model = model;
+  const payload = JSON.stringify(body);
   const headers = Object.assign(apiHeaders(), {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(payload),
@@ -319,6 +423,11 @@ module.exports = {
   apiHeaders: apiHeaders,
   dispatchJob: dispatchJob,
   jobStatus: jobStatus,   // ★ TOOL-QQNEWITER（V2-9：job 终态轮询）
+  decodeConsoleBytes: decodeConsoleBytes,   // ★ TOOL-QQCONT（供离线自测）
+  fetchModelList: fetchModelList,           // ★ TOOL-QQCONT（W2-1：模型清单，TTL 缓存）
+  parseModelList: parseModelList,           // ★ TOOL-QQCONT（纯函数，供离线自测）
+  isValidModelName: isValidModelName,       // ★ TOOL-QQCONT（纯函数，供离线自测）
+  applyModelToCommand: applyModelToCommand, // ★ TOOL-QQCONT（F2-c：print 降级路径模型注入）
   TIER: TIER,
 };
 
@@ -342,5 +451,21 @@ if (require.main === module) {
   // 冒烟实测：node adapter-headless.js --detect
   if (arg === '--detect') {
     detect((r) => { process.stdout.write(JSON.stringify(r) + '\n'); process.exit(0); });
+  }
+  // ★ TOOL-QQCONT：（不 spawn serve）模型清单提取自测 —— `node adapter-headless.js --modellist [--no-cache]`
+  //   --no-cache 强制冷启（验证正则与 CLI 现值，不看缓存）；默认走缓存语义。
+  if (arg === '--modellist') {
+    const force = String(process.argv[3] || '') === '--no-cache';
+    fetchModelList((r) => {
+      process.stdout.write(JSON.stringify(r, null, 2) + '\n');
+      process.exit(r.ok ? 0 : 1);
+    }, 600, force);
+  }
+  // ★ TOOL-QQCONT：print 模板模型注入自测 —— `node adapter-headless.js --model-apply "<cmd>" [model]`
+  if (arg === '--model-apply') {
+    const cmd = String(process.argv[3] || defaultCommand());
+    const model = String(process.argv[4] || 'glm-5.3-flash');
+    process.stdout.write(JSON.stringify({ in: cmd, out: applyModelToCommand(cmd, model) }, null, 2) + '\n');
+    process.exit(0);
   }
 }
