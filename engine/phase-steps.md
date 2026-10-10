@@ -15,7 +15,7 @@
 | step-1-5 | 模块范围定位（读 L1 总览 + 匹配相关 L2 模块） | ✅ | 始终 |
 | step-1.6-dir-diff | 迭代开始目录对比（scan 后端 BLL + 前端 pages → 对比 L1 模块列表 → 输出 +/-/~ 差异） | — | 始终 |
 | step-2-classify | 判断需求类型（Bug类/功能类），选择对应模板 | ✅ | 始终 |
-| step-2-5 | 闭环追问（5W2H 七维度穷举生成问题清单） | ✅ | 始终 |
+| step-2-5 | 闭环追问（复述确认 → 动态追问 → 5W2H 兜底） | ✅ | 始终 |
 | step-2-6 | 共享语言建立（生成 CONTEXT.md 术语映射快照） | ✅ | 始终 |
 | step-3-output | 生成01-需求记录.md | ✅ | 始终 |
 | step-4-user-confirm | 用户确认需求文档 | ✅ | 始终 |
@@ -69,6 +69,8 @@
 | step-5-review-gate-result | 写入评审门禁结果到 state.yaml | ✅ | 始终 |
 | step-6-user-confirm | 用户确认方案通过 | ✅ | 始终 |
 
+> ★ 本阶段用户确认类步骤的等待方式（A/B/D + ask.js 登记铁律）见 [waiting-protocol.md](waiting-protocol.md)。
+
 **step-5-review-gate-result 执行要求**：
 - 在 step-5-fix-verify 完成后（或跳过时）、step-6-user-confirm 之前执行
 - 读取 03 方案评审结论（4 项检查 + 自主审查）
@@ -102,6 +104,8 @@
 | step-fix-4-regress | 失败用例回归（含动作链用例） | — | step-fix-3-build 完成 |
 | step-fix-5-reclose | 缺陷关闭（置 `fixed`）并回 05 | — | step-fix-4-regress 通过 |
 
+> ★ 本阶段用户确认类步骤的等待方式（A/B/D + ask.js 登记铁律）见 [waiting-protocol.md](waiting-protocol.md)。
+>
 > 进入阶段时，Agent 根据实际触发条件选择性写入 phase_steps（如无 SQL 变更则 step-0-* 设为 `not_applicable`）。
 >
 > ★ **缺陷修复窗口（2026-09-23 DEFECT-1 新增）**：`step-fix-1-register` ~ `step-fix-5-reclose` 五步**挂 04 阶段**，仅当「存在 `open` 缺陷且 `design_changed=false`」时写入 `phase_steps`（`mandatory=false`）。收口后回 05，**既有用例结果保留**（见 `state-protocol.md` §5.3）。
@@ -124,6 +128,8 @@
 | step-fix-05-3-regress | 失败用例回归（含动作链用例；**既有用例结果不回改**，新增续接编号） | — | step-fix-05-2-code 完成 |
 | step-fix-05-4-reclose | 缺陷关闭（置 `fixed` + `verified_by` + 按 §3.3 R8 补 `fix_files`） | — | step-fix-05-3-regress 通过 |
 
+> ★ 本阶段用户确认类步骤的等待方式（A/B/D + ask.js 登记铁律）见 [waiting-protocol.md](waiting-protocol.md)。
+>
 > ★ **05 侧缺陷修复窗口（2026-10-02 E-2 新增；方案 α）**：这四个步骤把历史上「游离自造步骤块」正规化
 > （先例：`2026-09-28-001` 六条缺陷、`2026-09-30-002` 五条缺陷均在 05 就地修但步骤未进 SSOT）。
 > **与 04 侧 `step-fix-*` 的分工**：① 不涉后端码、无需 `/t:Rebuild` 的 L1 小修 ⇒ **05 侧就地**（用户开闸 + `fix_files` 对账）；
@@ -144,6 +150,8 @@
 | step-3-archive | 迭代状态归档（推进到07） | ✅ | 始终 |
 | step-4-archive-check | 归档检查：检查 `10-临时/` 是否清空，未清空则分类移出 | ✅ | 始终 |
 
+> ★ 本阶段用户确认类步骤的等待方式（A/B/D + ask.js 登记铁律）见 [waiting-protocol.md](waiting-protocol.md)。
+>
 > **依赖链**：step-1 → (enabled? → step-1.2 → step-1.5) → step-2 → **step-2-5** → step-3 → step-4
 > 
 > **step-1.2-backup-capture 执行要求**：
@@ -176,7 +184,7 @@
 | step-3-5-workflow-audit | 工作流一致性审计（`scripts/audit-engine.py`，❌ 登记 TOOLING-TODO） | ✅ | ✅ | ✅ | ✅ |
 | step-4-actions | 行动项（改进措施落实到人） | — | 跳过 | ✅ | ✅ |
 | step-5-lessons | 正向模式提炼 | ✅ | ✅ | ✅ | ✅ |
-| step-6-archive | 回顾归档（更新 state.yaml 完成 07，释放 ACTIVE） | ✅ | ✅ | ✅ | ✅ |
+| step-6-archive | 回顾归档（更新 state.yaml 完成 07，刷新机器投影，释放 ACTIVE） | ✅ | ✅ | ✅ | ✅ |
 
 ---
 ## 步骤编号约定
@@ -205,3 +213,5 @@
 | 2026-09-20 | 1.5 | 06 阶段新增 **step-2-5-kb-refresh**（知识库无条件刷新，位于 spec 回写后 / 归档前）—— 刷新点由"04 末"迁至此处（代码已过 05 测试 = 最终态）；依赖链同步更新。详见 `phase-06.md` §step-2-5-kb-refresh |
 | 2026-09-20 | 1.6 | ★ **02 步骤口径订正（独立审查回流）**：`step-1x-cross-review` → **`step-1x-review`**（与 2026-07-18 v1.2 更名一致）；"强制"列 `🔴` → **`—`**（该列语义 = `mandatory`，而 `mandatory` 的**唯一权威源**是 `complexity-scoring.md` §二，其中 02 = `mandatory=false`；原 `🔴` 与 03/04 交叉审查行的 `✅` 风格亦不一致）。**执行要求（🔴 应执行/🟡 可选/🟢 跳过）改列于"触发条件"列**，与 `mandatory` 两维度分离。联动：`consistency-checklist.md`（02/06 步骤清单）、`complexity-scoring.md`（ID 统一 + 登记 `step-2-5-kb-refresh` + 补"未登记默认 true"规则） |
 | 2026-09-20 | 1.7 | ★ **AUDIT-2 清偿（审计脚本首跑发现）**：补登记长期漏登的 **7 个**步骤 —— 阶段一 `step-1-5`（模块范围定位）· `step-1.6-dir-diff`（目录对比）· `step-2-5`（闭环追问）· `step-2-6`（共享语言）；阶段三 `step-3-rescore`（复杂度复评，03 必经）；阶段四 `step-5-6-complexity-actual`（复杂度实际值回填）；阶段五 `step-0-5`（合规检查）。**根因** = 各 `phase-0X.md` 的步骤表被扩充时未同步本表（本表自称 SSOT 却长期滞后）。联动订正：`phase-05.md`（`step-4-7` → `step-6-spec`）、`phase-04.md`（补 `step-7-code-review` 产出说明）。判据：`python scripts/audit-engine.py` 的 A2 ERR → 0 |
+| 2026-10-07 | 1.8 | ★ **TOOL-QQGATE 项 A**：阶段三/四/五/六各补一行 waiting-protocol 指针（用户确认类步骤等待方式 A/B/D + ask.js 登记铁律），对齐阶段二既有指针。根因 = #19 迭代 02/03 确认点漏发 QQ 通知；联动项 B（state-apply.py 附注）/ C（G1 强制化立项）见 `runtime/TOOLING-TODO.md` |
+| 2026-10-10 | 1.9 | ★ **TOOL-INTV A 批（需求澄清访谈化）**：阶段一 `step-2-5` 名称更新为「闭环追问（复述确认 → 动态追问 → 5W2H 兜底）」，与 `phase-01.md` 双处同步（原「5W2H 七维度穷举生成问题清单」）。零新增步骤 ID；实施基准 `runtime/TOOL-INTV-四件套.md` v2 |

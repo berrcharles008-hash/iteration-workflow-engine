@@ -364,6 +364,67 @@ const TESTS = [
     );
   }
 
+// ── 06T：`..` 穿越守卫（TRAVERSAL-1 · 2026-10-02 · 迭代 2026-10-02-001）──
+//   背景：探针实测 `docs/iterations/../../back-end/…` 曾命中豁免**直接放行**（01-03 与 05 均成立）
+//   ⇒ 存在无需开闸、无 `gate_window` 留痕的写业务码通道。本组为「只收紧」改动的双向回归。
+//   ★ 用例必须用 `toolInput.filePath` 覆盖 —— `file` 会经 `path.join` 归一化而**丢失** `..` 形态。
+{
+  const jump = (sub) => `${PROJ_ABS}/docs/iterations/../../${sub}`;
+  TESTS.push(
+    { // A：01-03 主路径，穿越写业务码 ⇒ 拦（本组核心）
+      id: '06T-A', name: '03阶段 穿越 docs/iterations/../../back-end/… → 拦截',
+      phase: '03', active: true,
+      tool: 'write_to_file', file: 'docs/iterations/t.md',
+      toolInput: { filePath: jump('back-end/my-app-upgrade/src/t.js') },
+      expectExit: 2, expectBlock: true
+    },
+    { // B：防误伤 —— 合法迭代文档仍放行
+      id: '06T-B', name: '03阶段 合法 docs/iterations/t.md → 放行（防误伤）',
+      phase: '03', active: true,
+      tool: 'write_to_file', file: 'docs/iterations/t.md',
+      expectExit: 0, expectBlock: false
+    },
+    { // C：05 阶段同款穿越 ⇒ 拦
+      id: '06T-C', name: '05阶段 穿越 docs/iterations/../../back-end/… → 拦截',
+      phase: '05', active: true,
+      tool: 'write_to_file', file: 'docs/iterations/t.md',
+      toolInput: { filePath: jump('back-end/my-app-upgrade/src/t.js') },
+      expectExit: 2, expectBlock: true
+    },
+    { // D：防误伤 —— 05 本职文档仍放行
+      id: '06T-D', name: '05阶段 合法 docs/iterations/t.md → 放行（防误伤）',
+      phase: '05', active: true,
+      tool: 'write_to_file', file: 'docs/iterations/t.md',
+      expectExit: 0, expectBlock: false
+    },
+    { // E：memory 前缀跳板 ⇒ 拦
+      id: '06T-E', name: 'memory 跳板 .codebuddy/memory/../../temp/t.md → 拦截',
+      phase: '03', active: true,
+      tool: 'write_to_file', file: 'docs/iterations/t.md',
+      toolInput: { filePath: `${PROJ_ABS}/.codebuddy/memory/../../temp/t.md` },
+      expectExit: 2, expectBlock: true
+    },
+    { // F：防误伤 —— memory 本目录仍放行
+      id: '06T-F', name: 'memory 合法 .codebuddy/memory/t.md → 放行（防误伤）',
+      phase: '03', active: true,
+      tool: 'write_to_file', file: '.codebuddy/memory/t.md',
+      expectExit: 0, expectBlock: false
+    },
+    { // G：误伤负向 —— `..` 非完整段不得误判
+      id: '06T-G', name: '误伤负向 docs/iterations/a..b/t.md → 放行',
+      phase: '03', active: true,
+      tool: 'write_to_file', file: 'docs/iterations/a..b/t.md',
+      expectExit: 0, expectBlock: false
+    },
+    { // H：误伤负向 —— `v1.2..3` 含 `..` 但非段
+      id: '06T-H', name: '误伤负向 docs/iterations/v1.2..3/t.md → 放行',
+      phase: '03', active: true,
+      tool: 'write_to_file', file: 'docs/iterations/v1.2..3/t.md',
+      expectExit: 0, expectBlock: false
+    }
+  );
+}
+
 // ── 工具函数 ──────────────────────────────────────────
 
 function backupActive() {

@@ -289,8 +289,10 @@ Agent 根据复杂度选择了 Lite 模板（文件名从映射表获取，如 "
 | `engine/delta-marking.md` | 代码改动 Delta 标记体系 | 03 阶段（标注 ADDED/MODIFIED） |
 | `engine/team-agent-strategy.md` | Team Agent 四维并行决策算法 | 04 阶段 Team 编码时 |
 | `engine/lessons-learned.md` | 事故案例库 + 自动复盘机制 | 07 阶段回顾 或 发生事故时 |
+| `project/lessons-learned.md` | 项目级模式库（活跃区 + 候选区） | 01 阶段启动注入（活跃区全量，见 `engine/phase-01.md` 前置步骤）/ 07 阶段回顾 |
 | `project/coding-conventions.md` | 项目编码规范（L5 层级） | 04 阶段编码 + 代码审查时 |
 | `project/code-review-rules.md` | 代码审查规则矩阵 | 04 阶段 Step 5（代码审查时） |
+| `engine/capability-map.md` | skill 能力地图（11 域 · 状态标记） | 了解 skill 能力全貌 / 机制演进后更新 |
 | 阶段文档模板（`engine/templates/` 或 `project/templates/`） | 模板文件，优先级见 §模板解析优先级 | 各阶段产出文档时 |
 
 ### ★ 引擎大文件定点读映射

@@ -39,7 +39,7 @@
 
 ```bash
 python scripts/audit-engine.py                 # 项目侧 skill 实例（纯读，不写文件）
-python scripts/audit-engine.py --src <源仓库>  # 追加 A6 回流水位（可省，读 IWF_ENGINE_SRC）
+python scripts/audit-engine.py --src <引擎仓库根>  # 追加 A6 回流水位（根须含 engine/ 与 scripts/；可省，读 IWF_ENGINE_SRC）
 ```
 
 ---
@@ -55,7 +55,7 @@ python scripts/audit-engine.py --src <源仓库>  # 追加 A6 回流水位（可
 > 落档处只有两处：**`runtime/TOOLING-TODO.md`**（元层工单，❌ 的唯一归宿）与**本迭代 07 回顾报告**（过程留痕）。
 >
 > **触发点① 收口同批跑**（见 `engine/evolution-safety.md` §四）：`audit-engine.py`（本审计）·
-> `validate-template-coverage.py`（模板覆盖）· `run-gate-tests.mjs`（门禁回归）· 回流水位比对（`audit-engine.py --src <源仓库>`）。
+> `validate-template-coverage.py`（模板覆盖）· `run-gate-tests.mjs`（门禁回归）· 回流水位比对（`audit-engine.py --src <引擎仓库根>`）。
 
 ---
 
@@ -67,3 +67,4 @@ python scripts/audit-engine.py --src <源仓库>  # 追加 A6 回流水位（可
 | 2026-09-20 | **2.0** | 手工清单 →「本规范页 + `scripts/audit-engine.py`」（A1~A6）；新增两个挂载点（07 `step-3-5-workflow-audit` + 改 skill 收口） |
 | 2026-09-23 | **2.1** | 新增 **A7 状态字段登记闭环**（规范维度，脚本待实现）；由 `runtime/TOOLING-TODO.md` `DEFECT-1` 驱动（`defects[]` 落地 + `delete_allow` 历史漂移反例） |
 | 2026-10-02 | **2.2** | ① **A5 新增「按需刷新」口径**（`A5-ON-DEMAND` 标记；`runtime/SESSION-HANDOFF.md` 为交接快照，不适用 7 天时效/联动判据 ⇒ 消除每迭代复报）；② **A4 `EXTERNAL_TARGETS` 显式登记 3 项**外部/宿主侧目标（`gen_doc_index.py` / `wait-answer.ps1` / `probe-readonly-gate.mjs`）；③ **`CORE_FILES` 改列** `engine/gate/gate-check.mjs`（实现外置后校正，原列 `hooks/` 侧已为 shim）；④ 登记观察项：A2 `STEP_ID_RE` 不匹配 `step-fix-*` 家族（闭环盲区，待排期）。依据：迭代 `2026-10-01-002-引擎窄放行与遗留收口`（W-1 / W-2 / E-3） |
+| 2026-10-10 | 补记 | **TOOL-INTV A+B 批联动记账**（A5-a 预防，防"引擎已改、规范未跟"）：A 批 6 文件（phase-01 / phase-steps / phase-02 / cross-review-protocol + 2 模板）+ B 批 9 文件（phase-04 新增 Step 5.5b 模式候选登记 / phase-07 Step 3 附节「知识资产抽取」/ startup-protocol 惰性加载新增 `project/lessons-learned.md` 行 / lessons-learned（engine+project）置信度列 + 01-03 蒸馏窗口 + 模式候选区 / context-discipline 01 行 / 2 模板 / 本文件）——全文见 `engine/evolution-safety.md` 变更记录 2026-10-10 两行。收口实测：A8 扫描 46 个 engine md = OK（等待点指针完备）；A4 本项目侧零新增（B2/B3 兜底文档"不写全路径反引号"约束生效）；模板 doc_lint 不做（评审 A#12） |

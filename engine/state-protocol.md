@@ -589,6 +589,7 @@ STATUS=none
 | `PHASE` | `state.yaml.current_phase` | `"01"` ~ `"07"`；无迭代时为 `-` |
 | `TASKS` | `state.yaml.tasks_completed/tasks_total` | `X/Y` 格式；无任务时为 `0/0` |
 | `BLOCKERS` | `state.yaml.blockers` 数组长度 | 整数 |
+| `UPDATED` | 写入时刻（`scripts/state-apply.py` 自动写入；人工/文件工具写 ACTIVE 时建议同步该字段） | `YYYY-MM-DDTHH:MM`（缺省时迭代看板显示为 `—`） |
 
 > **向下兼容**：第2行不存在（旧格式单行）→ Agent 回退读 state.yaml（当前行为，无退化）。第2行存在但怀疑过时 → 轻量校验（见 §6.5）。
 
@@ -952,3 +953,30 @@ function write_state_yaml(iteration_id, new_content):
 |------|------|------|
 | v1 | 2026-07-22 | 初始版本：乐观锁 + 文件锁（方案C） |
 | v2 | 2026-07-22 | 修复 #1 锁创建非原子性（文件→`mkdir`）；修复 #2 双 runtime 目录（§9.0 canonical RUNTIME_DIR）；新增 TTL 60s 自动过期；新增 STATE_FORCE_WRITE 逃生口 |
+
+---
+
+### 9.6 脚本通道（`scripts/state-apply.py` · ★ 2026-10-03 PERF-1 新增）
+
+> **依据**：PERF-1 实测 —— 状态更新的耗时单位是**模型 step 数**（一次更新实测 2 个 step ≈ 105s；写入载荷生成占所在 step 11%~62%）。
+> §9.1~9.4 的手工串行步骤保留为**降级/复杂路径**；**意图式命令**把「读 state」的职责移入脚本，使简单更新压到 **1 个 step**。
+
+**命令（幂等）**：
+
+| 命令 | 语义 |
+|------|------|
+| `summary --text "…"` | `last_session_summary` + `last_updated` |
+| `step-complete --id <id>` / `step-skip --id <id> --reason "…"` | `phase_steps[]` 状态跃迁 |
+| `task-done [--id <id>]` | `tasks_completed+1` + 从 `tasks_pending` 移除 |
+| `phase-advance --to <NN> --confirm-by <qq#N\|ide\|handoff\|bypass> [--quote "…"] [--gate-result …]` | 旧阶段入 `phase_history` + `current_phase` 推进 + `phase_confirm`（**缺 confirm 参数 ⇒ 拒绝**；`by=ide` 时 `--quote` 必填） |
+| `blocker-add/rm` · `defect-add/close` | `blockers[]` / `defects[]` |
+| `patch --file <json>` | 顶层标量覆盖（**仅已存在键**；逃生口） |
+
+**单次调用内部保证**（与 §9.1~9.4 等价）：加锁（mkdir + TTL 60s）→ 读 canonical → **幂等检查** → 文本级改字段 → `version+1` / `last_updated` → 变更前重读比对（乐观锁）→ 备份 `runtime/snapshots/` → **双副本写** → 两侧 ACTIVE Line2（含 `UPDATED`）→ **单源校验**（同进程执行 `scripts/validate-state.py`；失败 ⇒ state + ACTIVE **双侧回滚**）→ 自留痕 → 释放锁。
+环境变量：`STATE_FORCE_WRITE=1`（逃生口，跳过锁与版本比对）、`STATE_APPLY_ROOT`（演练/隔离根）、`STATE_APPLY_SESSION`（留痕 session）。
+
+**审计等价性（★ 评审硬要求）**：命令通道不经文件工具 ⇒ 文件通道的相位守卫 / S8 留痕告警**不触发**，由脚本自留痕**等价替代**：① `gate-audit.log` 记 `STATE_APPLY` tag（cmd / iter / version 变迁）；② `write-claims.jsonl` 追加同构条目；③ `phase-advance` 强制 `phase_confirm` 参数（等价 S8）。
+
+**不覆盖**（仍走 §二-A 手工协议或文件工具）：重新打开 10 步协议、归档重命名、多 Story 全量重置、`stories[]` 深层结构。
+
+**回归**：`scripts/run-state-tests.py`（T1~T10：全链路 / 幂等 / 锁占用 / TTL 恢复 / confirm 负向 / advance 正向 / patch 未知键 / 校验失败双侧回滚 / FORCE / 自留痕），隔离根 `runtime/state-apply-tests/` 执行，不触碰真实 state。

@@ -67,7 +67,7 @@
  *              回归：run-gate-tests.mjs 40/40 通过（2026-10-01）。
  */
 
-import { readFileSync, existsSync, appendFileSync, writeFileSync, statSync, mkdirSync, unlinkSync } from 'fs';
+import { readFileSync, existsSync, appendFileSync, writeFileSync, statSync, mkdirSync, unlinkSync, openSync, readSync, closeSync } from 'fs';
 import { join, dirname } from 'path';
 import { spawn } from 'child_process';
 
@@ -1913,9 +1913,111 @@ function resolveSessionBlocked() {
   return lastBlock;
 }
 
+// ── ★ TOOL-QQGATE 甲档（2026-10-07）：G1 观测期 —— 确认点 QQ 门登记校验 ──
+//   背景：#19 迭代 02/03 确认点漏发 QQ（Agent 直接 IDE 等待）；A=指针 B=附注已落，本判定补机制层兜底。
+//   判定：phase_steps 段内存在 status=pending 且 id 以 -user-confirm 结尾的步骤时，
+//   校验 tools/qqbot/service.log 尾部最后一条 `[ASK #N] HTTP 200` 行时刻 ≥ state last_updated（截到分比较）；
+//   未登记 ⇒ notify.qqbot.js **直发**提醒（不走 notify-enqueue//request —— 防 G1 自身制造登记证据，评审 S1）。
+//   豁免：超时静置（blocked+pause_reason 含"超时"，评审 S4）；测试态/手动开关（notifySilentReason）。
+//   去重：独立文件 qq-g1-notify.json（指纹=迭代|步骤|last_updated；勿与阻断通知单槽共用，评审 ERR）。
+//   观测期仅通知；转拦截形态另拍（评审记录 R-3）。任何失败仅留痕，不得影响既有阻断通知链。
+function checkUnregisteredUserConfirm() {
+  try {
+    // ① 活跃迭代（无 ACTIVE ⇒ 不触发）
+    let id = '';
+    try { id = String(readFileSync(join(RUNTIME_DIR, 'ACTIVE'), 'utf-8') || '').replace(/^\uFEFF/, '').trim().split(/\r?\n/)[0].trim(); } catch { return; }
+    if (!id || id === 'none') return;
+    let raw = '';
+    try { raw = readFileSync(join(RUNTIME_DIR, id + '.state.yaml'), 'utf-8'); } catch { return; }
+    // ② 超时静置豁免（等待已按 waiting-protocol §3 退化，不再提醒）
+    if (/phase_status:\s*"blocked"/.test(raw) && /pause_reason:[^\n]*超时/.test(raw)) {
+      audit('G1_CHECK_SKIP', 'timeout-degraded :: ' + id);
+      return;
+    }
+    // ③ 命中判定：限定 phase_steps 段内解析（勿扫全文件 - id:，评审 INFO）
+    let inSteps = false, curId = '', hit = '';
+    for (const ln of raw.split(/\r?\n/)) {
+      if (/^phase_steps:/.test(ln)) { inSteps = true; continue; }
+      if (inSteps && /^[A-Za-z_]/.test(ln)) break;
+      if (!inSteps) continue;
+      const mi = ln.match(/^\s*-\s*id:\s*"([^"]+)"/);
+      if (mi) { curId = mi[1]; continue; }
+      if (curId && /-user-confirm$/.test(curId) && /^\s*status:\s*"?pending"?\s*$/.test(ln)) { hit = curId; break; }
+    }
+    if (!hit) return;
+    // ④ service.log 尾部（≤64KB）找最后一条 ASK 登记行
+    let lastAsk = '';
+    try {
+      const slog = join(PROJECT_DIR, 'tools', 'qqbot', 'service.log');
+      const st = statSync(slog);
+      const len = Math.min(st.size, 65536);
+      const buf = Buffer.alloc(len);
+      const fd = openSync(slog, 'r');
+      try { readSync(fd, buf, 0, len, st.size - len); } finally { closeSync(fd); }
+      const lines = buf.toString('utf-8').split(/\r?\n/);
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const m = lines[i].match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}):\d{2} \[ASK #\d+\] HTTP 200/);
+        if (m) { lastAsk = m[1]; break; }
+      }
+    } catch { /* 无日志 = 判未登记（偏保守：宁可误报不漏报，评审 W-2） */ }
+    const lu = (raw.match(/^last_updated:\s*"?([^"\r\n]+?)"?\s*$/m) || [])[1] || '';
+    const luMin = String(lu).replace('T', ' ').slice(0, 16);
+    const askMin = lastAsk.slice(0, 16);
+    if (askMin && luMin && askMin >= luMin) {
+      audit('G1_CHECK_OK', 'iter=' + id + ' step=' + hit + ' last_ask=' + askMin + ' >= last_updated=' + luMin);
+      return;
+    }
+    // ⑤ 静默判定（测试态/手动开关 ⇒ 只留痕不发，评审 ERR-1）
+    const silent = notifySilentReason();
+    if (silent) {
+      audit('G1_CHECK_SKIP', 'silent=' + silent + ' :: iter=' + id + ' step=' + hit);
+      return;
+    }
+    // ⑥ 去重（独立单文件指纹窗口；指纹含 last_updated ⇒ state 变更后可再提醒）
+    const fp = [id, hit, luMin].join('|');
+    const now = Date.now();
+    let st2 = { fp: '', fpAt: 0 };
+    try { st2 = Object.assign(st2, JSON.parse(readFileSync(join(RUNTIME_DIR, 'qq-g1-notify.json'), 'utf-8'))); } catch { /* 无痕 */ }
+    if (st2.fp === fp && st2.fpAt && now - st2.fpAt < QQ_NOTIFY_FP_WINDOW_MS) {
+      audit('G1_CHECK_SKIP', 'dedupe :: ' + fp);
+      return;
+    }
+    try { writeFileSync(join(RUNTIME_DIR, 'qq-g1-notify.json'), JSON.stringify({ fp, fpAt: now }), 'utf-8'); } catch { /* 忽略 */ }
+    // ⑦ 直发提醒（notify.qqbot.js 单向，不带 #N —— 观测期数据收集，无需回复）
+    try {
+      const notifyPath = join(PROJECT_DIR, 'tools/qqbot/notify.qqbot.js');
+      if (!existsSync(notifyPath)) { audit('G1_CHECK_SKIP', 'notify.qqbot.js missing'); return; }
+      const payload = {
+        title: 'G1 观测期：确认点疑似未登记 QQ 门',
+        status: '存在 pending 的用户确认步骤，但未发现晚于 state 更新的 ask.js 登记证据',
+        rows: [
+          ['迭代', id],
+          ['确认步骤', hit],
+          ['state 更新于', luMin || '(未读到)'],
+          ['最后登记', askMin || '(service.log 无 ASK 行)'],
+        ],
+        next: '处理：在 IDE 内补登记 ask.js 或确认已用其他方式送达用户；本条为单向观测期提醒，无需回复',
+        prompt: 'G1 观测期提醒：确认点 ' + hit + ' 疑似未 ask.js 登记（迭代 ' + id + '）',
+        kind: 'gate',
+      };
+      const child = spawn(process.execPath, [notifyPath, '--json', JSON.stringify(payload)], {
+        detached: true, stdio: 'ignore', windowsHide: true,
+      });
+      child.unref();
+      audit('G1_CHECK_NOTIFY', 'iter=' + id + ' step=' + hit + ' last_ask=' + (askMin || '-') + ' last_updated=' + luMin);
+    } catch (e) {
+      audit('G1_CHECK_ERR', 'notify: ' + String((e && e.message) || e));
+    }
+  } catch (e) {
+    audit('G1_CHECK_ERR', String((e && e.message) || e));
+  }
+}
+
 /** Stop 入口：node .codebuddy/hooks/gate-check.mjs --stop-check */
 async function runStopCheck() {
   try {
+    // ★ TOOL-QQGATE 甲档：G1 观测期判定（独立 try/catch —— 失败不得影响既有阻断通知链，评审 WARN 强制项）
+    try { checkUnregisteredUserConfirm(); } catch (e) { audit('G1_CHECK_ERR', 'hook: ' + String((e && e.message) || e)); }
     const ev = resolveSessionBlocked();
     if (!ev) {
       audit('GATE_STOP_CHECK', 'no-real-block（无拦截 / 拦截后已放行 / 超窗）⇒ 不通知');

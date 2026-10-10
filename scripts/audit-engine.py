@@ -4,7 +4,7 @@
 
 用法：
     python scripts/audit-engine.py                  # 审计本 skill 实例
-    python scripts/audit-engine.py --src <DIR>      # 追加 A6 回流水位检查（源仓库目录）
+    python scripts/audit-engine.py --src <DIR>      # 追加 A6 回流水位检查（DIR = 引擎仓库根，含 engine/ 与 scripts/）
     python scripts/audit-engine.py --strict         # WARN 也计入退出码
 
 退出码：0 = 无 ERR；1 = 有 ERR（--strict 下含 WARN）
@@ -479,6 +479,11 @@ def a6_reflux(src_dir):
     if not os.path.isdir(src_dir):
         skip('A6', '源仓库目录不存在: %s' % src_dir)
         return
+    # ★ 2026-10-10（回流实测）：--src 必须传**引擎仓库根**（其下应有 engine/ 与 scripts/）。
+    #   历史多次误传上级目录（如 D:\sj-skills）⇒ 每条都判「源仓库缺失」，产出恒定 42 项**假水位**。
+    if not os.path.isdir(os.path.join(src_dir, 'engine')) and not os.path.isdir(os.path.join(src_dir, 'scripts')):
+        err('A6', '源仓库路径疑似传了上级目录（应传引擎仓库根，含 engine/ 与 scripts/）: %s' % src_dir)
+        return
     diffs = []
     for sub in ('engine', 'scripts'):
         d = os.path.join(SKILL_ROOT, sub)
@@ -507,7 +512,7 @@ def a6_reflux(src_dir):
 def main():
     ap = argparse.ArgumentParser(description='Engine 一致性审计（纯读）')
     ap.add_argument('--src', default=os.environ.get('IWF_ENGINE_SRC', ''),
-                    help='源仓库目录（A6 回流水位；缺省读 IWF_ENGINE_SRC）')
+                    help='引擎仓库根目录（含 engine/ 与 scripts/；A6 回流水位；缺省读 IWF_ENGINE_SRC）')
     ap.add_argument('--strict', action='store_true', help='WARN 也计入退出码')
     args = ap.parse_args()
 

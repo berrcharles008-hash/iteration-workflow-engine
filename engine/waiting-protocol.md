@@ -36,4 +36,4 @@
 
 - 阶段推进（`current_phase` 变更）须在**同一次写入**中落 `phase_confirm` 留痕段（schema 与 `by` 取值口径见 `state-protocol.md` §phase_confirm；执行条款见 `gate-protocol.md` §三-B）。
 - `by:"ide"` 必须附 `quote:`（用户通过语原文 + 时间戳）——无 quote 的 ide 留痕视为无效。
-- 观测期（RESUME-3 批次 3 路线 I）：`gate-check.mjs` 仅通知不拦截；强制化（G1 fail-closed）另行拍板。
+- 观测期（RESUME-3 批次 3 路线 I）：`gate-check.mjs` 仅通知不拦截；强制化（G1 fail-closed）另行拍板。★ **G1 观测期判定入口已落地（2026-10-07，TOOL-QQGATE 甲档）**：`--stop-check` 时校验 pending `-user-confirm` 步骤的 ask.js 登记证据（service.log `[ASK #N]` 行 vs `last_updated`），未登记 ⇒ notify.qqbot.js 直发单向提醒；超时静置态豁免；独立去重 `runtime/qq-g1-notify.json`。评审与转拦截前置：`runtime/TOOL-QQGATE-评审记录-3路.md`。

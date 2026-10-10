@@ -59,11 +59,14 @@ sj-iteration-workflow-engine/
 │   ├── template-injection.md        ← 变量注入协议
 │   ├── consistency-checklist.md     ← 文件一致性检查清单
 │   ├── lessons-learned.md           ← 事故案例库 + 复盘机制
+│   ├── capability-map.md             ← ★ 能力地图（11 域 · 状态标记 · 能力索引层）
+│   ├── doc-style-guide.md            ← 文档版式规范（drift 修复：原漏列）
 │   ├── evolution-safety.md          ← 自修改安全协议（快照/回滚）
 │   ├── gate-decision-table.md       ← 门禁决策表
 │   ├── startup-protocol-step-e.md   ← 每日工作日志协议
 │   ├── startup-protocol-step-a5.md  ← Step A.5 自检详情（惰性）
 │   ├── engine-version.template.txt  ← 版本号模板
+│   ├── gate/                        ← 门禁实现（gate-check.mjs；drift 修复：原未收录）
 │   └── templates/                   ← 阶段文档模板
 │       ├── phase-01-需求记录.md
 │       ├── phase-01-需求文档-lite.md
@@ -82,7 +85,8 @@ sj-iteration-workflow-engine/
 │       ├── L3-glossary.example.md   ← 知识库 L3 术语映射模板
 │       ├── project-lessons-learned.example.md
 │       ├── review-models.example.json
-│       └── cold-start-gate-nucleus.md ← 冷启动门禁微核模板 (P-045)
+│       ├── cold-start-gate-nucleus.md ← 冷启动门禁微核模板 (P-045)
+│       └── agent-prompt-examples.example.md ← Agent 派发示例（drift 修复：原漏列）
 ├── design/                          ← 设计文档（分层架构、方案分析等）
 ├── scripts/                         ← 工具脚本
 │   ├── review-models-configurator.py
@@ -97,6 +101,8 @@ sj-iteration-workflow-engine/
 ```
 
 ### 核心机制
+
+> ★ `engine/capability-map.md` = 全部能力的索引层（11 域 · 78 项 · 状态标记）；本 README 只列目录与核心机制，新增/变更机制后须同批更新能力地图。
 
 #### 三道门禁
 
@@ -209,11 +215,15 @@ sj-iteration-workflow-engine/
 │   ├── template-injection.md        ← Variable injection protocol
 │   ├── consistency-checklist.md     ← Consistency check list
 │   ├── lessons-learned.md           ← Incident case library
+│   ├── capability-map.md             ← Capability map (11 domains · status marks · capability index layer)
+│   ├── doc-style-guide.md            ← Document style guide (drift fix: previously missing)
 │   ├── evolution-safety.md          ← Self-modification safety
 │   ├── gate-decision-table.md       ← Gate decision table
 │   ├── startup-protocol-step-e.md   ← Daily work log protocol
 │   ├── engine-version.template.txt  ← Version template
+│   ├── gate/                        ← Gate implementation (gate-check.mjs; drift fix: previously missing)
 │   └── templates/                   ← Phase document templates
+│       └── agent-prompt-examples.example.md ← Agent dispatch examples (drift fix: previously missing)
 ├── design/                          ← Design documents (layering, analysis, etc.)
 ├── scripts/                         ← Tool scripts
 │   ├── review-models-configurator.py
@@ -228,6 +238,8 @@ sj-iteration-workflow-engine/
 ```
 
 ### Core Mechanisms
+
+> ★ `engine/capability-map.md` = the index layer of all capabilities (11 domains · 78 items · status marks); this README lists only the directory tree and core mechanisms — update the capability map in the same batch as any mechanism change.
 
 #### Three Gates
 

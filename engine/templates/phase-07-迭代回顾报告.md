@@ -34,6 +34,7 @@
 | 开始日期 | {日期} |
 | 完成日期 | {日期} |
 | 实际耗时 | {估算} |
+| 阶段耗时明细 | 见 `docs/iterations/{ITERATION_ID}/阶段消耗.md`（机器自动生成，勿手改；双口径逐阶段表，数据源 `runtime/metrics/phase-aggregates.csv`） |
 
 ## 二、本次迭代总结
 
@@ -56,7 +57,7 @@
 
 ## 四、模式沉淀
 
-> 以下模式将写入 `engine/lessons-learned.md` 模式库。每个模式一个条目块 —— 机制写在"做法"里，便于直接照抄复用。
+> 以下模式将写入 `project/lessons-learned.md` 模式库。每个模式一个条目块 —— 机制写在"做法"里，便于直接照抄复用。
 
 #### P-0XX · {模式名称}（error）
 

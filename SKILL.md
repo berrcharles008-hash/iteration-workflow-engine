@@ -48,7 +48,7 @@ config:
 | # | 对象 | 纪律 |
 |:--:|------|------|
 | 1 | 规格/计划类（`requirements/`、`03-技术方案.md`、任务清单） | 先 `search_content` 定位 → 再 `read_file offset/limit` 只读命中区间 |
-| 2 | 状态文件（`state.yaml`） | 只读 `current_phase` / `phase_steps` / `tasks_*` 区间（~50 行），禁全文回读 |
+| 2 | 状态文件（`state.yaml`） | 只读 `current_phase` / `phase_steps` / `tasks_*` 区间（~50 行），禁全文回读；★ **写入优先走 `scripts/state-apply.py`**（意图式命令，省 1 个 step；见 `state-protocol.md` §9.6）|
 | 3 | 源码 | 仅在"即将编辑 / 落盘前核对"时读，只读待替换片段，禁预读整个类文件 |
 | 4 | 引擎文件 | 只读**当前步骤**涉及的文件，禁"预读全套"；**到达确认等待点时**读 `engine/waiting-protocol.md`（全确认点统一等待细则） |
 | 5 | 大产物（>300 行） | 要求产出方给"摘要 + diff 片段" |
@@ -148,3 +148,4 @@ Agent 准备调用写入类工具时 → **必须先读 `engine/gate-protocol.md
 17. **★★ 引擎自身修改 = 「引擎演进安全协议」**（用户 2026-09-20 立法，最高优先级）：**任何**对本 skill 的修改（`engine/**`、`scripts/**`、`hooks/**`、`SKILL.md`、模板等）**禁止"先改后报"** —— 四件套前置审批、核心文件快照、收口验证（3 脚本 + 回流水位）**全部**见 `engine/evolution-safety.md`，此处**不再复述**（★ 单点权威，防两份口径漂移）。
 
 > 完整流程定义见 `engine/workflow-engine.md`，门禁规则见 `engine/gate-protocol.md`。
+> 能力全貌（11 域 · 状态标记）见 `engine/capability-map.md`。

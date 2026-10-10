@@ -81,6 +81,27 @@
 > **禁止**：Agent 以"按需"为借口统一跳过。必须在报告中说明判断过程。
 > **禁止**：将模式写入列为"候选/建议/待后续迭代"。写报告 ≠ 写模式库。
 
+### Step 3 附：知识资产抽取（B2/B3 · 骨架/问答 → 项目层模板）
+
+**触发**：🟡 按需 / 🔴 执行——本迭代 01/02/03 产物中出现"可跨需求复用的骨架或问答模式"时。
+
+**流程**：
+1. 提取候选：从 `01-需求记录.md` / `02-需求评审.md` / `03-技术方案.md` 提取通用结构
+   （反复出现的段落组织、有效问答序列、方案骨架）。
+2. 对账：与项目层**同名**模板 diff 对比（不存在 ⇒ 首次抽取时以 engine 版为基底创建）。
+3. 改写：以 engine 版为基底**增量改写**（只增不改引擎既有章节语义）。
+4. ★ **落盘窗口（v2，评审 B#1）**：07 阶段写入面不含项目层模板目录 ⇒ 07 内**只产出
+   "抽取清单 + 改写草案"**（落 07 回顾报告附录）；实际改写/创建动作在**下迭代 01-03 窗口**
+   （免开闸）或用户开闸时执行。
+5. 兜底：无法归入阶段模板形态的产物 ⇒ 形成知识资产文档（项目层，首次产出时创建；
+   引用处不写全路径反引号，防 audit A4 WARN）。
+6. 无增量 ⇒ 跳过并注明"本迭代无模板增量"。
+
+**维护义务**：engine 版更新后（引擎演进），项目层同名模板须做一次 diff 对账（防分叉漂移）。
+
+**候选区处理（B1 配套）**：对 `project/lessons-learned.md`「模式候选区」逐条处置——
+转正（分配 P-编号入活跃表，带置信度）或丢弃（删除）；不允许无期限保留。
+
 ### Step 3.5：工作流一致性审计（★ 强制 · 各复杂度）
 
 **执行**：`python scripts/audit-engine.py`（纯读、不写文件、< 5s；规范页 = `engine/consistency-checklist.md`）。
@@ -135,9 +156,49 @@
 
 **6.2 归档操作**：
 
-- 将 `iteration_status` 保持为 `"completed"`，`phase_status` 设为 `"completed"`
-- **释放 ACTIVE 指针**：将 `runtime/ACTIVE` 写入 `"none"`
+- **① 登记 07 完成条目**（★ 必须先于 ACTIVE 释放）：
+  缺此步 ⇒ `phase_history` 无 07 条目 ⇒ `phase-align.mjs` 无法构成 07 窗
+  ⇒ 阶段消耗表永无 07 行、07 轮次落 unphased 尾隙（实证 TOOL-07PH / 迭代 2026-10-08-001）。
+  在 canonical state（`.claude/skills/iteration-workflow/runtime/<迭代ID>.state.yaml`）的 `phase_history` 末尾**手写**追加 3 行
+  （格式红线：条目行 2 空格缩进 + `- `、字段行 4 空格缩进、值带双引号、`completed_at` 精确到分——错一个字符 metrics 解析器即漏）：
+  `  - phase: "07"` / `    status: "completed"` / `    completed_at: "{YYYY-MM-DDTHH:MM}"`；
+  同笔将 `phase_status` 改为 `"completed"`。然后两步收口：
+  - a. `python scripts/validate-state.py .claude/skills/iteration-workflow/runtime/<迭代ID>.state.yaml`
+    → ERROR 0 才继续。★ 必须显式传 canonical 路径：省略 path 会解析 `.codebuddy` 镜像侧旧内容；
+  - b. `python scripts/state-apply.py summary --text "<回顾完成的新总结>"` 归一。
+    ★ 文本必须更新 ⇒ 非幂等 ⇒ 才走通用收尾补锁/双副本镜像/备份/validate/留痕；
+    幂等 return 0 时既不校验也不镜像（模式先例 P-130 + 演练 2026-10-09）。
+- `iteration_status` 保持为 `"completed"`（`phase_status` 已在 ① 改为 `"completed"`）
+- **② 释放 ACTIVE 指针**：将 `runtime/ACTIVE` 写入 `"none"`
+- **③ 刷新机器投影**（★ 归档后执行；全部写入走脚本通道，勿用文件工具直改 docs/）：
+  投影数据源含 `phase-aggregates.csv`（由 `phase-align` 从 state + 消息库重算）——07 条目刚写入 state
+  ⇒ 必须**先重算聚合**再刷投影；只重刷看板不足（除非其后恰有一次全量刷新，不可依赖）。
+  命令（CWD 无关，脚本自推导路径）：
+  - `node .codebuddy/skills/iteration-workflow/runtime/metrics/refresh-metrics.mjs --force`
+    （全链：扫描 → 迭代对齐 → 阶段聚合 → board 强刷；`--force` 绕过 board 6h 节流）
+  - `python tools/gen_doc_index.py`（同族索引；`--check` 为只读核验）
+  - `python tools/gen_iteration_board.py --report`（汇报看板 `项目管理/一期汇报看板.html`；
+    ★ 语义：其渲染失败 = 源文档表格定位缺失（`render_report()` 返回 `not missing`）⇒ 打印「未定位到…」且 **exit 2**
+    ⇒ 登记 `runtime/TOOLING-TODO.md`，**不阻断归档**；阶段消耗/执行看板/索引不受影响，因三者为前两条命令产物）
+  **自检判据（三条全中才算完成）**：
+  a. docs/iterations/<迭代ID>/阶段消耗.md 出现本迭代 07 行；
+  b. docs/iterations/BOARD.md 的"当前正在做"不再指向本迭代
+     （可执行核对：`Select-String -Path docs/iterations/BOARD.md -Pattern "<迭代ID>" -Quiet` 应无命中）；
+  c. docs/iterations/INDEX.md 的阶段矩阵与缺口清单与本迭代终态一致。
+  ★ 口径备忘（两类"看不到行"须分清）：
+  ① **有窗 0 轮**（06 发布动作跳过等）⇒ 投影输出该阶段**占位行**（`rounds=0` + 备注「该阶段窗内无模型轮次」；
+     轮已归相邻阶段，**非数据丢失**；占位行各列恒 0 ⇒ 不破坏 Σ 对账恒等）；
+  ② **零宽窗**（阶段 `completed_at` 与前序同值，多为 date 级时间戳的历史迭代，如 2026-09-20-001）
+     ⇒ 该阶段**无窗可占位**（`phase-align` 设计上跳过零宽/倒挂窗 + WARN）⇒ 仍无逐阶段行，属已知欠账（工单 METRICS-7）。
+  ★ 失败处置：输出 SKIP(lock held by live pid) ⇒ 约 1 分钟后重跑；仍失败 ⇒ 登记 `runtime/TOOLING-TODO.md`
+  并补跑 `--board-only`（仅补投影；下次 hook 全量亦会自动补）。
+  ★ 次序：本步在 ② 之后（判据 b 要求投影反映"无活跃迭代"终态）；其写入经脚本子进程完成，不受门禁影响
+  （P-088 语境）——若确需人工修补 docs/ 文件，须临时恢复 ACTIVE 或改走脚本通道。
+  ★ 手工索引：`docs/iterations/README.md`（人工写主题/范围，非生成物）的更新属 P-088 收口清单，
+  须在释放 ACTIVE **前**完成。
+  ★ 时机：须在本迭代全部 state 写入完成后执行（含 §6.3 `self_evolve`）。
 - 此时迭代才算**真正完成**
+- ★ 回退：① 执行后若回顾被用户推翻，先回退该条目（`status` → `in_progress`、删 `completed_at`、`phase_status` → `in_progress`）再重做回顾，勿直接重跑
 
 **6.3 自进化健康度记录**：
 
@@ -153,7 +214,7 @@ self_evolve:
 
 > **版式纪律**：产出文档须遵循 `engine/doc-style-guide.md`（模式条目用"编号 + 要点列表"，不塞表格）；生成后自检 `python scripts/doc_lint.py <文件>`（ERROR 必修）。
 
-**交付标准**：回顾报告完成，模式库已实际写入，ACTIVE 释放，用户确认"回顾完成"；**文档版式自检 ERROR 0**（`python scripts/doc_lint.py <文档>`）
+**交付标准**：回顾报告完成，模式库已实际写入，**知识资产抽取已评估（有增量 / 无）+ 候选区已清池**，ACTIVE 释放，用户确认"回顾完成"；**投影已刷新**（阶段消耗明细出现 07 行 + 看板/索引终态一致）；**文档版式自检 ERROR 0**（`python scripts/doc_lint.py <文档>`）
 ★ 等待方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`。
 
 ### ★ 流程变更说明
