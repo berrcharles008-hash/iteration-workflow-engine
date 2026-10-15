@@ -133,6 +133,21 @@ function parseModelList(text) {
 function isValidModelName(m) {
   return /^[\w.:\-]{1,64}$/.test(String(m || ''));
 }
+
+// ── ★ FIX-41（2026-10-10）：job 级 permissionMode —— headless 接管卡死根治 ─────
+//   根因实证（job f1f89abf / d6aad4b0，两份 state.json needs 字段）：
+//   dispatchJob 不带 permissionMode ⇒ job 继承 serve 进程级 acceptEdits ⇒
+//   首条 Bash（连 ls）即触发权限审批 ⇒ 后台自动化无审批 UI（bundle
+//   "background-automation-no-approval-ui"）⇒ job 永久卡 blocked ⇒
+//   hub reply 只进 inbox 不被消费（f1f89abf/inbox 堆 4 条实证）+ 锁不释放 +
+//   后续 QQ 确认全被 HANDOFF SKIP。hub /takeover/new 早已带
+//   jobPermissionMode=bypassPermissions（E2E job 32e3ddd8 实证），
+//   仅 qqbot 派发路径漏配 ⇒ 本枚举与 hub.config serve.jobPermissionMode 对齐。
+//   ★ bypassPermissions 语义：跳过常规审批，HIGH/CRITICAL 仍询问（CLI --help 原文）。
+const PERMISSION_MODES = ['acceptEdits', 'bypassPermissions', 'default', 'plan', 'dontAsk', 'auto'];
+function isValidPermissionMode(m) {
+  return PERMISSION_MODES.indexOf(String(m || '')) >= 0;
+}
 /**
  * 取模型清单（异步；cb 只回调一次）。
  *   ok:true  ⇒ { ok, models:[…], source:'help'|'cache' }
@@ -203,7 +218,15 @@ function start(opts) {
     command: p.node,
     args: [p.entry, '--serve', '--port', String(opts.port), '--auth', 'password',
            '--permission-mode', 'acceptEdits'],
-    options: { cwd: opts.cwd || process.cwd(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] },
+    options: {
+      cwd: opts.cwd || process.cwd(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+      // ★ FIX-45（2026-10-11）：PIVAS_HANDOFF_OWNER 随 serve 进程注入 —— FIX-17e 的锁豁免
+      //   （gate-check 的 handoffLockActive 见此变量即直接放行）此前只在 print 档生效
+      //   （qqbot-service 用 exec 起 CLI 时才注入）；serve 档的 job 由 serve spawn、无此变量
+      //   ⇒ job 写入被自己的接管锁拦（2026-10-11 实证：job c10b6fe6 撞锁 20 分钟无法写立项文件）。
+      //   serve 及其全部子进程（job CLI → hook）继承本变量。
+      env: Object.assign({}, process.env, { PIVAS_HANDOFF_OWNER: '1' }),
+    },
     tier: 'A',
   };
 }
@@ -234,6 +257,10 @@ function dispatchJob(inst, opts, cb) {
   };
   const model = isValidModelName(opts.model) ? String(opts.model) : '';
   if (model) body.model = model;
+  // ★ FIX-41：job 级权限档（缺省 = 不传 = 继承 serve 进程级，acceptEdits 会卡 Bash 审批）。
+  //   非法值**显式丢弃**而非抛错：与 model 同哲学，形态校验在此，取值决策在业务层。
+  const perm = String(opts.permissionMode || '');
+  if (perm && isValidPermissionMode(perm)) body.permissionMode = perm;
   const payload = JSON.stringify(body);
   const headers = Object.assign(apiHeaders(), {
     'Content-Type': 'application/json; charset=utf-8',
@@ -283,11 +310,83 @@ function jobStatus(inst, jobId, cb) {
         if (Array.isArray(arr)) job = arr.filter((x) => String(x && x.id) === String(jobId))[0] || null;
       } catch (e) { /* fallthrough */ }
       if (res.statusCode === 200 && job) cb(null, job);
-      else cb(new Error('HTTP ' + res.statusCode + (job ? '' : ' job-not-found')));
+      else {
+        // ★ FIX-42（2026-10-10）：区分「job 不存在」与「真查询失败」——
+        //   job 结束（done/failed…）后会被 serve 移出活跃列表 ⇒ HTTP 200 但匹配不到 id
+        //   （= 终态信号，调用方据此收尾释锁；2026-10-10 锁僵尸实证）。真失败（超时/5xx/网络）
+        //   不带此 code ⇒ 调用方保持 fail-open。
+        const e = new Error('HTTP ' + res.statusCode + (job ? '' : ' job-not-found'));
+        if (res.statusCode === 200 && !job) e.code = 'job_not_found';
+        cb(e);
+      }
     });
   });
   req.on('error', (e) => cb(e));
   req.on('timeout', () => { try { req.destroy(new Error('jobStatus timeout')); } catch (e) {} });
+  req.end();
+}
+
+// ── ★ FIX-43（2026-10-11）：列活跃 jobs（GET /api/v1/jobs 全量）──────────────
+//   用途：孤儿 job 进程巡检（qqbot-service sweepOrphanJobs）——判定某 sessionId 是否仍活跃。
+//   契约同 FIX-42 的 jobStatus（{data:{jobs:[…]}}；hub 已同款使用）。
+//   ★ 失败必须显式（cb(err)）——调用方据此**放弃本轮巡检**（宁可不杀，绝不误杀进行中 job）。
+function listJobs(inst, cb) {
+  const port = Number(inst && inst.port);
+  if (!port) { cb(new Error('listJobs: 缺 port')); return; }
+  const req = http.request({
+    host: '127.0.0.1', port: port, path: '/api/v1/jobs', method: 'GET',
+    headers: apiHeaders(), timeout: 15000,
+  }, (res) => {
+    let buf = '';
+    res.setEncoding('utf8');
+    res.on('data', (d) => { buf += d; });
+    res.on('end', () => {
+      let arr = null;
+      try {
+        const j = JSON.parse(buf);
+        arr = (j && j.data && (j.data.jobs || j.data)) || [];
+      } catch (e) { /* fallthrough */ }
+      if (res.statusCode === 200 && Array.isArray(arr)) cb(null, arr);
+      else cb(new Error('HTTP ' + res.statusCode + ' listJobs-bad-body'));
+    });
+  });
+  req.on('error', (e) => cb(e));
+  req.on('timeout', () => { try { req.destroy(new Error('listJobs timeout')); } catch (e) {} });
+  req.end();
+}
+
+// ── ★ FIX-45（2026-10-11）：job 注入答复（POST /api/v1/jobs/<id>/reply {text}）────────
+//   契约（hub server.js:598 实证）：body {text} → {data:{delivered:true|false, saved:…}}。
+//   用途：答案回传直连 —— QQ 答复落盘后由 qqbot 服务主动注入活跃 job。
+//   背景：ask.js 只登记不等待；wait-answer.ps1 分片轮询在 job 侧常失败（PS 环境/工具超时）
+//   ⇒ 答复写文件后无人读取、job 停在等输入（2026-10-11 实证：用户已回 A#3/A#4，job 20 分钟无反应）。
+function replyJob(inst, jobId, text, cb) {
+  const port = Number(inst && inst.port);
+  if (!port || !jobId) { cb(new Error('replyJob: 缺 port/jobId')); return; }
+  const payload = JSON.stringify({ text: String(text || '') });
+  const req = http.request({
+    host: '127.0.0.1', port: port, path: '/api/v1/jobs/' + encodeURIComponent(String(jobId)) + '/reply',
+    method: 'POST',
+    headers: Object.assign(apiHeaders(), {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Length': Buffer.byteLength(payload),
+    }),
+    timeout: 30000,
+  }, (res) => {
+    let buf = '';
+    res.setEncoding('utf8');
+    res.on('data', (d) => { buf += d; });
+    res.on('end', () => {
+      let j = null;
+      try { j = JSON.parse(buf); } catch (e) { /* fallthrough */ }
+      const d = j && j.data ? j.data : null;
+      if (res.statusCode === 200 && d && d.delivered) cb(null, d);
+      else cb(new Error('HTTP ' + res.statusCode + ' delivered=' + (d ? d.delivered : '?') + ' ' + String(buf).slice(0, 100)));
+    });
+  });
+  req.on('error', (e) => cb(e));
+  req.on('timeout', () => { try { req.destroy(new Error('replyJob timeout')); } catch (e) {} });
+  req.write(payload);
   req.end();
 }
 
@@ -423,11 +522,14 @@ module.exports = {
   apiHeaders: apiHeaders,
   dispatchJob: dispatchJob,
   jobStatus: jobStatus,   // ★ TOOL-QQNEWITER（V2-9：job 终态轮询）
+  listJobs: listJobs,     // ★ FIX-43（孤儿 job 进程巡检的活跃列表判定）
+  replyJob: replyJob,     // ★ FIX-45（答案回传直连：QQ 答复注入活跃 job）
   decodeConsoleBytes: decodeConsoleBytes,   // ★ TOOL-QQCONT（供离线自测）
   fetchModelList: fetchModelList,           // ★ TOOL-QQCONT（W2-1：模型清单，TTL 缓存）
   parseModelList: parseModelList,           // ★ TOOL-QQCONT（纯函数，供离线自测）
   isValidModelName: isValidModelName,       // ★ TOOL-QQCONT（纯函数，供离线自测）
   applyModelToCommand: applyModelToCommand, // ★ TOOL-QQCONT（F2-c：print 降级路径模型注入）
+  isValidPermissionMode: isValidPermissionMode, // ★ FIX-41（job 级权限档枚举，供离线自测）
   TIER: TIER,
 };
 

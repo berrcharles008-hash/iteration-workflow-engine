@@ -13,19 +13,40 @@
 # v2.3.0 — GAP-4/B：新增 Step 4b —— CodeBuddy settings.json 的 PreToolUse 幂等注册
 #          （hook 文件存在 ≠ 被 IDE 执行；缺注册即静默失效，故安装时自动补齐 / 保守合并）
 # v2.3.1 — GAP-4/加固②：新增 Step 7b —— MEMORY.md 注入配额自检（余量 <10% 预警 / 超限告警）
+# v2.4.0 — ★ FIX-49（2026-10-15）：Detect-IDE 探测顺序反转（.codebuddy 优先）+ env 加分信号
+#          + 双目录并存需显式 -Ide / -Force（防把宿主 skill 装到废弃侧）
 # ============================================================
 
 param(
     [string]$Ide = $null,
     [switch]$DryRun = $false,
-    [switch]$NoBackup = $false
+    [switch]$NoBackup = $false,
+    [switch]$Force = $false
 )
 
-# ── Step 1: 检测 IDE 环境（与 install.sh 统一优先级）────
+# ── Step 1: 检测 IDE 环境（与 install.sh 统一优先级 · ★ FIX-49 R24 修订）────
+# ★ FIX-49（2026-10-15 · R24）：探测顺序**反转**（`.codebuddy` 优先）+ env 加分信号 +
+#   双目录并存且未显式 `-Ide` ⇒ 警告并要求确认（`-Force` 才继续）——
+#   动因：双目录并存仓库下旧顺序（`.claude` 优先）会把 CodeBuddy 宿主的 skill 装到废弃侧
+#   （09-28 翻转后通道敞开；见 runtime/FIX-49-四件套.md §②行 27 / ①-补 复核补充）。
 function Detect-IDE {
     if ($Ide) { return $Ide }
-    if (Test-Path ".claude")    { return "claude-code" }
-    if (Test-Path ".codebuddy") { return "codebuddy" }
+    $hasCodeBuddy = Test-Path ".codebuddy"
+    $hasClaude = Test-Path ".claude"
+
+    if ($hasCodeBuddy -and $hasClaude -and -not $Force) {
+        Write-Warning "检测到 .codebuddy 与 .claude 双目录并存（未显式指定目标侧）——FIX-49（R24）要求显式确认。"
+        Write-Host "  ❌ 已中止，避免把宿主 skill 装到错误一侧。请显式指定：" -ForegroundColor Red
+        Write-Host "     · 装到 CodeBuddy :  -Ide codebuddy" -ForegroundColor Yellow
+        Write-Host "     · 装到 Claude Code :  -Ide claude-code" -ForegroundColor Yellow
+        Write-Host "     · 或接受默认（.codebuddy 优先）:  -Force" -ForegroundColor Yellow
+        exit 2
+    }
+    # env 加分信号（shim 双 env 回退暗示 CLI 环境可能缺 ⇒ 仅作加分，不作主判据）
+    if ($env:CODEBUDDY_PROJECT_DIR -and $hasCodeBuddy) { return "codebuddy" }
+    if ($env:CLAUDE_PROJECT_DIR -and $hasClaude)       { return "claude-code" }
+    if ($hasCodeBuddy) { return "codebuddy" }
+    if ($hasClaude)    { return "claude-code" }
     if (Test-Path ".cursor")    { return "cursor" }
     if ((Test-Path ".codex") -or (Test-Path ".codex/config.toml")) { return "codex" }
     return "generic"

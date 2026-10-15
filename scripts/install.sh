@@ -7,6 +7,8 @@
 # 支持 IDE：Claude Code / CodeBuddy / Cursor / Codex / Generic
 #
 # v2.1.0 — 038迭代：新增 Step 5 ACTIVE初始化 + Step 6模板注入验证 + Step 7多IDE冷启动微核
+# v2.2.0 — ★ FIX-49（2026-10-15）：detect_ide 探测顺序反转（.codebuddy 优先）+ env 加分信号
+#          + 双目录并存需显式 --ide / --force（防把宿主 skill 装到废弃侧）
 # ============================================================
 
 set -e
@@ -18,18 +20,25 @@ ENGINE_DIR="$(dirname "$SCRIPT_DIR")"
 # ── 参数解析 ──────────────────────────────────────────
 DRY_RUN=false
 IDE=""
+FORCE=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         --dry-run|-n)
             DRY_RUN=true; shift ;;
         --ide)
             IDE="$2"; shift 2 ;;
+        --force)
+            FORCE=true; shift ;;
         *)
             echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
-# ── Step 1: 检测 IDE 环境（统一优先级矩阵）────
+# ── Step 1: 检测 IDE 环境（统一优先级矩阵 · ★ FIX-49 R24 修订）────
+# ★ FIX-49（2026-10-15 · R24）：探测顺序**反转**（`.codebuddy` 优先）+ env 加分信号 +
+#   双目录并存且未显式 `--ide` ⇒ 警告并要求确认（`--force` 才继续）——
+#   动因：双目录并存仓库下旧顺序（`.claude` 优先）会把 CodeBuddy 宿主的 skill 装到废弃侧
+#   （09-28 翻转后通道敞开；见 runtime/FIX-49-四件套.md §②行 27 / ①-补 复核补充）。
 detect_ide() {
     if [ -n "$IDE" ]; then echo "$IDE"; return; fi
 
@@ -39,8 +48,17 @@ detect_ide() {
     ([ -d ".cursor" ] || [ -f ~/.cursor/hooks.json ]) && has_cursor=true
     ([ -d ".codex" ] || [ -f ".codex/config.toml" ] || command -v codex &>/dev/null) && has_codex=true
 
-    if $has_claude; then echo "claude-code"; return; fi
+    if $has_codebuddy && $has_claude && [ "$FORCE" != true ]; then
+        echo "❌ 检测到 .codebuddy 与 .claude 双目录并存（未显式指定目标侧）——" >&2
+        echo "   FIX-49（R24）要求显式确认，避免把宿主 skill 装到错误一侧：" >&2
+        echo "     · 装到 CodeBuddy : --ide codebuddy      · 装到 Claude Code : --ide claude-code" >&2
+        echo "     · 或接受默认（.codebuddy 优先）: --force" >&2
+        exit 2
+    fi
+    if [ -n "$CODEBUDDY_PROJECT_DIR" ] && $has_codebuddy; then echo "codebuddy"; return; fi
+    if [ -n "$CLAUDE_PROJECT_DIR" ] && $has_claude; then echo "claude-code"; return; fi
     if $has_codebuddy; then echo "codebuddy"; return; fi
+    if $has_claude; then echo "claude-code"; return; fi
     if $has_cursor; then echo "cursor"; return; fi
     if $has_codex; then echo "codex"; return; fi
     echo "generic"

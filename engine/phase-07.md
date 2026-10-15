@@ -63,6 +63,7 @@
 | step-2-issues | 问题清单（本次迭代遇到的问题） | ✅ | 精简 | 标准 | 完整 |
 | step-3-patterns | 模式沉淀（写入 lessons-learned 模式库） | — | 跳过 | 按需 | ✅ |
 | step-3-5-workflow-audit | 工作流一致性审计（`scripts/audit-engine.py`） | ✅ | ✅ | ✅ | ✅ |
+| step-3-6-attribution | 偏差归因 | — | 跳过 | ✅ | ✅ |
 | step-4-actions | 行动项（改进措施落实到人） | — | 跳过 | ✅ | ✅ |
 | step-5-lessons | 正向模式提炼（从原 06 step-3 迁移过来） | ✅ | ✅ | ✅ | ✅ |
 | step-6-archive | 回顾归档（更新 state.yaml 完成 07，释放 ACTIVE） | ✅ | ✅ | ✅ | ✅ |
@@ -117,6 +118,22 @@
 
 > **禁止**以"本次迭代与引擎无关"为由跳过 —— 该步骤检查的正是**引擎自身是否被改坏 / 改乱**。
 
+### Step 3.6：偏差归因（`|dev| > 50` 必写，否则标注"未触发"）
+
+> `mandatory` 取值以 `complexity-scoring.md` §二为准（🟢=`false` 跳过、🟡/🔴=`true`）。
+
+**取值来源（★ 不依赖 state 字段）**：看板（`docs/iterations/BOARD.md` / `board.html`）或 `phase-aggregates.csv` 的「预估 / 实际 / 偏差」三列；
+- 实际 = 该迭代窗口行的 `Σ sumElapsedMs`（净工时口径，含等待 ⇒ 日历跨度上界）；
+- 偏差 = `(实际 − 预估) / 预估 × 100`（看板渲染时现算，不落 state）。
+
+**判定与回写**：
+- **偏差绝对值 > 50**（即 `|dev| > 50`）：回顾报告**必写**归因（规模误判 / 缺陷返工 / 需求变更），并回喂基线；
+- **偏差绝对值 ≤ 50**：回顾报告中标注「未触发」；
+- **预估或实际缺失（`—`）**：标注「不可算」，不写归因。
+
+> ★ 归因结论写入 `07-迭代回顾/07-迭代回顾.md`；仅**已结束**迭代参与对账（进行中迭代不参与）。
+> ★ 判据为「看板 / CSV 取值」而非 state 字段（03 §4.5）。
+
 ### Step 5：正向模式提炼（★ 强制，60秒反思）
 
 **Step 5 执行流程**：
@@ -159,15 +176,18 @@
 - **① 登记 07 完成条目**（★ 必须先于 ACTIVE 释放）：
   缺此步 ⇒ `phase_history` 无 07 条目 ⇒ `phase-align.mjs` 无法构成 07 窗
   ⇒ 阶段消耗表永无 07 行、07 轮次落 unphased 尾隙（实证 TOOL-07PH / 迭代 2026-10-08-001）。
-  在 canonical state（`.claude/skills/iteration-workflow/runtime/<迭代ID>.state.yaml`）的 `phase_history` 末尾**手写**追加 3 行
+  在 canonical state（**`{IDE}/skills/iteration-workflow/runtime/<迭代ID>.state.yaml`** —— ★ FIX-49 v2.4：
+  canonical = **本宿主侧**，原硬编码 `.claude` 已废止）的 `phase_history` 末尾**手写**追加 3 行
   （格式红线：条目行 2 空格缩进 + `- `、字段行 4 空格缩进、值带双引号、`completed_at` 精确到分——错一个字符 metrics 解析器即漏）：
   `  - phase: "07"` / `    status: "completed"` / `    completed_at: "{YYYY-MM-DDTHH:MM}"`；
   同笔将 `phase_status` 改为 `"completed"`。然后两步收口：
-  - a. `python scripts/validate-state.py .claude/skills/iteration-workflow/runtime/<迭代ID>.state.yaml`
-    → ERROR 0 才继续。★ 必须显式传 canonical 路径：省略 path 会解析 `.codebuddy` 镜像侧旧内容；
-  - b. `python scripts/state-apply.py summary --text "<回顾完成的新总结>"` 归一。
-    ★ 文本必须更新 ⇒ 非幂等 ⇒ 才走通用收尾补锁/双副本镜像/备份/validate/留痕；
-    幂等 return 0 时既不校验也不镜像（模式先例 P-130 + 演练 2026-10-09）。
+  - a. `python scripts/validate-state.py {IDE}/skills/iteration-workflow/runtime/<迭代ID>.state.yaml`
+    → ERROR 0 才继续。★ 必须显式传 canonical 路径（**本侧**，FIX-49）：省略 path 时
+      解析口径见 `validate-state.py`（脚本自身侧）；
+  - b. `python scripts/state-apply.py summary --text "<回顾完成的新总结>"`（**单写本侧**：写 state + 本侧 ACTIVE Line2
+      + validate + 留痕；★ FIX-49 v2.4 起**不再镜像另一侧** —— 跨宿主接力前跑 `scripts/sync-runtime.py` 收敛）。
+    ★ 文本必须更新 ⇒ 非幂等 ⇒ 才走通用收尾补锁/写入/备份/validate/留痕；
+    幂等 return 0 时既不校验也不写入（模式先例 P-130 + 演练 2026-10-09）。
 - `iteration_status` 保持为 `"completed"`（`phase_status` 已在 ① 改为 `"completed"`）
 - **② 释放 ACTIVE 指针**：将 `runtime/ACTIVE` 写入 `"none"`
 - **③ 刷新机器投影**（★ 归档后执行；全部写入走脚本通道，勿用文件工具直改 docs/）：
@@ -180,11 +200,14 @@
   - `python tools/gen_iteration_board.py --report`（汇报看板 `项目管理/一期汇报看板.html`；
     ★ 语义：其渲染失败 = 源文档表格定位缺失（`render_report()` 返回 `not missing`）⇒ 打印「未定位到…」且 **exit 2**
     ⇒ 登记 `runtime/TOOLING-TODO.md`，**不阻断归档**；阶段消耗/执行看板/索引不受影响，因三者为前两条命令产物）
-  **自检判据（三条全中才算完成）**：
+  **自检判据（四条全中才算完成）**：
   a. docs/iterations/<迭代ID>/阶段消耗.md 出现本迭代 07 行；
   b. docs/iterations/BOARD.md 的"当前正在做"不再指向本迭代
      （可执行核对：`Select-String -Path docs/iterations/BOARD.md -Pattern "<迭代ID>" -Quiet` 应无命中）；
   c. docs/iterations/INDEX.md 的阶段矩阵与缺口清单与本迭代终态一致。
+  d. 偏差归因已落定：看板 / `phase-aggregates.csv` 的「预估 / 实际 / 偏差」三列可取；缺 `estimate_*`
+     或无 agg 行 ⇒ 输出 `—`（「不可算」，不阻断归档）；`|dev| > 50` ⇒ 回顾报告已写归因
+     （规模误判 / 缺陷返工 / 需求变更）并回喂基线，否则标注「未触发」（判据见 Step 3.6）。
   ★ 口径备忘（两类"看不到行"须分清）：
   ① **有窗 0 轮**（06 发布动作跳过等）⇒ 投影输出该阶段**占位行**（`rounds=0` + 备注「该阶段窗内无模型轮次」；
      轮已归相邻阶段，**非数据丢失**；占位行各列恒 0 ⇒ 不破坏 Σ 对账恒等）；

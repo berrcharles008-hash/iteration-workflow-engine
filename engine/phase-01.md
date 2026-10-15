@@ -16,6 +16,7 @@
    - **安全阀（v2，评审 C-11）**：≤20 条 且 ≤10K 字符；超限截断尾部并在记录中提示"已截断"。
    - 活跃区为空 ⇒ 静默跳过；注入后在 `01-需求记录.md` 结论摘要区记录"模式注入：N 条（P-xxx…）"。
    - ★ 一次性（仅进入 01 时），**不进核心必读 4 个**；读取量约 30 行，不破单轮 ≤500 行红线。
+   - ★ **超阈值时本窗口执行蒸馏**（`engine/lessons-learned.md` §七）：01-03 窗口 skill 全目录已豁免 ⇒ **免开闸**；仅 none 态需开闸（2026-10-14 澄清）。
 
 **目标**：明确需求范围、梳理现状、识别痛点、产出需求文档。
 
@@ -41,6 +42,7 @@
 | step-2-classify | 判断需求类型（Bug类/功能类），选择对应模板 | ✅ | 始终 |
 | step-2-5 | 闭环追问（复述确认 → 动态追问 → 5W2H 兜底） | ✅ | 始终 |
 | step-2-6 | 共享语言建立（生成CONTEXT.md术语映射快照） | ✅ | 始终 |
+| step-2-7-estimate | 初估（类型基线） | — | 始终（🟢 `mandatory=false`，按 `complexity-scoring.md` §二） |
 | step-3-output | 生成01-需求记录.md | ✅ | 始终 |
 | step-4-user-confirm | 用户确认需求文档 | ✅ | 始终 |
 
@@ -138,3 +140,25 @@
 - 01 step-1/2（需求分析中）：`{{KB_DIR}}/L3-glossary.md` → Spec 活文档（CONTEXT.md 尚未生成）
 - 01 step-2-6 完成之后：CONTEXT.md 已生成，后续步骤可读取
 - 03+（技术方案起）：CONTEXT.md → `{{KB_DIR}}/L3-glossary.md` → Spec 活文档
+
+### step-2-7-estimate 详细说明：初估（类型基线）
+
+> 在 step-2-6（共享语言建立）之后、step-3-output（生成 01-需求记录.md）之前执行；`mandatory` 取值以 `complexity-scoring.md` §二为准（🟢=`false`、🟡/🔴=`true`）。
+
+**目的**：需求定稿时给出工作量区间，供 03 复估收窄 + 看板偏差对账（口径 = Agent 净工时，含等待 ⇒ 解释为「日历跨度上界」）。
+
+**执行流程**：
+1. **打类型标签**：按 04 任务清单的文件分布占比最大者取 4 类之一 —— `page`（页面）/ `backend`（后端接口流程）/ `engine`（引擎工具门禁）/ `defect`（缺陷修复）；
+2. **查基线**：读 `runtime/metrics/estimate-baseline.json` 取本类型分位（`p25`/`median`/`p75`）；样本 < `sample_gate`(5) ⇒ 回退 `global` 并在 `estimate_basis` 标注「回退全局」；
+3. **写 5 字段（stage="01"）**：`estimate_net_h` = 类型 `median`；`estimate_lo` = `p25`；`estimate_hi` = `p75`；`estimate_stage` = `"01"`；`estimate_basis` = `"{类型}:{规模档}"`（规模档人工登记，本期不做自动抽取）；
+4. 初估值记入 `01-需求记录.md`；03 覆盖写后**不回改** 01 记录。
+
+**写入通道**（`state-apply.py patch` 只覆盖**已存在**顶层键 ⇒ 新增键无命令通道）：
+1. **首写**：用文件工具改 **canonical** state（`.claude/skills/iteration-workflow/runtime/{迭代ID}.state.yaml`）插入上述 5 键；
+2. **触发同步**：紧跟一条**会实际写盘**的命令完成「双副本 + ACTIVE + validate」同步（如 `python scripts/state-apply.py task-done --id <刚完成的 T 编号>`、`summary --text "…"`、或 `patch`）。
+   ★ 2026-10-14 实跑教训：对**已是 completed** 的步骤执行 `step-complete` 会走「无需变更（幂等）」分支、**提前返回而不落盘** ⇒ canonical 侧新键不会同步到 IDE 侧（`validate-state.py` 读的是 IDE 侧，故会「假绿」）；
+3. **收口**：`python scripts/validate-state.py` → [R9] `check_estimate` ERROR 0。
+
+**基线重建**（路径相对引擎根）：`node runtime/metrics/gen-estimate-baseline.mjs`（无 `--force` 且当日已生成 ⇒ 跳过；重算才加 `--force`）。
+
+**引号陷阱（★ 落盘纪律）**：`estimate_stage` 必须带引号写为 `"01"` / `"03"` —— 未加引号时 YAML 解析为 int `1`/`3`，[R9] 按 §3.3 逐字判红（命令通道 `state-apply.py set_scalar` 默认 `quote=True`，不产此坑）。

@@ -22,7 +22,8 @@
 | step-6-spec | Spec 合规验证 | ✅ | 🔴复杂级 + 有 ADDED 文件 |
 | step-7-code-review | 代码审查 | ✅ | 始终 |
 | step-fix-1-register | 缺陷登记（写入 `defects[]` + 与 05 报告对账） | — | 存在 `open` 缺陷且 `design_changed=false` |
-| step-fix-2-code | 缺陷修复编码（含 csproj 注册） | — | step-fix-1-register 完成 |
+| step-fix-1-5-handoff | 缺陷修复交接卡生成（★ 短会话前置，见 §Step F §F0） | — | step-fix-1-register 完成 |
+| step-fix-2-code | 缺陷修复编码（含 csproj 注册；短会话内执行） | — | step-fix-1-5-handoff 完成 |
 | step-fix-3-build | 缺陷修复构建验证（涉后端码必须 `/t:Rebuild`） | — | step-fix-2-code 完成 |
 | step-fix-4-regress | 失败用例回归（含动作链用例） | — | step-fix-3-build 完成 |
 | step-fix-5-reclose | 缺陷关闭（置 `fixed`）并回 05 | — | step-fix-4-regress 通过 |
@@ -33,7 +34,7 @@
 >
 > 进入阶段时，Agent 根据实际触发条件选择性写入 phase_steps（如无 SQL 变更则 step-0-* 设为 `not_applicable`）。
 >
-> ★ **缺陷修复窗口（2026-09-23 DEFECT-1 新增）**：`step-fix-*` 五步**挂本阶段**（04 是唯一免开闸的合法落盘窗口），仅在「存在 `open` 缺陷且 `design_changed=false`」时写入；收口后回 05，既有用例结果保留（`state-protocol.md` §5.3）。**禁止**自造游离步骤块。
+> ★ **缺陷修复窗口（2026-09-23 DEFECT-1 新增）**：`step-fix-*` **六步**（含 `step-fix-1-5-handoff`）**挂本阶段**（04 是唯一免开闸的合法落盘窗口），仅在「存在 `open` 缺陷且 `design_changed=false`」时写入；收口后回 05，既有用例结果保留（`state-protocol.md` §5.3）。**禁止**自造游离步骤块。
 
 ### Step 0：数据库脚本生成与执行（涉 DML/DDL 变更时强制）
 
@@ -203,9 +204,11 @@ Start-Process powershell -WindowStyle Hidden -ArgumentList @(
    可直写（`mode=acceptEdits`），其余仍走本默认；白名单须**双写**（`engine/team-agent-strategy.md` §七
    与本 Step 派发模板各一份），**越界即回收白名单**。
    ★ **门禁层（2026-09-30 新增 · E-3，细则唯一来源 = `team-agent-strategy.md` §七 门禁层硬化条）**：
-   白名单须同步写入 `runtime/{ITERATION_ID}.state.yaml` 的 `dispatch_whitelist:` 段（条目 `- "路径"`；**双副本**：`.codebuddy` 为源、`.claude` 为判定源）；
+   白名单须同步写入 `runtime/{ITERATION_ID}.state.yaml` 的 `dispatch_whitelist:` 段（条目 `- "路径"`；
+   ★ **FIX-49 v2.4（2026-10-15）：判定源 = 本宿主侧**（单写本侧，写路径零跨侧触碰）—— 跨宿主接力前跑
+   `scripts/sync-runtime.py` 收敛，原"`.codebuddy` 为源 / `.claude` 为判定源"口径废止）；
    门禁 **04 阶段四档**处置（无段=关闭 / ≥1=启用 / 空数组 & 解析异常 = 留痕放行）；覆盖**仅写类工具**（Bash/Delete 不在其列）；
-   **派发前置判据**：解析条数 ≥1，否则不得派发；**清除时点 = 04 收口**（删段 + 双副本同步）。
+   **派发前置判据**：解析条数 ≥1，否则不得派发；**清除时点 = 04 收口**（删段）。
 3. 主 Agent 收集所有 Agent 输出，生成统一变更预览
 
 ### Step 2.5：批量变更预览与确认（★ 强制）
@@ -379,14 +382,63 @@ complexity_actual_note: "04 实际新增 4 个文件、1 个接口，与 03 复�
 > **为何挂 04**：04 是唯一**免开闸**的合法落盘窗口（`gate-protocol.md` §一：`current_phase == "04"` ⇒ 写入全放行）；
 > 05 阶段 `STAGE_EXEMPT_PATHS['05']` 仅放行 `docs/iterations/`，源码/工程文件写入会被拦。**选项甲已定：不新增放行面。**
 
-**五步（SSOT = `phase-steps.md`）**：
+**六步（SSOT = `phase-steps.md`）**：
 
 | 步骤 | 动作 | 关键要求 |
 |------|------|---------|
 | step-fix-1-register | 缺陷登记 | 写入 `defects[]`（`id` / `severity` / `root_cause_level: "L1"` / `design_changed: false`）；★ 与 05 报告「缺陷记录」节按 id 对账 |
-| step-fix-2-code | 修复编码 | 含 `.csproj` 的 Compile Include 注册；改动文件须落在 03 方案 / 04 清单**已列范围**内 |
+| step-fix-1-5-handoff | 交接卡生成（§F0） | 落 `docs/iterations/<迭代ID>/04-开发实现/fix-handoff-D<n>.md`；**12 项字段齐全后**才开短会话执行 code / build / regress |
+| step-fix-2-code | 修复编码 | 含 `.csproj` 的 Compile Include 注册；改动文件须落在 03 方案 / 04 清单**已列范围**内（短会话内执行） |
 | step-fix-3-build | 构建验证 | 涉后端码必须 `/t:Rebuild`（增量 Build 抓不到 CS1591/CS1573）；命令**禁 `>` / `2>&1` 重定向**（会命中危险段回落门禁） |
 | step-fix-4-regress | 回归 | 失败用例 + 其动作链用例；★ 既有用例结果**不回改**，新增用例**续接编号** |
 | step-fix-5-reclose | 缺陷关闭 | `defects[].status="fixed"` + `fixed_at` + `verified_by`；回 05 —— 三-C 会拦「仍有 `open` 缺陷时推进 06」 |
 
-**禁止**：① 自造游离步骤块（历史 `phase_steps_04_d1fix`、`step-d18-*` 未被 SSOT 收录 ⇒ 审计看不见）；② 在 05 就地改码（除非用户手动开闸，且须在 `defects[].gate_window` 留痕）；③ L2 / L3 缺陷走本窗口（必须按判据回退 03 / 01）。
+#### §F0 缺陷修复交接卡（2026-10-12 FIX-SHORTSESS 新增；★ 短会话前置，对应 `step-fix-1-5-handoff`）
+
+**动机（2026-10-12 实测取证）**：
+
+> 迭代 `2026-10-11-001-M2审核工作台二` 单日 16 个缺陷 / 10 个修复窗口。按轮 `lastStepInputTokens` 分桶：
+> >600k 上下文轮次占 73%，单轮中位 **309s**、p90 **998s**；<200k 轮次中位仅 **20.5s** —— **15 倍差**。
+> 同期单缺陷 `opened_at → fixed_at` 中位只有 8~18min ⇒ **"改 bug 慢"的瓶颈在会话上下文，不在编码本身**。
+> 另：19 个会话 entry 的 Σ跨度 830.6min vs Σ轮内 366.7min（轮内仅占 44%）⇒ 一半墙钟是空档。
+
+**执行模型**：主会话只做 `step-fix-1-register` + `step-fix-1-5-handoff` + `step-fix-5-reclose`；`step-fix-2-code` / `-3-build` / `-4-regress` 三步在**新开的短会话**中执行 —— 交接卡即该短会话的全部上下文来源。
+
+**成本守恒（★ 决定是否值得开短会话）**：单轮节省 ≈ 309s（>600k 上下文）− 20.5s（<200k）≈ **4.8min/轮**。交接卡**必须与 `defect-add` 同轮产出**（一次输出 = state-apply 命令 + 卡片文件），否则单独占一轮大上下文（309s）将吃掉全部收益。
+
+> 判据：短会话内预计 **≥2 轮**才启用交接；**1 轮可完成的微修**（改一个文案 / 一处 CSS）**不交接**，留在主会话直接做（例：D-16/D-17/D-18 类）。
+
+**交接卡必含字段（12 项 = 8 通用 + 4 缺陷专属）**：
+
+- 通用 8 项（沿用 `runtime/NEXT-SESSION-HANDOFF.md` 与 `runtime/TOOL-INTV-实施开工交接.md` 既有范式）：
+  - ① 一句话启动话术 ② 恢复入口（`runtime/ACTIVE` / state 路径 / `defects[]` 台账 / 既有用例结果保留口径）
+  - ③ 已裁定事项（标注「勿重开讨论」）④ 事实源（文件:行号）⑤ 坑清单（实测、带行号）
+  - ⑥ 基线实测值 + 复现命令 ⑦ 收口必检项 ⑧ 当前状态快照
+- 缺陷专属 4 项：
+  - ⑨ `fix_files` **精确路径清单** ⑩ 判档（L1 / L2 / L3）+ 方案依据行号
+  - ⑪ 构建命令**原文**（涉后端码 `/t:Rebuild`；★ 禁 `>` / `2>&1` 重定向，会命中危险段回落门禁）
+  - ⑫ 用例名（NUnit / E2E spec，新增用例续接编号）
+
+**落盘路径**：`docs/iterations/<迭代ID>/04-开发实现/fix-handoff-D<n>.md`（05 / 06 阶段 `STAGE_EXEMPT_PATHS` 均放行该目录 ⇒ 无需开闸）。
+
+**一缺陷一窗口**：每个修复窗口只处理 1 个缺陷；同根因批量合并必须在 `step-fix-*` 的 `note` 标注。
+
+> 引擎对窗口内缺陷条数**无**限制 —— `phase-steps.md` 触发条件只写「存在 `open` 缺陷」，2026-10-12 的 F4 窗口一次修 D-12~D-15 四条亦为惯例 ⇒ 本条纯纪律。
+
+**串行纪律（★ 防 CONC_BLOCK）**：短会话必须**串行**开启，前一窗口未收口不得启下一个。2026-10-12 同迭代实测：并发写保护 9 次 + `CONC_BLOCK` 7 次 = 16 次真实阻断。
+
+**收尾归一化**：短会话结束必须跑一次 `state-apply summary`，否则主会话读不到进展。
+
+> ★ **主会话自己用文件工具改写 state 后，同样要跑一次 `state-apply summary`** —— 实测 2026-10-13（迭代 `2026-10-12-001` 窗口 F1）：`replace_in_file` 直写 `.claude` 侧**不会双写**，`.codebuddy` 侧缺 `step-fix-*` 行而 `version` 却相同 ⇒ 只看 version 会误判"已同步"。判别 = 两侧**行数 + 关键行**同时比对，勿只比 version。
+
+> canonical 在 `.claude` 侧；该命令完成双写 + ACTIVE Line2 同步 + validate + 备份留痕。
+
+**效果判据（A/B 验证口径）**：短会话组单轮中位 **≤60s** 且缺陷**无 reopen**（不因漏改 fixture / 漏回写而重开）。判据不成立 ⇒ 交接卡非关键因子，本方案需重估。
+
+**禁止**：
+
+- ① 自造游离步骤块（历史 `phase_steps_04_d1fix`、`step-d18-*` 未被 SSOT 收录 ⇒ 审计看不见）
+- ② 在 05 就地改码（除非用户手动开闸，且须在 `defects[].gate_window` 留痕）
+- ③ L2 / L3 缺陷走本窗口（必须按判据回退 03 / 01）
+- ④ **跳过交接卡直接开短会话**（隐性上下文丢失 ⇒ 漏改 e2e fixture / 漏回写文档）
+- ⑤ **并行开启多个短会话**（命中 CONC_BLOCK，反而更慢）

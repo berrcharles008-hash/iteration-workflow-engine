@@ -140,6 +140,15 @@ complexity_actual_factors:
   - id: "new_api"
     score: 2
 complexity_actual_note: "04 实际新增 4 个文件、1 个接口，与 03 复评一致"
+# ★ 预估字段（2026-10-14 #67 两段式：01 初估 → 03 复估）
+# 口径 = Agent 净工时（Σ 单轮 elapsedMs）；含等待/挂起 ⇒ 解释为「日历跨度上界」
+# 全部可选（不在 §3.3 必填清单内，向后兼容历史 32 迭代）；成组校验见 §3.3
+estimate_net_h: 6.5          # 点估计（= 区间中位）
+estimate_lo: 3.8             # 区间下界（01 = 类型基线 P25；03 = 收窄后下界）
+estimate_hi: 9.3             # 区间上界
+estimate_stage: "03"         # 01 初估 | 03 复估（覆盖写；01 值记入 01/03 文档）
+estimate_basis: "page:1"     # 类型+规模档；样本<5 回退全局时含「回退全局」标注
+# 注：actual / deviation 为派生值（不落 state）—— 由看板与 07 按需计算（03 决策 A）
 current_phase: "04"         # "01" ~ "07"
 phase_status: "in_progress" # 当前阶段状态：in_progress | completed | blocked
 
@@ -399,6 +408,21 @@ rollback_checks:
 - `stories[].status == "abandoned"` 时，其 `dev_steps` 中仍为 `pending` 的步骤视为自动跳过，不计入 04 完成门禁
 - **向后兼容**：无 `stories` 字段的旧 state.yaml 按单 Story 处理，现有逻辑零改动
 
+**预估字段校验（★ 2026-10-14 #67 新增）**：
+
+| 规则 | 内容 |
+|:--|:--|
+| 成组 | `estimate_*` 5 项存在任一 ⇒ 5 项须齐全 |
+| 数值 | `estimate_net_h` / `lo` / `hi` 均为 ≥0 数值，且 `lo ≤ net_h ≤ hi` |
+| 枚举 | `estimate_stage ∈ {"01","03"}` |
+| 缺失 | 历史 state 无字段 = 正常态（不报错，向后兼容先例同 `started_at`） |
+
+**准确度四指标**（本节脚注，02-M4 决议落点）：
+1. **区间命中率** ≥60%：`estimate_lo ≤ actual_net_h ≤ estimate_hi` 的迭代占比；
+2. **MAPE** ≤40%（首年）→ ≤25%（稳态）；
+3. **基线启用门槛**：每类型样本 ≥5 才启用本类基线，否则回退全局（`estimate_basis` 标注）；
+4. **偏差归因**：`|deviation_pct| > 50` ⇒ 07 回顾强制写归因（规模误判/缺陷返工/需求变更）。
+
 **写入后自检流程**：
 1. `write_to_file` 或 `replace_in_file` 写入 state.yaml
 2. 立即执行校验：**优先跑 `validate-state.py` 脚本**；脚本不可用（PyYAML 缺失等）时降级 `read_file` 人工校验（fail-open）
@@ -539,7 +563,7 @@ phase_steps 扫描结果：
 >     （机器校验 = §3.3「开闸对账校验」/ `validate-state.py [R8]`）；涉后端码 / 需 `/t:Rebuild` ⇒ 必须回 04。
 
 - **窗口步骤（SSOT = [phase-steps.md](phase-steps.md)）**：
-  ① 04 侧：`step-fix-1-register` → `-2-code` → `-3-build` → `-4-regress` → `-5-reclose`；
+  ① 04 侧：`step-fix-1-register` → `-1-5-handoff` → `-2-code` → `-3-build` → `-4-regress` → `-5-reclose`；
   ② 05 侧：`step-fix-05-1-register` → `-2-code` → `-3-regress` → `-4-reclose`；
   ★ **禁止**再用游离自造步骤块（历史 `phase_steps_04_d1fix`、`step-d18-*` 均未被 SSOT 收录）。
 - **收口后回 05**：不回退既有用例结果 —— 新增用例**续接编号**，已跑结果**原样保留**（审计留痕）。
@@ -774,7 +798,7 @@ function gate_check(state):
 
 ### 8.6 每日工作日志协议（Step E）独立说明
 
-> **独立协议**：每日工作日志写入（`.claude/memory/YYYY-MM-DD.md`）是**独立于 state.yaml 的强制动作**，定义在 `startup-protocol-step-e.md`。不管 state.yaml 是否触发更新，每次对话结束前都必须写入日志。详见 Step E 完整规则。
+> **独立协议**：每日工作日志写入（**`{IDE}/memory/YYYY-MM-DD.md`** —— FIX-49：落**本宿主侧**，CodeBuddy ⇒ `.codebuddy/memory/`；Claude Code ⇒ `.claude/memory/`；原硬编码 `.claude/memory/` 已废止）是**独立于 state.yaml 的强制动作**，定义在 `startup-protocol-step-e.md`。不管 state.yaml 是否触发更新，每次对话结束前都必须写入日志。详见 Step E 完整规则。
 
 详细协议见 [startup-protocol-step-e.md](startup-protocol-step-e.md)。
 
@@ -786,20 +810,46 @@ function gate_check(state):
 > 核心机制：乐观锁（版本号）+ 原子目录锁（`mkdir`），双层保障。
 > **v2 修复（2026-07-22）**：① 锁创建由文件→`mkdir`（原子操作，消除 TOCTOU）；② 定义 canonical RUNTIME_DIR（防双目录锁互不感知）；③ 新增 TTL 自动过期（60s）；④ 新增 STATE_FORCE_WRITE 逃生口。
 
-### 9.0 Canonical RUNTIME_DIR（★ 单一路径）
+### 9.0 Canonical RUNTIME_DIR（★ 本宿主侧）
 
-> 问题：`.claude/skills/.../runtime/` 和 `.codebuddy/skills/.../runtime/` 两个目录各存各的锁，Claude Code 和 CodeBuddy 的锁互不感知。
+> 修订（FIX-49，2026-10-11 立项 / 2026-10-15 实施）：canonical = **当前宿主 IDE 目录下的 runtime**
+> （CodeBuddy → `.codebuddy`；Claude Code → `.claude`）。宿主身份解析（门禁与 state-apply **对称**，R2）：
+> ① hook shim 注入 `GATE_HOST_IDE`（shim 位置 = 宿主位置）② 环境变量（`CODEBUDDY_PROJECT_DIR` / `CLAUDE_PROJECT_DIR`）
+> ③ 脚本 / 实现自身位置。**解析失败 = fail-closed（不兜底）** —— R1 裁定："不同 agent 工具应该只读本侧的内容。
+> 不存在兜底，如果需要兜底则说明某个环节存在问题"。
+>
+> · **写 = 本侧（单写，写路径零跨侧触碰）**（v2.4 · R9 方案 B）：镜像面白名单（`state.yaml` / `ACTIVE`）
+>   经 `state-apply.py` 只写本侧；**跨侧一致性 = `scripts/sync-runtime.py` 按需收敛**（"新者胜"双判 +
+>   幂等可重跑），非写时镜像。
+> · 其余运行产物（`gate-audit.log` / `write-claims.jsonl` / `metrics` / qq 通知状态）**只落本侧**，
+>   不参与跨侧一致性判定（R2；qq 通知不镜像 —— 复核 R40：指纹含宿主特定绝对路径，镜像亦必然重复推送）。
+> · 另一侧目录**仍可写**（`EXEMPT_PATHS` 双侧豁免，兼容保留），但不再是 canonical；**镜像面白名单
+>   直写他侧 = block**（R8/甲，门禁 `otherSideMirrorFace()`）—— 确需跨侧对齐请跑 `sync-runtime.py`。
+> · ★ **跨宿主并发同一迭代 = 禁止**（锁与乐观锁均只覆盖本侧；并发将致末位覆盖），须 QQ 确认后串行。
+>   锁为**单侧**（`rt(SIDE)/<id>.lock`，`state-apply.py`）—— 已登记为已知限制。
+> · ★ 宿主共享点清单（v2.2 · 复核 R42/P0-4）——"各读本侧"之外的显式定性：
+>   ① **宿主锁定（接入时须迁移补齐）**：`{IDE}/settings.json` 的 Stop 链（G1 检查 / 阻断通知 / metrics 刷新）
+>      —— Claude 宿主下**当前完全不存在**；
+>   ② **宿主无关共享点（保留为全局、不随侧迁移）**：`.codebuddy/temp/gate-events.jsonl`（allow 记账，
+>      审计等式第二账本）、`.codebuddy/temp/handoff/RUNNING.json`（交接锁，唯一真实跨会话互斥机制）；
+>   ③ **读死一侧的消费方（登记后续工单）**：`tools/gen_iteration_board.py`、`runtime/metrics/*`、
+>      `check-distill.mjs` 硬编码 `.codebuddy`（改造后与目标同向）；
+>   ④ **伪本侧注释**：`validate-state.py`（脚本物理只在 `.codebuddy` ⇒ Claude 宿主下校验的是另一侧）。
+> · ★ **双宿主复活检测**（v2.2 · R41）：门禁启动时探测另一侧 `settings.json` / `hooks/gate-check.mjs`
+>   是否存在，存在即 audit 一行 `FIX49_MULTIHOST_WARNING`（零放行面变化，只留痕；带 dedup 标记）——
+>   把"两宿主并用需重新裁定"从文档字句变为**可观测信号**。
+> · ★ **审计口径**（v2.2 · 复核 R39）：`gate-audit.log` **非完备账本**（`allow` 行落
+>   `{IDE}/temp/gate-events.jsonl`，且 ≥5 类放行不留行）⇒ 对账等式**单侧也不闭合**，不得当 SSOT 使用。
+>   审计行现带 `host=<宿主> runtime=<相对路径>` 字段（FIX-49 ③-2c），可直接判定读侧。
+> · ★ **切换规程**（2026-10-15 实施时执行）：旧侧审计 / 并发声明归档改名（`*.pre-fix49`）留存、不做静默合并；
+>   新基线自新侧新行起算，切换点留痕 `FIX49_SWITCH`。
+>
+> 旧口径（`.claude` 存在即优先）**已废止** —— 致 CodeBuddy 宿主恒读遗留目录（2026-10-11 双副本死锁 /
+> 2026-10-10 state 静默覆盖两案例；根源 = 双副本 + 无 owner/provenance，`§B.3` 同步 × 存在性探测
+> 在 09-28 触发**确定性翻转**）。四件套：`runtime/FIX-49-四件套.md` v2.4。
 
-**必须使用单一 canonical 路径**，检测逻辑（与 `gate-check.mjs` 一致）：
-
-```
-RUNTIME_DIR = exists(PROJECT_DIR/.claude/skills/iteration-workflow/runtime/)
-            ? PROJECT_DIR/.claude/skills/iteration-workflow/runtime/
-            : PROJECT_DIR/.codebuddy/skills/iteration-workflow/runtime/
-```
-
-- 所有锁文件、state.yaml 读写均以 `$RUNTIME_DIR` 为准
-- 无论从哪个工具（Claude Code / CodeBuddy）进入，都写同一份锁和状态
+- 所有锁文件、state.yaml 读写均以**本侧** `$RUNTIME_DIR` 为准（身份解析失败 ⇒ 拒服务，不猜一侧）
+- 跨侧一致性由 `scripts/sync-runtime.py` 显式收敛（宿主接力 / 首次接入前跑一次）
 
 ### 9.1 版本号（乐观锁）
 

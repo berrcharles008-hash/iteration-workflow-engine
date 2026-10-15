@@ -74,15 +74,16 @@
 | 不可逆动作决策回路 | 授权 + 登记双要件 | `engine/gate/gate-check.mjs`（IRREVERSIBLE_RE）· `gate-protocol.md` | ✅ |
 | 记忆配额守卫 | MEMORY.md 写前估算 + 拦截 | `engine/gate/gate-check.mjs` | ✅ |
 
-## 5. 状态与恢复（5）
+## 5. 状态与恢复（6）
 
 | 能力 | 说明 | 落点 | 状态 |
 |:--|:--|:--|:--:|
-| state 双副本 | `.codebuddy`/`.claude` + 判定源 | `state-protocol.md` §三/§六 | ✅ |
+| state 双副本 | 本宿主侧 canonical + 镜像面白名单（FIX-49；v2.4 = 单写本侧，跨侧一致经 `sync-runtime.py` 按需收敛） | `state-protocol.md` §三/§六/§9.0 | ✅ |
 | state-apply 意图通道 | 10 命令 | `scripts/state-apply.py` · `state-protocol.md` §9.6 | ✅ |
 | 严格校验 | YAML + 字段/枚举 | `scripts/validate-state.py` | ✅ |
 | 备份与留痕 | 每次写 state 自动备份 | `state-protocol.md` | ✅ |
 | ACTIVE 指针协议 | 2 行格式 + 释放铁律 | `state-protocol.md` §六 | ✅ |
+| 预估与偏差 | `estimate_*` 5 字段（[R9] 成组 / 数值 / 枚举）+ 看板三列现算（不落 state） | `scripts/validate-state.py` · `state-protocol.md` §3.3 · 项目侧 tools/gen_iteration_board.py | ✅ |
 
 ## 6. 协作与异步（7）
 
@@ -169,3 +170,4 @@
 |:--|:--|
 | 2026-10-10 | 首次落盘：11 域 · 78 项能力索引 + 状态标记 + 缺口汇总（TOOL-CAPMAP；含 TOOL-INTV A+B 批 7 项新机制） |
 | 2026-10-10 | v2（评审后）：补 11 项（外部审查路由/知识库/Step E/Step A.5/门禁决策表/状态机回归/安装初始化×2/领域插件/回流/版本号）· 修 4 处错锚（须/建议分层 → 正文两段；关闸三件套 → §一/§四+P-118；不可逆回路 → 补 gate-check.mjs；接管面板 → session-hub）· 项目侧路径去反引号 · 基准/状态快照声明 |
+| 2026-10-14 | §5 状态与恢复 **+1 行「预估与偏差」**（`estimate_*` 5 字段 · [R9] 成组/数值/枚举 + 看板三列现算不落 state）· **节计数 `（5）`→`（6）`** + 本行。依据迭代 `2026-10-14-002-迭代工作量预估与偏差度量`（#67；原 B#2「state-apply 10 命令 → 11」随决策 A 失效，改判为本能力行） |

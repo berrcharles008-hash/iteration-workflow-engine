@@ -338,9 +338,27 @@ Step 1.6 L1 自动生成时：
 | step-2-output | 产出技术方案文档 | ✅ | 始终 |
 | step-3-self-review | 自主审查L1/L2（关键符号验证） | ✅ | 始终 |
 | step-3x-cross-review | 独立Agent交叉审查L1/L2 | ✅ | 🟡🔴 |
+| step-3-5-reestimate | 复估（收窄） | — | 始终（step-2-output 后；🟢 `mandatory=false`，按 §二） |
 | step-4-review-gate | 评审边界与通过标准检查（4项） | ✅ | 始终 |
 | step-5-fix-verify | 修复验证（3项） | ✅ | 审查发现问题后 |
 | step-5-review-gate-result | 写入评审门禁结果到 state.yaml | ✅ | 始终 |
 | step-6-user-confirm | 用户确认方案通过 | ✅ | 始终 |
 
 > ⚠️ **步骤序号 ≠ 执行顺序**：step-3x 排在 step-3 之后仅为编号有序。实际执行时互审与自审**同时启动**（见 §独立Agent交叉审查 并行约定）。
+
+### step-3-5-reestimate 执行说明：复估（收窄）
+
+> 在 step-2-output（技术方案定稿）之后、step-4-review-gate 之前执行；`mandatory` 取值以 `complexity-scoring.md` §二为准（🟢=`false`、🟡/🔴=`true`）。
+
+**目的**：用本阶段已定规模的输入收窄 01 区间（不改类型、不撤销初估记录）。
+
+**执行流程**：
+1. **取收窄输入**（均取自 03 方案）：用例数 / 新增接口数 / 变更文件数；
+2. **收窄区间**：在 01 类型基线分位基础上按规模档收缩 —— `estimate_lo` 抬升、`estimate_hi` 下降、`estimate_net_h` 落于新区间中点；类型样本仍 <5 ⇒ 继续回退 `global`（`estimate_basis` 标「回退全局」）；
+3. **覆盖写 5 键**：`estimate_net_h` / `estimate_lo` / `estimate_hi` / `estimate_stage` = `"03"` / `estimate_basis`（含收窄依据）；01 原值仅存于 01/03 文档备查。
+
+**写入通道**（5 键已在 01 首写 ⇒ 本阶段走 patch 覆盖）：
+`python scripts/state-apply.py patch --file <estimate 字段 JSON>`（`patch` 只覆盖**已存在**顶层键，拒新键）；
+随后 `python scripts/validate-state.py` 收口（[R9] `check_estimate` ERROR 0）。
+
+**引号陷阱（★ 落盘纪律）**：`estimate_stage` 必须带引号写为 `"03"` —— 未加引号时 YAML 解析为 int `3`，[R9] 按 §3.3 逐字判红（`state-apply.py set_scalar` 默认 `quote=True`，不传此坑）。

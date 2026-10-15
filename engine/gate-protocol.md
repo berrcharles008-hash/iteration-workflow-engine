@@ -8,6 +8,12 @@
 > 本协议的实现代码位于 **`engine/gate/gate-check.mjs`**——下文各条目中的「实现：…」均指该文件。
 > `{IDE}/hooks/gate-check.mjs` 已降为**转发 shim**：按候选路径定位实现后 `await import()`，
 > 实现缺失时 fail-closed（exit 2）并在 stderr 输出重装指引（反制 install.ps1 注释所警惕的「Hook 静默失效」）。
+> ★ **FIX-48（2026-10-11 · 用户裁定 R1=A）**：候选全空时 shim 追加一步**反推**——CLI bg 隔离区
+> （git worktree：`<根>/{IDE}/worktrees/bg-<id>`）内 `.git` 为**文件**（单行 `gitdir: <主仓库>/.git/worktrees/<id>`），
+> 取其前段得主仓库根、加载主仓库的 `engine/gate/gate-check.mjs`（headless 身份在实现层 FIX-47 豁免照常生效，
+> **不新增放行面**）；反推失败（含解析异常）⇒ 维持 fail-closed。同批加固：`await import()` 包 try/catch——
+> 加载抛错原为非 2 码退出（=静默放行）⇒ 现收窄为 exit 2。★ 层间分工不变：**shim 只做"加载"（候选 + 反推），
+> 所有策略判定仍在 `engine/gate/`**（HOOK-SLIM-1 动机不受影响）。
 > **动机（实测）**：IDE 对 `{IDE}/hooks/**` 的写入强制人工确认且无用户可见开关
 > （`autoApprovalSettings` 全开、`maxRequests=-1` 仍弹；`disabledSecurityCategories` 可选类别仅
 > `injection/scriptExec/powershell` 三个命令内容扫描类别，不含文件写入保护），而 `{IDE}/skills/**`
@@ -208,8 +214,9 @@ dispatch_whitelist:
 `fsutil file createnew` ／ 重定向（`>` `>>`）／ `copy`·`Copy-Item`·`xcopy`·`robocopy`·`tee` ／
 `New-Item`·`ni`·`Set-Content`·`Add-Content`·`Out-File`·`touch` ／ 解释器与脚本（`python`·`node`·`ruby`·`perl`·`php`）。
 
-**判定粒度**：★ 用**整条命令**（而非 `splitCommandChain` 拆出的段）—— 内联脚本含 `;` 会被拆段，
-导致 "python" 与 ".gate-bypass" 分居两段而**漏检**（FIX-9d 同源教训）；模式内以 `[^\n]*` 允许跨段关联。
+**判定粒度**：★ 用**整条命令**（而非 `splitCommandChain` 拆出的段）—— 内联脚本含**未引号** `;` 会被拆段，
+导致 "python" 与 ".gate-bypass" 分居两段而**漏检**（FIX-9d 同源教训；★FIX-50 起引号内分隔符不拆，本结论不变）；
+模式内以 `[^\n]*` 允许跨段关联。
 
 **强度**：**绝对拦截** —— 不经阶段门禁（**04 阶段同样拒绝**，因 04 的「写入放行」≠ 可自建逃生口）；
 命中即写 `gate-audit.log` 的 `BLOCK [BYPASS-CREATE] …` 并输出阻断框。
@@ -219,6 +226,7 @@ dispatch_whitelist:
 > ★ **同日订正一处对外口径**：`execute_command` **不是阶段禁行** —— 只读命令（跑脚本 / `dir` / `Get-Content` / `git status` 等）在**任何阶段**都放行；只有「危险段」才回落阶段门禁。
 > **残留（登记待裁决）**：`A >= B` 形态仍被判危险（比较符非重定向；工单 = `runtime/TOOLING-TODO.md` FIX-25 条目）。
 > **回归基线**：GATE-A / GATE-A2 后 **157/157**（BASE 0 失败 · FIX 127/127 · GATE-A 组 30/30；沿革 93 → 97 → 127 → 157）。
+> ★ **FIX-50（2026-10-14）后**：**176/176**（BASE 0 失败 · FIX 146/146 · GATE-A 组 30/30；沿革追加 → 176）。
 >
 > ★ **GATE-A（2026-10-01 · 用户拍板「方案 A」）· 只读命令误拦收口** —— 本口径的落地实现：
 > **起因**：改动前实测（探针 `runtime/probe-readonly-gate.mjs`，26 条纯只读样本）**误拦 10 条**：
@@ -245,6 +253,18 @@ dispatch_whitelist:
 > 不碰 `FOO=bar` bash 前缀、不碰 `--grep=move` 参数值）。取证：探针 3 样本 allow → BLOCK，
 > 负向对照 **6/6**；回归 **157/157**（GATE-A 组 30/30）。
 > **回滚**：A2 = `patch-gate-A2.mjs --rollback`（备份 `gate-check.mjs.bak-pre-GATE-A2`）；A = `patch-gate-A.mjs --rollback`（备份 `gate-check.mjs.bak-pre-GATE-A`）。
+
+> ★ **FIX-50（2026-10-14 · 迭代 2026-10-14-001 · 用户立项拍板）· 切段引号感知**（消除假阳性 / 只收紧，不新增放行面）：
+> **起因**：`gate-audit.log` 2026-10-14T01:12:22Z —— 只读命令中正则文本 `'from |FROM |…|delete |DELETE '` 的 `|` 被
+> `splitCommandChain` 当管道切出独立段 `delete ` ⇒ `isDeleteSegment` 首 token 命中 ⇒ `deleteGate` 空目标误拦（话术「命令: delete」）。
+> **实现**：`splitCommandChain` 改游标扫描型**引号感知**切分 —— 引号内 `| ; &` 换行不切分、段内保留原文（供
+> `extractPathsFromCommand` 提取真实路径）；`` ` `` 转义（仅双引号态内）/ 单双引号状态独立 / 换行不重置 /
+> **未闭合引号整体回退原 split**（fail-closed 六约束，见 `runtime/FIX-50-四件套.md` §③）。
+> **边界**：删除语义层（`isDeleteSegment` / `deleteGate` / `extractPathsFromCommand`）零改动；
+> 引号外分隔符切分行为与原正则**结果等价**（全量 BASE 回归零翻转证明）。
+> **回归**：FIX-50 组 13 条（引号内四种分隔符放行 + 未闭合/闭合紧邻/PS 转义/异种引号仍拦 + `04A2` 登记向可证伪），
+> `gate-regression-test.py` **FIX 146/146 · BASE 0 失败**、`run-gate-tests.mjs` **51/51**。
+> **依据**：`runtime/FIX-50-四件套.md` + `docs/iterations/2026-10-14-001-门禁切段引号感知修复/03-技术方案/03-技术方案.md`（3 路评审 + step-3x）；快照 `runtime/snapshots/2026-10-14-fix50/before/`。
 
 **不受影响**：① **删除**标记 —— 标记存在时上游逃生口检查已 `exit(0)` 放行，本判定不会被触达
 （标记不存在时删除会被拦，属无害）；② **只读查询**（如 `git check-ignore -v .gate-bypass`）—— 不匹配创建语义。
@@ -717,6 +737,7 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
 | 维度 | 规则 |
 |------|------|
 | 存储 | `$RUNTIME_DIR/write-claims.jsonl`（append-only；读取仅取末 800 行） |
+| 注 | ★ FIX-49：`$RUNTIME_DIR` = **当前宿主侧**（`{IDE}/skills/iteration-workflow/runtime/`，宿主身份三级解析 + 解析失败 fail-closed）—— 见 `state-protocol.md §9.0` |
 | 键 | `(session_id, 项目相对路径)`；`session_id` 取 stdin `session_id` ＞ `CODEBUDDY_SESSION_ID` ＞ `transcript_path` 的 convId 段（三源兜底） |
 | 范围 | 写类工具（`Write` / `Edit`）**全项目**；白名单排除：`runtime/`、`{IDE}/memory/`、`{IDE}/temp/`、`node_modules|dist|obj|bin|.vs`、`*.log|tmp|bak` |
 | 拦 | 他会话在 **TTL 10min** 内写过同一文件 ⇒ 阻止（exit 2），提示先 `read_file` 重读 |

@@ -21,6 +21,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');   // ★ FIX-42：读 job 磁盘终态（~/.codebuddy/jobs/<id>/state.json）
 const https = require('https');
 const http = require('http');
 const { exec, execSync, spawn } = require('child_process');   // ★ FIX-34：spawn 用于 serve 模式托管；★ FIX-37d：execSync 供离线解码自测
@@ -34,6 +35,10 @@ const PROJ_ROOT = path.resolve(DIR, '..', '..');   // 命令执行 cwd = 项目�
 const LF = String.fromCharCode(10);                // ★ FIX-17：runHeadless 生成 handoff 文件时使用（此前未定义 ⇒ ReferenceError 被 catch 静默吞掉）
 // ★ FIX-34：headless 执行层适配器 —— 单一持有 CodeBuddy CLI 字面量（分级 A/B/C + 两级探测）
 const adapter = require('./adapter-headless.js');
+// ★ TOOL-MEMBERSTALL（2026-10-14）：成员卡死检测（IDE 日志 tail → QQ 定向卡）。
+//   宿主拍板 = 本合并服务（登录自启 + watchdog 心跳看管；独立 ps1 重启即消失无看管）。
+const { createStallWatcher } = require('./stall-watcher.js');
+let STALL = null;   // 模块级（/health 读数用；启动流程内赋值）
 
 // ── 日志（本地时间，统一 service.log）────────────────────────────
 function ts() {
@@ -89,6 +94,7 @@ function parseArgs() {
     else if (k === '--help-render') a.helpRender = true;          // ★ /help：离线渲染指令清单（不发送；核对文案与长度）
     else if (k === '--help-test') a.helpTest = true;              // ★ /help：探针自测（清单语法 ↔ 各解析器一致性 + 负向不误触）
     else if (k === '--contparse') a.contparse = argv[++i];        // ★ TOOL-QQCONT：离线模型名校验自测（形态 + 清单）
+    else if (k === '--no-stall') a.noStall = true;                // ★ TOOL-MEMBERSTALL：关闭成员卡死 watcher
   }
   return a;
 }
@@ -1575,7 +1581,30 @@ function writeAnswer(p, answer, text, choice) {
     if (p.options && p.options.length) rec.options = p.options;
     fs.writeFileSync(path.join(dir, p.id + '.json'), JSON.stringify(rec), 'utf8');
     log('[ANSWER #' + p.id + '] ' + answer);
+    // ★ FIX-45（2026-10-11）：答案回传直连 —— 有活跃 headless job 时把答复注入该 job。
+    //   背景：ask.js 只登记不等待；wait-answer.ps1 分片轮询在 job 侧常失败（PS 环境/工具超时）
+    //   ⇒ 答复写文件后无人读取、job 停在等输入（2026-10-11 实证：用户 QQ 已回 A#3/A#4，
+    //   job 20 分钟无反应，最终靠人工 reply 注入才唤醒）。
+    //   通道 = serve /reply（与 hub 手动注入同链路；delivered:true 实测可唤醒）。
+    //   边界：注入失败仅记日志（答案文件仍是主通道）；无活跃 job 时静默跳过。
+    forwardAnswerToJob(p, answer, text);
   } catch (e) { log('[ANSWER ERR #' + p.id + '] ' + e.message); }
+}
+
+/** ★ FIX-45：把答复注入当前活跃的 headless job（见 writeAnswer 调用点注释）。fail-open。 */
+function forwardAnswerToJob(p, answer, text) {
+  try {
+    if (!serveHandoff || !serveHandoff.jobId) return;          // 无活跃 job ⇒ 静默跳过
+    const inst = readServeInstance();
+    if (!inst || !inst.port) return;
+    const label = String(answer || '') + (text != null && String(text) ? ('：' + String(text).slice(0, 200)) : '');
+    const msg = '【QQ 答复 #' + p.id + '】' + label + '。请勿重复登记本确认项，直接按其内容继续执行。';
+    const jid = serveHandoff.jobId;
+    adapter.replyJob({ port: inst.port }, jid, msg, (err) => {
+      if (err) log('[ANSWER FWD #' + p.id + '] 注入 job=' + jid + ' 失败：' + err.message + '（答案文件已落盘，job 侧仍可 wait-answer 读取）');
+      else log('[ANSWER FWD #' + p.id + '] 已注入 job=' + jid + '：' + label.slice(0, 80));
+    });
+  } catch (e) { /* fail-open */ }
 }
 // ★ FIX-17e：headless 接管锁 —— 服务写 / gate-check.mjs 读 ⇒「IDE ⇄ headless」双向互斥
 //   锁文件：<handoffDir>/RUNNING.json（含 expiresAt ⇒ 超时自动失效，避免崩溃残留把 IDE 永久锁死）
@@ -1661,7 +1690,12 @@ function runHeadless(p) {
   const absFile = path.join(PROJ_ROOT, relFile);
   try {
     fs.mkdirSync(path.dirname(absFile), { recursive: true });
-    if (!fs.existsSync(absFile)) {
+    // ★ FIX-42b（2026-10-10）：默认路径（qq-<id>.md）**无条件覆盖重写** —— 服务重启后编号归零，
+    //   撞号会复用旧任务文件（#1 撞 09-17 旧号实证：job 拿到 23 天前的只读任务空跑）。
+    //   p.handoffFile 外部指定文件的场景保留「使用既有」语义（文件由外部预生成，不得覆盖）。
+    const isDefaultPath = !p.handoffFile;
+    const existedBefore = fs.existsSync(absFile);
+    if (isDefaultPath || !existedBefore) {
       const body = [
         '# QQ 确认 → headless 接管（#' + p.id + '）',
         '',
@@ -1676,7 +1710,7 @@ function runHeadless(p) {
         '',
       ].join(LF);
       fs.writeFileSync(absFile, body, 'utf8');
-      log('[HANDOFF #' + p.id + '] 已生成 ' + relFile);
+      log('[HANDOFF #' + p.id + '] ' + (existedBefore ? '已重写（撞号覆盖）' : '已生成') + ' ' + relFile);
     } else log('[HANDOFF #' + p.id + '] 使用既有 ' + relFile);
   } catch (e) {
     log('[HANDOFF ERR #' + p.id + '] ' + e.message);   // ★ FIX-17：此前仅发 QQ、不落日志 ⇒ 失败不可见
@@ -1839,6 +1873,50 @@ function spawnServe(sv, basePort, prevInst, cb) {
   });
 }
 
+/** ★ 2026-10-11 第二轮（用户拍板）：接管 job 显示名 = 「MM-DD HH:mm 摘要」（日期在前）
+ *   动因：原 'qq-N 接管' 无主题 —— N 是登记编号（服务重启归零、同日重复），无法用于查找会话。
+ *   摘要降级链：idle 类当前迭代 ID 简称 → 【标签】(+ID简称/目标) → "最近会话"行 → 首行清理 → KIND_LABEL[kind]。
+ *   迭代 ID 全长（2026-10-10-001-中文简述）压缩为 MM-DD-NNN；摘要 ≤16 字（窄列表 UI 自截断，详情看 tooltip）。 */
+function buildJobName(p) {
+  const stamp = ts().slice(5, 16);                            // MM-DD HH:mm
+  const kind = String((p && p.kind) || '');
+  const raw = String((p && (p.originPrompt || p.prompt)) || '').replace(/\r/g, '');
+  const shortIter = String(readActiveIterationId() || '').replace(/^20\d{2}-/, '');   // 2026-10-10-001-… → 10-10-001-…
+  let topic = '';
+  // ① idle 类：接管目标即当前迭代 ⇒ 迭代 ID 简称最具辨识度
+  if (kind === 'idle' && shortIter) topic = '静置·' + shortIter;
+  // ② 【标签】形态（开新迭代/继续迭代/…）：标签 +（目标为迭代 ID 则取简称，否则取目标关键词）
+  if (!topic) {
+    const m = raw.match(/^\s*【([^】]{1,20})】\s*(.*)$/m);
+    if (m) {
+      const tag = m[1].trim();
+      const rest = String(m[2] || '')
+        .replace(/（[^）]*）|\([^)]*\)/g, ' ')
+        .replace(/^[^\s：:]{0,6}[：:]\s*/, '')                 // 去「目标：」等前缀
+        .replace(/\s+/g, ' ')
+        .trim();
+      const idHit = rest.match(/^20\d{2}-(\d{2}-\d{2}-\d{3})(?:-|$|\s)/);
+      topic = tag + (idHit ? '·' + idHit[1] : (rest ? '·' + rest : ''));
+    }
+  }
+  // ③ 老 idle 登记形态：prompt 第二行「最近会话：<名> [id]」
+  if (!topic) {
+    const m = raw.match(/最近会话：\s*([^\n\[]+)/);
+    if (m && m[1].trim()) topic = '静置·' + m[1].trim();
+  }
+  // ④ 首行清理兜底（去括号时戳/emoji）
+  if (!topic) {
+    const first = raw.split('\n').map((s) => s.trim()).filter(Boolean)[0] || '';
+    topic = first.replace(/（[^）]*）|\([^)]*\)/g, ' ')
+      .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, ' ').trim();
+  }
+  if (!topic) topic = KIND_LABEL[kind] || '接管';
+  // ⑤ 迭代 ID 压缩 + 控制字符清理 + 截断（名字会进 state.json 与各 UI 列表；保留 / : 等可读符号）
+  topic = topic.replace(/(20\d{2})-(\d{2}-\d{2}-\d{3})/g, '$2')
+    .replace(/[\x00-\x1f\\?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (topic.length > 16) topic = topic.slice(0, 16) + '…';
+  return stamp + ' ' + topic;
+}
 /** serve 模式 runHeadless 入口：确保实例 + 写锁（含 webUrl/mode）+ 派发 job + 回执 + 存活监视
  *  ★ FIX-34b（2026-10-03）：修复「serve 起了但任务从不提交」的僵尸接管（#8 实证：空转 83min 零执行）。
  *    现在派发为 Agent Home job（POST /api/v1/jobs，探针 383329ea 闭环实证）：
@@ -1861,8 +1939,16 @@ function runHeadlessServe(p, hl, relFile) {
     const promptText = '读取 ' + relFile + ' 并严格按其「剩余工作」小节执行（若无该小节则只输出摘要、不要修改任何文件）。';
     // ★ TOOL-QQCONT（D-1 收敛形态）：模型随 **job payload 逐 job** 下发（探针实证 POST /api/v1/jobs
     //   原生支持 model，CLI 侧转 --model）⇒ serve 实例**不换型、不重启**，其它 job/其它会话不受影响。
+    // ★ FIX-41（2026-10-10）：job 级 permissionMode 随 payload 下发，缺省 bypassPermissions
+    //   （与 hub.config serve.jobPermissionMode 对齐）。根因实证（job f1f89abf/d6aad4b0）：
+    //   不传时 job 继承 serve 进程级 acceptEdits ⇒ 首条 Bash 即卡审批 ⇒ 后台自动化无审批 UI
+    //   ⇒ job 永挂、hub reply 只进 inbox 不消费、锁不释放、后续 QQ 确认全被 HANDOFF SKIP。
+    //   HIGH/CRITICAL 仍询问（CLI --help 语义）。配置 headless.serve.jobPermissionMode 可调。
+    const jobPermissionMode = (hl.serve && hl.serve.jobPermissionMode) || 'bypassPermissions';
     adapter.dispatchJob({ port: res.port },
-      { prompt: promptText, name: 'qq-' + p.id + ' 接管', cwd: PROJ_ROOT, model: p.model || '' },
+      // ★ 2026-10-11 第二轮：名称 = 「MM-DD HH:mm 摘要」（buildJobName 统一构造，替代 'qq-N 接管'+时间）
+      { prompt: promptText, name: buildJobName(p), cwd: PROJ_ROOT, model: p.model || '',
+        permissionMode: jobPermissionMode },
       (err, job) => {
         if (err) {
           log('[HEADLESS SERVE #' + p.id + '] job 派发失败：' + err.message + ' ⇒ 降级 print');
@@ -1875,7 +1961,8 @@ function runHeadlessServe(p, hl, relFile) {
         send('🖥 #' + p.id + ' headless 接管已派发：任务正在 Web UI 智能体「' + (job.name || '') + '」中执行。'
           + (hint.open ? hint.open + ' 可实时查看/继续（口令见 ~/.codebuddy/settings.json gateway.password）。' : '')).catch(() => {});
         log('[HEADLESS SERVE #' + p.id + '] job=' + job.id + ' state=' + (job.state || '?') + ' ' + res.webUrl
-          + (res.reused ? ' (reused)' : ' (spawned)') + (p.model ? (' model=' + p.model) : ''));
+          + (res.reused ? ' (reused)' : ' (spawned)') + (p.model ? (' model=' + p.model) : '')
+          + ' perm=' + jobPermissionMode);
         handoffAliveWatch(p, res, job);   // ★ V2-9：带上 jobId 供终态轮询
       });
   });
@@ -1896,24 +1983,58 @@ function ensureServeTicker() {
   log('[SERVE] ticker 启动（' + Math.round(pollMs / 1000) + 's）');
 }
 
+let serveProbeFailHits = 0;   // ★ FIX-47b：serve 探活连续失败计数（防冷启动恢复期误判死亡）
+
 function serveTickerTick() {
   const hl = cfg.headless || {};
   const sv = hl.serve || {};
   const inst = readServeInstance();
   if (!inst || !inst.port) return;
   adapter.probe({ port: inst.port }, (alive) => {
-    if (!alive) { onServeDead(inst); return; }
+    if (!alive) {
+      // ★ FIX-47b（2026-10-11）：连续 3 次探活失败才判死 —— serve 冷启动后「恢复 jobs 存储」期
+      //   （实测 ~40s）GET / 无响应 ⇒ 单次 5s 超时被误判死亡（2026-10-11 11:44 实证：serve 存活
+      //   却被判死 ⇒ 锁提前释放、追踪停止、用户收到"serve 已退出"误报；此后 FIX-42 的终态收尾
+      //   也失去作用途径）。3 跳 = 90s，覆盖恢复期。真死亡时收尾延迟 ≤90s，可接受。
+      serveProbeFailHits++;
+      log('[SERVE] 探活失败 ' + serveProbeFailHits + '/3（连续 3 次才判死；serve 冷启动恢复期可达 ~40s）');
+      if (serveProbeFailHits >= 3) { serveProbeFailHits = 0; onServeDead(inst); }
+      return;
+    }
+    serveProbeFailHits = 0;
     // ★ TOOL-QQNEWITER（V2-8 · 红队 C6）：接管中 ⇒ 续期锁（job 存活即锁不该过期；防长任务 TTL fail-open 双写）
     if (serveHandoff) renewHandoffLock(serveHandoff);
     // ★ TOOL-QQNEWITER（V2-9 · 红队 C7）：job 状态轮询 —— 终态（done/error/stopped…）⇒ 收尾（notify + 释锁 + 归零）。
-    //   缺 jobId（旧项/派发未返回）或查询失败 ⇒ 不动作（fail-open；端口探活仍是主判据）。
+    //   ★ FIX-42（2026-10-10）：job 结束后会被移出活跃列表 ⇒ HTTP 200 job-not-found（探针实证）。
+    //   此前 `if (err||!job) return` 把它当查询失败静默忽略 ⇒ 锁被无限续期、handoffRunning 永久 ≥1
+    //   ⇒ 后续确认全被「已有接管在运行」拒绝（2026-10-10 22:17 #2 实证；同 F1 家族）。
+    //   处置：job_not_found ⇒ ① 优先读磁盘 state.json 拿真实终态收尾；② 读不到则连续 2 跳
+    //   （≈60s，防派发瞬间竞态）兜底收尾。真查询失败（超时/5xx/网络）保持 fail-open 不动作。
     if (serveHandoff && serveHandoff.jobId) {
       adapter.jobStatus({ port: inst.port }, serveHandoff.jobId, (err, job) => {
-        if (err || !job || !serveHandoff) return;
+        if (!serveHandoff) return;
+        if (err) {
+          if (err.code === 'job_not_found') {
+            const disk = readJobDiskState(serveHandoff.jobId);
+            if (disk) {
+              finishServeHandoff(serveHandoff, { state: disk.state, detail: disk.detail });
+              serveHandoff = null;
+              return;
+            }
+            serveHandoff.notFoundHits = (serveHandoff.notFoundHits || 0) + 1;
+            if (serveHandoff.notFoundHits >= 2) {
+              finishServeHandoff(serveHandoff, { state: 'ended', detail: 'job 已结束（从活跃列表消失且无磁盘终态）' });
+              serveHandoff = null;
+            }
+          }
+          return;
+        }
         const st = String(job.state || '');
         if (['done', 'error', 'stopped', 'cancelled', 'canceled', 'failed', 'exited'].indexOf(st) >= 0) {
           finishServeHandoff(serveHandoff, { state: st, detail: job.detail || '' });
           serveHandoff = null;
+        } else {
+          serveHandoff.notFoundHits = 0;   // 活着（working/blocked）⇒ 清零兜底计数
         }
       });
     }
@@ -1925,6 +2046,159 @@ function serveTickerTick() {
       killServe(inst);
     }
   });
+}
+
+/**
+ * ★ FIX-42（2026-10-10）：读 job 磁盘终态 —— 活跃列表（/api/v1/jobs）只含活跃 job，
+ *   done/failed 后须从 ~/.codebuddy/jobs/<id>/state.json 取（serve 的全局 jobs 存储）；
+ *   返回 { state, detail } 或 null（非终态/读失败/非法 id ⇒ 交调用方兜底）。
+ */
+function readJobDiskState(jobId) {
+  try {
+    const id = String(jobId || '');
+    if (!/^[\w\-]{1,40}$/.test(id)) return null;   // 防路径注入
+    const f = path.join(os.homedir(), '.codebuddy', 'jobs', id, 'state.json');
+    const j = JSON.parse(fs.readFileSync(f, 'utf8').replace(/^\uFEFF/, ''));
+    const st = String(j.state || '');
+    if (['done', 'error', 'stopped', 'cancelled', 'canceled', 'failed', 'exited'].indexOf(st) >= 0) {
+      return { state: st, detail: String(j.detail || j.output || '').slice(0, 300) };
+    }
+    return null;
+  } catch (e) { return null; }
+}
+
+// ── ★ FIX-43（2026-10-11）：孤儿 job 进程回收 —— serve 不回收终态 job 的常驻 CLI ⇒ 资源泄漏 ──
+//   背景实证（2026-10-10）：探针 job 完成后其 CLI 进程存活 100 分钟、狂烧 CPU（4630s≈77%），
+//   拖垮整机 ⇒ serve 半死（jobs API 挂起 + PS 探测 ETIMEDOUT）+ 后续 job 等待链路异常。
+//   三层回收：① 本文件的 killJobProcessTree（finishServeHandoff 终态即时调）；
+//   ② sweepOrphanJobs 定期巡检（ensureOrphanSweep / 服务启动后延迟一次）；
+//   ③ 无——保守起见不设 CPU 阈值杀（防误杀正常 LLM 高峰）。
+//   ★ 防误杀红线：巡检只在「活跃列表可查 + 提取到 session-id + 磁盘终态 + 进程超最小年龄」四条件
+//     同时满足时杀；活跃列表查询失败（serve 半死）⇒ 放弃本轮（宁漏不误）。
+
+/** 读 job state.json 的 broker pid 并杀其进程树（静默失败；仅限 job 终态后调用） */
+function killJobProcessTree(jobId) {
+  try {
+    const id = String(jobId || '');
+    if (!/^[\w\-]{1,40}$/.test(id)) return;
+    const f = path.join(os.homedir(), '.codebuddy', 'jobs', id, 'state.json');
+    const j = JSON.parse(fs.readFileSync(f, 'utf8').replace(/^\uFEFF/, ''));
+    const pid = Number(j.pid || 0);
+    if (!(pid > 0)) return;
+    exec('taskkill /T /F /PID ' + pid, { windowsHide: true }, (e) => {
+      log('[ORPHAN SWEEP] 终态即时回收 job=' + id + ' pid=' + pid + (e ? '（taskkill: ' + e.message + '）' : ''));
+    });
+  } catch (e) { /* ignore */ }
+}
+
+/**
+ * 枚举本机 job 进程（codebuddy broker / CLI），提取 { pid, sessionId, shortId, isBroker, startedMs }。
+ *   识别：命令行含 codebuddy-broker.js（broker）或含 bin\codebuddy 且含 --session-id 且不含 --serve（job CLI）。
+ *   wmic format:list（键值对，免 CSV 逗号解析）；失败回退 PowerShell Get-CimInstance。
+ */
+function listJobProcesses(cb) {
+  cb = cb || (() => {});
+  const parse = (out) => {
+    const procs = [];
+    let cmd = '', pid = 0, created = '';
+    const flush = () => {
+      if (cmd && pid) {
+        const isServe = /--serve(\s|$)/.test(cmd);
+        const isBroker = /codebuddy-broker\.js/i.test(cmd);
+        const isCli = /[\\\/]bin[\\\/]codebuddy(\s|$|")/i.test(cmd) && /--session-id\s/i.test(cmd);
+        const m = cmd.match(/--session-id\s+([0-9a-fA-F-]{36})/);
+        if (!isServe && m && (isBroker || isCli)) {
+          let startedMs = 0;
+          const dm = String(created).match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/);
+          if (dm) startedMs = new Date(+dm[1], +dm[2] - 1, +dm[3], +dm[4], +dm[5], +dm[6]).getTime();
+          procs.push({ pid: pid, sessionId: m[1], shortId: m[1].slice(0, 8), isBroker: isBroker, startedMs: startedMs });
+        }
+      }
+      cmd = ''; pid = 0; created = '';
+    };
+    String(out || '').split(/\r?\n/).forEach((line) => {
+      const s = line.replace(/\s+$/, '');
+      if (!s) { flush(); return; }
+      if (/^CommandLine=/i.test(s)) cmd = s.slice(12);
+      else if (/^ProcessId=/i.test(s)) pid = Number(s.slice(10));
+      else if (/^CreationDate=/i.test(s)) created = s.slice(13);
+    });
+    flush();
+    return procs;
+  };
+  exec('wmic process where "name=\'node.exe\'" get processid,commandline,creationdate /format:list',
+    { windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+      if (!err && stdout && /CommandLine=/i.test(stdout)) { cb(null, parse(stdout)); return; }
+      // 回退：PowerShell（wmic 在新系统可能被移除）
+      exec('powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name=\'node.exe\'\\" | ForEach-Object { \'CommandLine=\' + $_.CommandLine; \'ProcessId=\' + $_.ProcessId; \'CreationDate=\' + $_.CreationDate; \'\' }"',
+        { windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (e2, out2) => {
+          cb(null, parse(out2));
+        });
+    });
+}
+
+/**
+ * 孤儿 job 进程巡检：非活跃 + 磁盘终态 + 超最小年龄 ⇒ taskkill /T。
+ *   去重：同 sessionId 只杀一个 pid（优先 broker —— 树含 CLI）。
+ *   返回 { ok, killed, skipped } 或 { ok:false, reason }（活跃列表不可用 ⇒ 放弃）。
+ */
+function sweepOrphanJobs(cb) {
+  cb = cb || (() => {});
+  const hl = cfg.headless || {};
+  const sv = hl.serve || {};
+  const inst = readServeInstance();
+  if (!inst || !inst.port) { cb({ ok: false, reason: 'no-serve-instance' }); return; }
+  const minAgeMs = Number(sv.orphanMinAgeMs != null ? sv.orphanMinAgeMs : 120000);
+  listJobProcesses((err, procs) => {
+    if (err) { log('[ORPHAN SWEEP] 进程枚举失败：' + err.message); cb({ ok: false, reason: 'enum-failed' }); return; }
+    if (!procs.length) { cb({ ok: true, killed: 0, skipped: 0 }); return; }
+    adapter.listJobs({ port: inst.port }, (e2, jobs) => {
+      if (e2 || !Array.isArray(jobs)) {
+        // ★ 防误杀红线：serve 半死时活跃列表不可信 ⇒ 放弃本轮（进行中的 job 绝不能杀）
+        log('[ORPHAN SWEEP] 活跃列表不可用（' + (e2 && e2.message ? e2.message : 'bad-data') + '）⇒ 本轮放弃（防误杀进行中 job）');
+        cb({ ok: false, reason: 'active-list-unavailable' });
+        return;
+      }
+      const activeSess = {};
+      jobs.forEach((j) => { if (j && j.sessionId) activeSess[String(j.sessionId)] = true; });
+      const seen = {};
+      const picked = [];
+      procs.forEach((p) => {
+        if (seen[p.sessionId]) {
+          const prev = seen[p.sessionId];
+          if (p.isBroker && !prev.isBroker) { prev.pid = p.pid; prev.isBroker = true; }   // 优先 broker
+          return;
+        }
+        seen[p.sessionId] = { pid: p.pid, isBroker: p.isBroker, startedMs: p.startedMs, shortId: p.shortId, sessionId: p.sessionId };
+        picked.push(seen[p.sessionId]);
+      });
+      let killed = 0, skipped = 0;
+      picked.forEach((p) => {
+        if (p.startedMs && (Date.now() - p.startedMs) < minAgeMs) { skipped++; return; }   // 防派发竞态
+        if (activeSess[p.sessionId]) { skipped++; return; }                                // 活跃 ⇒ 保留
+        const disk = readJobDiskState(p.shortId);
+        if (!disk) { skipped++; return; }                                                  // 非终态/无磁盘态 ⇒ 保守放过
+        try {
+          exec('taskkill /T /F /PID ' + p.pid, { windowsHide: true }, () => {});
+          killed++;
+          log('[ORPHAN SWEEP] 回收终态 job 残留：pid=' + p.pid + ' sess=' + p.sessionId + ' state=' + disk.state);
+        } catch (e3) { log('[ORPHAN SWEEP] kill 失败 pid=' + p.pid + '：' + e3.message); }
+      });
+      if (killed) log('[ORPHAN SWEEP] 本轮完成：killed=' + killed + ' skipped=' + skipped);
+      cb({ ok: true, killed: killed, skipped: skipped });
+    });
+  });
+}
+
+let orphanTick = null;
+function ensureOrphanSweep() {
+  if (orphanTick) return;
+  const hl = cfg.headless || {};
+  const sv = hl.serve || {};
+  const ms = Number(sv.orphanSweepMs != null ? sv.orphanSweepMs : 300000);
+  if (!(ms > 0)) { log('[ORPHAN SWEEP] 巡检已禁用（orphanSweepMs<=0）'); return; }
+  orphanTick = setInterval(() => sweepOrphanJobs(), ms);
+  log('[ORPHAN SWEEP] 巡检启动（' + Math.round(ms / 1000) + 's，minAge=' + Math.round(Number(sv.orphanMinAgeMs != null ? sv.orphanMinAgeMs : 120000) / 1000) + 's）');
 }
 
 function onServeDead(inst) {
@@ -1972,13 +2246,18 @@ function finishServeHandoff(hf, extra) {
   //   此前只探实例端口 ⇒ job 结束/失败无回执、锁与计数不释放（僵尸态：用户以为还在开工）。
   const st = extra && extra.state ? String(extra.state) : '';
   if (st) {
-    const tail = extra && extra.detail ? String(extra.detail).slice(0, 300) : '';
+    // ★ FIX-43（2026-10-11）：job 已终态（不可续聊）⇒ 即时回收其残留进程树。
+    //   serve 设计上不回收终态 job 的常驻 CLI（为"续聊"保留），但终态已不可续聊（P2 定案：
+    //   死会话 reply 只 saved 不复活）⇒ 残留是纯泄漏（实测狂烧 CPU）。此处只在 st 非空
+    //   （job 终态明确）时回收；serve-exited（st 空）路径不杀 —— 那时 job 可能仍在正常干活。
+    if (hf && hf.jobId) killJobProcessTree(hf.jobId);
+    const tail = extra && extra.detail ? String(extra.detail).slice(0, 300) : ''; const wtNote = (hf && hf.jobId && /^[a-f0-9]{8}$/i.test(String(hf.jobId)) && fs.existsSync(path.join(PROJ_ROOT, '.codebuddy', 'worktrees', 'bg-' + hf.jobId))) ? ('\n⚠️ 该任务的 CLI 隔离区仍存在（.codebuddy/worktrees/bg-' + hf.jobId + '）——产出可能困在隔离目录，请核对主仓库路径是否已包含全部成果。') : '';
     log('[SERVE END #' + hf.id + '] job ' + st + (tail ? ' detail=' + tail.slice(0, 120) : ''));
     if (st === 'done') {
-      send('✅ #' + hf.id + ' headless 任务已完成' + (tail ? '：' + tail : '')).catch(() => {});
+      send('✅ #' + hf.id + ' headless 任务已完成' + (tail ? '：' + tail : '') + wtNote).catch(() => {});
     } else {
       send('❌ #' + hf.id + ' headless 任务已结束（' + st + '）' + (tail ? '：' + tail : '')
-        + '。可在 Web UI 打开会话查看，或重发口令/回工位处理。').catch(() => {});
+        + '。可在 Web UI 打开会话查看，或重发口令/回工位处理。' + wtNote).catch(() => {});
     }
     logInbox({ taskId: hf.id, result: 'serve-job-' + st });
     return;
@@ -2499,6 +2778,7 @@ function startHttp() {
         res.end(JSON.stringify({
           ok: true,
           pending: [...pending.values()].filter((p) => p.status === 'pending').length,
+          stall: STALL ? STALL.status() : null,   // ★ TOOL-MEMBERSTALL：成员卡死 watcher 读数
           watch: {
             enabled: WATCH.enabled, idleSeconds: WATCH.idleMs / 1000,
             dirs: WATCH.dirs.length, root: WATCH.root || 'auto',
@@ -3202,11 +3482,13 @@ function buildNewIterationHandoffPrompt(num, auto) {
       : '3) **闸 1.5**：先用 ask.js 向用户复述定位结果（编号/主题/拟用迭代 ID 草案）并等一次 QQ 确认（分片轮询见第 10 条），对不上即停止；确认通过后才可创建。',
     '4) 读 SKILL.md 启动协议 Step A→D（运行时变量表 → 复杂度评估）与 engine/complexity-scoring.md。',
     '',
+    '★ 环境铁律（本项目为 SVN 工作副本，非 git）：serve/headless 环境下 ① write_to_file / replace_in_file 会被 worktree 引擎阻塞（pending 卡死 ~10 分钟，2026-10-11 三次实证）；② 多行 heredoc 会被 CLI 命令包装破坏（unexpected EOF / unmatched quote，两次实证）⇒ **写文件一律用单行命令**：printf \'%s\\n\' \'行1\' \'行2\' … > "文件"；内容多时分多批 >> 追加；mkdir -p 建目录；Read/Glob/Grep 等读取工具正常可用。\n★ 隔离区铁律（FIX-48，2026-10-11）：若 pwd 显示你在 .codebuddy/worktrees/ 下（CLI 隔离工作区，内容是**陈旧 git 快照**）：① 读与写一律改用**主仓库绝对路径**（' + PROJ_ROOT.split(path.sep).join('/') + '/…）；② state 写入、ask.js/wait-answer 调用同样用主仓库绝对路径（node ' + PROJ_ROOT.split(path.sep).join('/') + '/tools/qqbot/ask.js …）；③ 不要以 worktree 内文件内容为准。',
+    '',
     '创建迭代（按 engine/state-protocol.md §二「新建迭代（01 阶段启动）」）：',
     '5) 迭代 ID = YYYY-MM-DD-NNN-中文简述（当日日期 + 当日序号 + 登记表主题）。',
-    '6) 用 write_to_file 建 docs/iterations/<ID>/01-需求分析与设计/ 并写 01 产出。',
-    '7) 用 write_to_file 写 runtime/<ID>.state.yaml（初始：iteration_status: in_progress / current_phase: "01" / phase_status: in_progress / started_at）。',
-    '8) 用 write_to_file 写 runtime/ACTIVE（仅一行 <ID>，★ 无 BOM）；若 .claude/skills/iteration-workflow/runtime/ 存在 ⇒ 按 Step B.3 同步双副本。',
+    '6) 建 docs/iterations/<ID>/01-需求分析与设计/ 并写 01 产出：mkdir -p 建目录，内容用**单行命令分段写**（printf \'%s\\n\' \'行1\' \'行2\' … > "文件"，多批 >> 追加）——★ 不要用 heredoc、不要用 write_to_file（见环境铁律）。',
+    '7) 状态写入**优先**用 `python .codebuddy/skills/iteration-workflow/scripts/state-apply.py`（★ FIX-49 v2.4：**单写本侧** + 校验 + 留痕）；不可用时用 Bash 写**本侧** runtime/<ID>.state.yaml（初始：iteration_status: in_progress / current_phase: "01" / phase_status: in_progress / started_at）。',
+    '8) 写**本侧** runtime/ACTIVE（仅一行 <ID>，★ 无 BOM）。★ FIX-49 v2.4：**本任务不做任何另一侧写入**——原"若 .claude/.../runtime/ 存在 ⇒ 同步双副本"已删除；跨侧对齐一律由 `scripts/sync-runtime.py` 显式执行（宿主接力前跑一次）。',
     '',
     '执行 01 阶段（engine/phase-01.md 全流程）：',
     '9) 读知识库 L1/L2/L3（缺失/过时按原则 15 自动刷新）；按模板产出 01-需求记录.md。',
@@ -3217,7 +3499,7 @@ function buildNewIterationHandoffPrompt(num, auto) {
     '     ★ 分片超时（exit 2）⇒ 可再等 1 片；30 分钟用尽 ⇒ state 标 phase_status=blocked + pause_reason=等待用户超时，停下并 notify，不得自动续做。',
     '',
     '纪律：',
-    '11) 写文件一律 write_to_file（01 阶段 shell 写命令会被门禁拦）；不要用 shell 建目录（write_to_file 自动建父目录）；状态写入优先 python scripts/state-apply.py。',
+    '11) 写文件一律用**单行命令**（见「环境铁律」：heredoc 会被命令包装破坏、write_to_file 会卡死）；状态写入优先 python scripts/state-apply.py，若其失败或不可用则用单行命令写 state.yaml。',
     '12) 不可逆动作（DDL/DML、SVN/git 提交推送、删除移动、部署发布）与「改变已确认口径」的决策：一律停下并 ask.js 登记（--kind irreversible），禁止自行执行。',
     '13) 禁止越过 01 进入 02 —— 01 交付后即停（阶段确认属用户/IDE 侧）。',
     '',
@@ -3340,6 +3622,7 @@ function buildContinueIterationHandoffPrompt(iterId, model) {
   const base = String(cc.handoffPrompt || '').trim() || String(WATCH.handoffPrompt || '').trim();
   const head = [
     '【继续迭代 · 用户 QQ 口令】本次目标迭代 = ' + (iterId || '(快照缺失)'),
+    '★ 环境铁律（本项目为 SVN 工作副本，非 git）：serve/headless 环境下 ① write_to_file / replace_in_file 会被 worktree 引擎阻塞（pending 卡死 ~10 分钟，2026-10-11 三次实证）；② 多行 heredoc 会被 CLI 命令包装破坏（unexpected EOF / unmatched quote，两次实证）⇒ **写文件一律用单行命令**：printf \'%s\\n\' \'行1\' \'行2\' … > "文件"；内容多时分多批 >> 追加；mkdir -p 建目录；Read/Glob/Grep 等读取工具正常可用。\n★ 隔离区铁律（FIX-48，2026-10-11）：若 pwd 显示你在 .codebuddy/worktrees/ 下（CLI 隔离工作区，内容是**陈旧 git 快照**）：① 读与写一律改用**主仓库绝对路径**（' + PROJ_ROOT.split(path.sep).join('/') + '/…）；② state 写入、ask.js/wait-answer 调用同样用主仓库绝对路径（node ' + PROJ_ROOT.split(path.sep).join('/') + '/tools/qqbot/ask.js …）；③ 不要以 worktree 内文件内容为准。',
     '★ 闸门（必须最先做）：读 .codebuddy/skills/iteration-workflow/runtime/ACTIVE —— 若其值与上述目标迭代'
       + '不符（或为 none）⇒ **立即停止**：不得改推别的迭代、不得创建新迭代，用 '
       + 'node tools/qqbot/notify.qqbot.js --kind fail --what "继续迭代中止：ACTIVE=<x> 与目标 <y> 不符" 报告。',
@@ -3929,6 +4212,9 @@ module.exports = {
   buildContinueIterationHandoffPrompt: buildContinueIterationHandoffPrompt,  // ★ TOOL-QQCONT（供 E2E 断言模板）
   resolveModelList: resolveModelList,                               // ★ TOOL-QQCONT（供 E2E 断言清单来源四态）
   findPendingContinueIteration: findPendingContinueIteration,       // ★ TOOL-QQCONT（供离线自测：幂等预检）
+  buildJobName: buildJobName,                                       // ★ 2026-10-11 第二轮（供离线自测：命名降级链）
+  sweepOrphanJobs: sweepOrphanJobs,                                 // ★ FIX-43（供离线自测/诊断）
+  listJobProcesses: listJobProcesses,                               // ★ FIX-43（供离线自测/诊断）
 };
 
 // ── 启动（仅直接运行时；被 require 时只导出纯函数，供自测脚本使用）──────
@@ -3963,7 +4249,22 @@ if (require.main === module && !ASYNC_SELF_TESTS.some(Boolean)) {
     + ' | modelList=' + (_mlc0.enabled ? 'ON' : 'OFF') + ' ' + JSON.stringify(_mlc0.keywords)
     + ' (cache ' + (Number((CMDCFG().modelList || {}).cacheSec) || 600) + 's)'
     + ' | 模型下发=per-job（serve 不换型）');
-  await getToken();
+  // ★ FIX-43b（2026-10-11）：启动 token 获取带重试 —— 开机自启时网络栈未就绪
+  //   （实证 10-11 09:06：getaddrinfo ENOTFOUND bots.qq.com → [FATAL] → process.exit(1)，
+  //   服务死到人工拉起，用户上午完全失联）。重试 3 次 × 20s；仍失败才 FATAL 退出。
+  let _tokOk = false, _tokErr = null;
+  for (let _ti = 1; _ti <= 3; _ti++) {
+    try { await getToken(); _tokOk = true; break; }
+    catch (e) {
+      _tokErr = e;
+      log('[TOKEN RETRY ' + _ti + '/3] ' + e.message + (_ti < 3 ? ' ⇒ 20s 后重试' : ''));
+      if (_ti < 3) await new Promise((r) => setTimeout(r, 20000));
+    }
+  }
+  if (!_tokOk) {
+    log('[FATAL] token 获取失败（已重试 3 次）：' + (_tokErr && _tokErr.message) + '。请检查网络/DNS 后重启服务。');
+    process.exit(1);
+  }
   log('token OK');
   // ★ FIX-38：心跳 + 上线通知（先读上次心跳判断是否异常退出，再写新心跳）
   const prevHb = hbRead();
@@ -3985,6 +4286,44 @@ if (require.main === module && !ASYNC_SELF_TESTS.some(Boolean)) {
     if (SNOOZE.until > Date.now()) log('[SNOOZE] 生效中 scope=' + SNOOZE.scope + ' 至 ' + snoozeLabel(SNOOZE.until));
     watchLoop();
   } else log('WATCH off (--no-watch)');
+
+  // ★ TOOL-MEMBERSTALL（2026-10-14）：成员卡死 watcher —— 与 watch 同进程 tick（每 tick 续写心跳，
+  //   循环假死 ⇒ 心跳停 ⇒ watchdog 180s 告警；见 stall-watcher.js D6）。
+  if (!args.noStall) {
+    const scfg = Object.assign({}, cfg.stallWatcher || {});
+    if (scfg.enabled !== false) {
+      STALL = createStallWatcher({
+        log: log,
+        send: send,
+        hbWrite: hbWrite,
+        // RESUME-1·D 门控：有未决 ask/decision ⇒ 不判「成员/整队静默」（30min 正常等待期，防双发误报）
+        hasOpenAsk: () => {
+          try {
+            for (const it of pending.values()) {
+              const k = String((it && it.kind) || '');
+              if (k === 'ask' || k === 'decision') return true;
+            }
+          } catch (e) { /* fail-open（宁可多报不漏报? 否——静默类误报成本高 ⇒ 失败即视为有未决）*/ }
+          return false;
+        },
+        cfg: scfg,
+      });
+      STALL.restore();
+      log('[STALL] watcher 启动 tick=' + (STALL.cfg.tickMs / 1000) + 's silence=' + STALL.cfg.silenceSec
+        + 's pending=' + STALL.cfg.pendingStallSec + 's teamSilence=' + STALL.cfg.teamSilenceSec
+        + 's logRoot=' + (STALL.cfg.logRoot || 'auto'));
+      setInterval(() => { try { STALL.tick(); } catch (e) { log('[STALL ERR] ' + e.message); } },
+        Math.max(2000, Number(STALL.cfg.tickMs) || 5000));
+    } else log('[STALL] watcher 关闭（stallWatcher.enabled=false）');
+  } else log('[STALL] watcher 关闭（--no-stall）');
+
+  // ★ FIX-43（2026-10-11）：孤儿 job 进程回收 —— 定期巡检 + 启动后延迟扫描一次
+  //   （清上次会话/异常退出残留；终态 job 的常驻 CLI 是纯泄漏，实测可狂烧 CPU 拖垮整机）
+  ensureOrphanSweep();
+  const _svSweep = (cfg.headless || {}).serve || {};
+  if (_svSweep.orphanSweepOnStart !== false) {
+    setTimeout(() => { log('[ORPHAN SWEEP] 启动后扫描（延迟 90s）'); sweepOrphanJobs(); }, 90000);
+  }
 
   if (!args.noDaemon) {
     try { WebSocket = require('ws'); } catch (e) {

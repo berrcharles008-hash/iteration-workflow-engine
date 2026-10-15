@@ -33,7 +33,9 @@
 $env:GATE_TEST_RUNTIME_DIR = "path/to/runtime"
 # 设置运行方环境变量：
 #   CODEBUDDY_PROJECT_DIR → 使用 .codebuddy/hooks/gate-check.mjs
-#   不设置 → 使用 .claude/hooks/gate-check.mjs
+#   不设置 → 使用 {IDE}/hooks/gate-check.mjs（shim → {IDE}/skills/.../engine/gate/gate-check.mjs 实现）
+#            ★ FIX-49（2026-10-15）：宿主侧解析由 shim 注入 GATE_HOST_IDE + 三级解析承担，
+#              不再"恒取 .claude"；解析失败 = fail-closed（exit 2）
 $env:CODEBUDDY_PROJECT_DIR = "path/to/project"
 
 # S0：空输入

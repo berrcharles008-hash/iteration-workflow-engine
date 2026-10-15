@@ -64,9 +64,12 @@ HIST_HINT_RE = re.compile(r'更名|原写|原名|已统一|历史|移除|迁移|
 # ★ W-1（2026-10-02 迭代 2026-10-01-002）：显式登记 3 项实测外部/宿主侧目标（A4 原报 3 条 WARN）：
 #   `gen_doc_index.py`  = 项目级工具（`tools/gen_doc_index.py`，实测存在）
 #   `wait-answer.ps1`   = 项目级工具（`tools/qqbot/wait-answer.ps1`，实测存在）
-#   `probe-readonly-gate.mjs` = 本 skill 的**运行时产物**，随宿主侧落盘（本仓实测在 `.claude` 侧 runtime/）
+#   `probe-readonly-gate.mjs` = 本 skill 的**运行时产物**，随宿主侧落盘（★ 复核 R19 修正：本仓实测在 `.codebuddy` 侧 runtime/ —— 原注释写 `.claude` 与实测相反）
 EXTERNAL_TARGETS = {
     'gate-check.mjs', 'gate-notify.json', 'MEMORY.md', 'state.yaml',
+    # ★ FIX-49（2026-10-15）：`settings.json` = **宿主侧**文件（`{IDE}/settings.json` 的 Stop 链），
+    #   随 state-protocol.md §9.0「宿主共享点清单」首次被引用（A4 原报 1 条 WARN）⇒ 显式登记。
+    'settings.json',
     'gen_doc_index.py', 'wait-answer.ps1', 'probe-readonly-gate.mjs',
     'backup_manifest.yaml', 'CONTEXT.md', 'L1-overview.md', 'L2-module.md',
     'L3-glossary.md', 'AGENTS.md', 'CLAUDE.md', 'oracle_server.py',

@@ -21,6 +21,7 @@
 | A6 | 回流水位 | 与源仓库逐文件比对（路径缺失 ⇒ SKIP） | WARN |
 | A7 | 状态字段登记闭环（★ 2026-09-23 新增） | `state.yaml` 的顶层字段须在 `state-protocol.md` §三（格式）**且** §3.3（枚举）登记；出现未登记字段 ⇒ WARN。**历史反例**：`delete_allow` 仅见于门禁协议、Schema 未登记 ⇒ 静默漂移（本次 `defects[]` 已按此规则登记） | WARN（★ 脚本未实现，人工核） |
 | A8 | 等待点指针完备（★ 2026-10-01 新增 · RESUME-3 批次 1） | 含"等待用户"类确认表述的 engine md（含 templates/）须挂 `waiting-protocol.md` 指针；漏挂 ⇒ ERR。**背景**：等待机制曾只挂 phase-04，09-30 真实迭代确认门主动登记 0 次 | ERR |
+| A9 | 缺陷修复短会话留痕（★ 2026-10-12 新增 · FIX-SHORTSESS） | 迭代内 `defects[]` 有 `fixed` 条目 ⇒ 每窗口 `phase_steps` 含 `step-fix-1-5-handoff` 且 `fix-handoff-D<n>.md` 存在；微修豁免 = note 注明「微修未交接」。仅对 2026-10-12 后的新迭代生效 | WARN（★ 脚本未实现，人工核；工单 `FIX-SHORTSESS-AUD`） |
 
 > A5 对象 = `engine/evolution-safety.md` · `engine/consistency-checklist.md` · `runtime/SESSION-HANDOFF.md`（三份元层规范）。
 
@@ -68,3 +69,5 @@ python scripts/audit-engine.py --src <引擎仓库根>  # 追加 A6 回流水位
 | 2026-09-23 | **2.1** | 新增 **A7 状态字段登记闭环**（规范维度，脚本待实现）；由 `runtime/TOOLING-TODO.md` `DEFECT-1` 驱动（`defects[]` 落地 + `delete_allow` 历史漂移反例） |
 | 2026-10-02 | **2.2** | ① **A5 新增「按需刷新」口径**（`A5-ON-DEMAND` 标记；`runtime/SESSION-HANDOFF.md` 为交接快照，不适用 7 天时效/联动判据 ⇒ 消除每迭代复报）；② **A4 `EXTERNAL_TARGETS` 显式登记 3 项**外部/宿主侧目标（`gen_doc_index.py` / `wait-answer.ps1` / `probe-readonly-gate.mjs`）；③ **`CORE_FILES` 改列** `engine/gate/gate-check.mjs`（实现外置后校正，原列 `hooks/` 侧已为 shim）；④ 登记观察项：A2 `STEP_ID_RE` 不匹配 `step-fix-*` 家族（闭环盲区，待排期）。依据：迭代 `2026-10-01-002-引擎窄放行与遗留收口`（W-1 / W-2 / E-3） |
 | 2026-10-10 | 补记 | **TOOL-INTV A+B 批联动记账**（A5-a 预防，防"引擎已改、规范未跟"）：A 批 6 文件（phase-01 / phase-steps / phase-02 / cross-review-protocol + 2 模板）+ B 批 9 文件（phase-04 新增 Step 5.5b 模式候选登记 / phase-07 Step 3 附节「知识资产抽取」/ startup-protocol 惰性加载新增 `project/lessons-learned.md` 行 / lessons-learned（engine+project）置信度列 + 01-03 蒸馏窗口 + 模式候选区 / context-discipline 01 行 / 2 模板 / 本文件）——全文见 `engine/evolution-safety.md` 变更记录 2026-10-10 两行。收口实测：A8 扫描 46 个 engine md = OK（等待点指针完备）；A4 本项目侧零新增（B2/B3 兜底文档"不写全路径反引号"约束生效）；模板 doc_lint 不做（评审 A#12） |
+| 2026-10-12 | **2.3** | 新增 **A9 缺陷修复短会话留痕**（工单 `FIX-SHORTSESS-AUD`） |
+| 2026-10-14 | 补记 | **#67 治理联动记账**（A5-b/c 预防，同批清偿）：engine 侧 8 实体（`state-protocol.md` 5 字段 + §3.3「预估字段校验」· `validate-state.py` 新增 **[R9] `check_estimate`** · `complexity-scoring.md` · `phase-steps.md` · `phase-01.md` · `phase-03.md` · `phase-07.md`）+ 2 新增（`runtime/metrics/gen-estimate-baseline.mjs` · `runtime/metrics/estimate-baseline.json`）——全文见 `engine/evolution-safety.md` 变更记录 2026-10-14 行。治理面 4 件同批 = 本文件 · `evolution-safety.md` · `capability-map.md`（§5 +1 行「预估与偏差」+ 节计数 （5）→（6））· `scripts/run-state-tests.py`（SEED +5 字段 + T11a~d ⇒ **14/14**）。A1~A9 脚本侧零改（`audit-engine.py` **ERR 0 / WARN 4** = 基线，A4×4 零新增） |

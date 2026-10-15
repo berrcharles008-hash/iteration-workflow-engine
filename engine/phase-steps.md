@@ -3,6 +3,7 @@
 > 从 `workflow-engine.md` 提取。本文件是所有阶段步骤清单的**唯一真相源（Single Source of Truth）**。
 > 进入阶段时 Agent 从本文件提取对应阶段的步骤，写入 `state.yaml` 的 `phase_steps`。
 > 回退阶段时从本文件获取默认步骤清单（见 [state-protocol.md](state-protocol.md) §5.2）。
+> ★ **「强制」列与「触发条件」列仅为引用展示**：`mandatory` 的唯一权威源 = `complexity-scoring.md` §二（SKILL.md 原则 12 附注）；本文件不重复默认值语义，冲突时以该表为准。
 
 ---
 
@@ -17,6 +18,7 @@
 | step-2-classify | 判断需求类型（Bug类/功能类），选择对应模板 | ✅ | 始终 |
 | step-2-5 | 闭环追问（复述确认 → 动态追问 → 5W2H 兜底） | ✅ | 始终 |
 | step-2-6 | 共享语言建立（生成 CONTEXT.md 术语映射快照） | ✅ | 始终 |
+| step-2-7-estimate | 初估（类型基线） | — | 始终（🟢 `mandatory=false`，按 `complexity-scoring.md` §二） |
 | step-3-output | 生成01-需求记录.md | ✅ | 始终 |
 | step-4-user-confirm | 用户确认需求文档 | ✅ | 始终 |
 
@@ -64,6 +66,7 @@
 | step-2-output | 产出技术方案文档 | ✅ | 始终 |
 | step-3-self-review | 自主审查L1/L2（关键符号验证） | ✅ | 始终 |
 | step-3x-cross-review | 独立Agent交叉审查L1/L2 | ✅ | 🟡🔴 |
+| step-3-5-reestimate | 复估（收窄） | — | 始终（step-2-output 后；🟢 `mandatory=false`，按 §二） |
 | step-4-review-gate | 评审边界与通过标准检查（4项） | ✅ | 始终 |
 | step-5-fix-verify | 修复验证（3项） | ✅ | 审查发现问题后 |
 | step-5-review-gate-result | 写入评审门禁结果到 state.yaml | ✅ | 始终 |
@@ -99,7 +102,8 @@
 | step-6-spec | Spec 合规验证 | ✅ | 🔴复杂级 + 有 ADDED 文件 |
 | step-7-code-review | 代码审查 | ✅ | 始终 |
 | step-fix-1-register | 缺陷登记（写入 `defects[]` + 与 05 报告对账） | — | 存在 `open` 缺陷且 `design_changed=false` |
-| step-fix-2-code | 缺陷修复编码（含 csproj 注册） | — | step-fix-1-register 完成 |
+| step-fix-1-5-handoff | 缺陷修复交接卡生成（★ 短会话前置；卡片字段与落盘路径见 `phase-04.md` Step F §F0） | — | step-fix-1-register 完成 |
+| step-fix-2-code | 缺陷修复编码（含 csproj 注册） | — | step-fix-1-5-handoff 完成 |
 | step-fix-3-build | 缺陷修复构建验证（涉后端码必须 `/t:Rebuild`；★ 命令禁 `>` / `2>&1` 重定向） | — | step-fix-2-code 完成 |
 | step-fix-4-regress | 失败用例回归（含动作链用例） | — | step-fix-3-build 完成 |
 | step-fix-5-reclose | 缺陷关闭（置 `fixed`）并回 05 | — | step-fix-4-regress 通过 |
@@ -108,7 +112,7 @@
 >
 > 进入阶段时，Agent 根据实际触发条件选择性写入 phase_steps（如无 SQL 变更则 step-0-* 设为 `not_applicable`）。
 >
-> ★ **缺陷修复窗口（2026-09-23 DEFECT-1 新增）**：`step-fix-1-register` ~ `step-fix-5-reclose` 五步**挂 04 阶段**，仅当「存在 `open` 缺陷且 `design_changed=false`」时写入 `phase_steps`（`mandatory=false`）。收口后回 05，**既有用例结果保留**（见 `state-protocol.md` §5.3）。
+> ★ **缺陷修复窗口（2026-09-23 DEFECT-1 新增）**：`step-fix-1-register` ~ `step-fix-5-reclose` **六步**（含 2026-10-12 新增的 `step-fix-1-5-handoff`）**挂 04 阶段**，仅当「存在 `open` 缺陷且 `design_changed=false`」时写入 `phase_steps`（`mandatory=false`）。收口后回 05，**既有用例结果保留**（见 `state-protocol.md` §5.3）。
 > ★ **禁止**再自造游离步骤块 —— 历史 `phase_steps_04_d1fix`、`step-d18-*` 均未被本 SSOT 收录，导致审计与一致性检查看不见修复过程。
 
 ---
@@ -182,6 +186,7 @@
 | step-2-issues | 问题清单（本次迭代遇到的问题） | ✅ | 精简 | 标准 | 完整 |
 | step-3-patterns | 模式沉淀（写入 lessons-learned 模式库） | — | 跳过 | 按需 | ✅ |
 | step-3-5-workflow-audit | 工作流一致性审计（`scripts/audit-engine.py`，❌ 登记 TOOLING-TODO） | ✅ | ✅ | ✅ | ✅ |
+| step-3-6-attribution | 偏差归因 | — | 跳过 | ✅ | ✅ |
 | step-4-actions | 行动项（改进措施落实到人） | — | 跳过 | ✅ | ✅ |
 | step-5-lessons | 正向模式提炼 | ✅ | ✅ | ✅ | ✅ |
 | step-6-archive | 回顾归档（更新 state.yaml 完成 07，刷新机器投影，释放 ACTIVE） | ✅ | ✅ | ✅ | ✅ |
@@ -215,3 +220,4 @@
 | 2026-09-20 | 1.7 | ★ **AUDIT-2 清偿（审计脚本首跑发现）**：补登记长期漏登的 **7 个**步骤 —— 阶段一 `step-1-5`（模块范围定位）· `step-1.6-dir-diff`（目录对比）· `step-2-5`（闭环追问）· `step-2-6`（共享语言）；阶段三 `step-3-rescore`（复杂度复评，03 必经）；阶段四 `step-5-6-complexity-actual`（复杂度实际值回填）；阶段五 `step-0-5`（合规检查）。**根因** = 各 `phase-0X.md` 的步骤表被扩充时未同步本表（本表自称 SSOT 却长期滞后）。联动订正：`phase-05.md`（`step-4-7` → `step-6-spec`）、`phase-04.md`（补 `step-7-code-review` 产出说明）。判据：`python scripts/audit-engine.py` 的 A2 ERR → 0 |
 | 2026-10-07 | 1.8 | ★ **TOOL-QQGATE 项 A**：阶段三/四/五/六各补一行 waiting-protocol 指针（用户确认类步骤等待方式 A/B/D + ask.js 登记铁律），对齐阶段二既有指针。根因 = #19 迭代 02/03 确认点漏发 QQ 通知；联动项 B（state-apply.py 附注）/ C（G1 强制化立项）见 `runtime/TOOLING-TODO.md` |
 | 2026-10-10 | 1.9 | ★ **TOOL-INTV A 批（需求澄清访谈化）**：阶段一 `step-2-5` 名称更新为「闭环追问（复述确认 → 动态追问 → 5W2H 兜底）」，与 `phase-01.md` 双处同步（原「5W2H 七维度穷举生成问题清单」）。零新增步骤 ID；实施基准 `runtime/TOOL-INTV-四件套.md` v2 |
+| 2026-10-12 | 1.10 | ★ **FIX-SHORTSESS**：04 修复窗口新增 `step-fix-1-5-handoff`（交接卡生成，register 后 / code 前），`step-fix-2-code` 触发改挂 handoff，五步扩为**六步**。定义见 `phase-04.md` Step F §F0。零脚本/门禁改动 |\r\n| 2026-10-14 | 1.11 | ★ **#67 预估与偏差度量**：三表各加 1 行（`step-2-7-estimate` 初估 / `step-3-5-reestimate` 复估 / `step-3-6-attribution` 归因）；强制列取 `—`；头部补 mandatory 权威源注记；phase-01/03/07 补行 + 执行说明；登记见 `complexity-scoring.md` §二 |

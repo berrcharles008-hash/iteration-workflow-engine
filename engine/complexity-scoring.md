@@ -55,6 +55,14 @@ factors:
     description: "变更是否跨越多个模块/服务/项目（需协调多团队或多代码库）"
 ```
 
+### 1.1.1 预防性禁用因子（★ 2026-10-14 #67 新增）
+
+> **非权威因子**：`cross_layer`、`test_assets_rewrite` **不是本算法的因子**——二者在引擎代码库检索 **0 命中**（依据：`03-技术方案.md` §4.3 取证），从未在本清单登记过。
+
+- **不得使用**：任何评分环节（`Step C` 初评 / `step-3-rescore` 复评 / `complexity_adjustments` 的升降级理由）**禁止**把 `cross_layer`、`test_assets_rewrite` 计入分数或作为等级依据；**一旦出现即视为评分错误**，须按本清单 9 项重评并作废原评分结论。
+- **因子集固定 9 项**（02-M3 决议）：`new_db_table` / `new_api` / `affected_files` / `new_module` / `new_layer_file` / `layer_modification` / `database_logic_change` / `ddl_change` / `cross_module_impact`；**不新增因子**，既有因子的 `weight`、`rules`、`description` 语义一字不改。
+- 若确需度量「跨层改动」「测试资产重写」，须走正式提案 + 02/03 评审，并**先在上方 `factors` 清单登记**后方可使用。
+
 > **技术栈适配说明**：
 > - 上述默认因素中 `new_db_table`、`database_logic_change`、`ddl_change` 为数据库相关因素。
 > - 纯前端项目建议在 `project.manifest.yaml` 中覆盖，删除 DB 因素并增加 `new_component`、`new_route` 等前端特有因素。
@@ -138,13 +146,18 @@ thresholds:
 | step-3x-cross-review | 技术方案L1/L2交叉审查 | N/A | mandatory=true | mandatory=true |
 | step-1-5x-cross-review | 任务清单交叉审查 | N/A | mandatory=true | mandatory=true |
 | step-2-5-kb-refresh | 知识库刷新（06 归档前无条件） | mandatory=true | mandatory=true | mandatory=true |
-| step-fix-1-register | 缺陷修复窗口（step-fix-2-code → step-fix-3-build → step-fix-4-regress → step-fix-5-reclose，按需触发） | mandatory=false | mandatory=false | mandatory=false |
+| step-fix-1-register | 缺陷修复窗口（step-fix-1-5-handoff → step-fix-2-code → step-fix-3-build → step-fix-4-regress → step-fix-5-reclose，按需触发） | mandatory=false | mandatory=false | mandatory=false |
+| step-2-7-estimate | 初估（类型基线） | mandatory=false | mandatory=true | mandatory=true |
+| step-3-5-reestimate | 复估（收窄） | mandatory=false | mandatory=true | mandatory=true |
+| step-3-6-attribution | 偏差归因 | mandatory=false | mandatory=true | mandatory=true |
 
 > ★ **步骤 ID 以 `phase-steps.md` 为准**（本表原写 `step-1x-cross-review`，与 2026-07-18 v1.2 更名后的
 > `step-1x-review` 不一致，已统一）。
 >
 > ★ **本表未登记的步骤默认 `mandatory=true`**（本表仅显式登记"需按复杂度区分或需特别声明"的步骤；
 > 未登记 = 各等级一律强制）。新增步骤若需 `mandatory=false`，**必须在此登记**，否则按默认强制执行。
+>
+> ★ **本表为 `mandatory` 的唯一权威源**（SKILL.md 原则 12）；`phase-steps.md` 触发条件列仅为引用展示，冲突时以本表为准。
 
 > **N/A 含义**：该步骤在对应复杂度下不适用，Agent 初始化时设为 `status: not_applicable`。
 > **mandatory=false 含义**：该步骤可选，Agent 提示但不阻塞。

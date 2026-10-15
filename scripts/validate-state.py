@@ -12,6 +12,8 @@ SSOT：engine/state-protocol.md §3.3（规则本体）；本脚本为执行通�
   [R7] START-PRECISE：started_at 精确到分（纯日期仅 WARN，不阻断）
   [R8] 开闸留痕对账（★ 2026-10-02 E-1 新增）→ §3.3「开闸对账校验」：有 gate_window ⇒
        fix_files 必填（非空项目内相对路径，禁 .. 与盘符）；fixed + gate_window ⇒ verified_by 必填
+  [R9] 预估字段（★ 2026-10-14 #67 新增）→ §3.3「预估字段校验」：estimate_* 5 项成组（有任一 ⇒
+       5 项须齐全）；net_h/lo/hi 均 ≥0 数值且 lo ≤ net_h ≤ hi；estimate_stage ∈ {"01","03"}
   ★ 显式排除（脚本不覆盖，仍由 Agent 执行）：
     - 双向对账（05 报告「缺陷记录」节 vs defects[].id，§3.3「缺陷台账校验」第 3 条）——单文件入参无法读报告侧
       ⇒ 脚本 exit 0 ≠ §3.3 全过。
@@ -227,6 +229,49 @@ def check_reconcile(data):
         if d.get("status") == "fixed" and not str(d.get("verified_by") or "").strip():
             err("[R8] defects[%r] 开闸修复后置 fixed 但缺 verified_by" % did)
 
+# ── [R9] 预估字段（§3.3「预估字段校验」；可选 + 成组）──────
+ESTIMATE_NUM_FIELDS = ("estimate_net_h", "estimate_lo", "estimate_hi")
+ESTIMATE_FIELDS = ESTIMATE_NUM_FIELDS + ("estimate_stage", "estimate_basis")   # 成组全集（5 项）
+
+def _is_num(v):
+    """数值判定：排除 bool（YAML 的 true/false 在 Python 中 isinstance(int) 为真）。"""
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+def check_estimate(data):
+    """[R9] 预估字段校验（#67 两段式：01 初估 → 03 复估）——与 §3.3「预估字段校验」四条同源：
+    ① 成组：`estimate_*` 5 项存在任一 ⇒ 5 项须齐全；
+    ② 数值：`estimate_net_h` / `lo` / `hi` 均 ≥0 数值，且 `lo ≤ net_h ≤ hi`；
+    ③ 枚举：`estimate_stage ∈ {"01","03"}`；
+    ④ 缺失：历史 state 无字段 = 正常态（不报错，向后兼容先例同 `started_at`）；
+    ⑤ 未登记键：出现白名单（5 项）之外的 `estimate_*` 键（典型：键名拼错）⇒ ERROR —— 否则 ①~③ 会静默全过。
+    ★ `estimate_basis`（类型+规模档，样本<5 时含「回退全局」标注）为自由文本，仅参与成组，不校验内容。"""
+    unknown = sorted(k for k in data if k.startswith("estimate_") and k not in ESTIMATE_FIELDS)
+    if unknown:
+        err("[R9] 未登记的 estimate_* 键：%s（白名单 = %s）—— 键名拼错会致 ①~③ 静默全过"
+            % (unknown, list(ESTIMATE_FIELDS)))
+    present = [f for f in ESTIMATE_FIELDS if f in data]
+    if not present:
+        return  # ④ 缺失 = 正常态（历史 32 迭代零影响）
+    missing = [f for f in ESTIMATE_FIELDS if f not in data]
+    if missing:
+        err("[R9] estimate_* 成组不完整：已给 %s，缺 %s（5 项须齐全）"
+            % (sorted(present), sorted(missing)))
+    nums = {}
+    for f in ESTIMATE_NUM_FIELDS:
+        if f not in data:
+            continue
+        v = data[f]
+        if not _is_num(v) or v < 0:
+            err("[R9] %s = %r 应为 ≥0 数值" % (f, v))
+        else:
+            nums[f] = v
+    if len(nums) == 3:
+        lo, net, hi = nums["estimate_lo"], nums["estimate_net_h"], nums["estimate_hi"]
+        if not (lo <= net <= hi):
+            err("[R9] 区间不满足 lo ≤ net_h ≤ hi（lo=%r net_h=%r hi=%r）" % (lo, net, hi))
+    if "estimate_stage" in data and data["estimate_stage"] not in ("01", "03"):
+        err("[R9] estimate_stage = %r 不在允许值 ['01', '03']" % data["estimate_stage"])
+
 def main():
     path_arg = sys.argv[1] if len(sys.argv) > 1 else None
     try:
@@ -252,6 +297,7 @@ def main():
     check_enum(data)
     check_defects(data)
     check_reconcile(data)    # [R8] 开闸留痕对账（2026-10-02 E-1）
+    check_estimate(data)     # [R9] 预估字段（2026-10-14 #67）
     check_stories(data)
     check_phase_history(data)
 
@@ -263,7 +309,7 @@ def main():
     for n in notes:
         print("[NOTE] %s" % n)
     print("RESULT : %s (errs=%d warns=%d)" % ("PASS" if not errs else "FAIL", len(errs), len(warns)))
-    print("SCOPE  : 脚本覆盖 R1-R8；双向对账（05 报告 vs defects[].id）仍由 Agent 执行 —— exit 0 ≠ §3.3 全过")
+    print("SCOPE  : 脚本覆盖 R1-R9；双向对账（05 报告 vs defects[].id）仍由 Agent 执行 —— exit 0 ≠ §3.3 全过")
     sys.exit(0 if not errs else 1)
 
 if __name__ == "__main__":

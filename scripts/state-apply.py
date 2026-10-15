@@ -26,14 +26,23 @@
   patch --file <json>                       顶层标量覆盖（仅已存在键；逃生口）
 
 每次调用内部完成:
-  加锁(§9 mkdir 原子锁+TLL 60s) → 读 canonical(.claude 优先) → 幂等检查 → 文本级改字段
-  → version+1 / last_updated → 变更前重读比对(乐观锁) → 备份 → 双副本写
-  → 两侧 ACTIVE Line2 同步(STATUS/PHASE/TASKS/BLOCKERS/UPDATED) → 单源校验(runpy validate-state.py)
-  → 失败回滚(state+ACTIVE 双侧) → 自留痕(write-claims.jsonl + gate-audit.log STATE_APPLY) → 释放锁
+  加锁(§9 mkdir 原子锁+TLL 60s) → 读 canonical(**本宿主侧**，FIX-49) → 幂等检查 → 文本级改字段
+  → version+1 / last_updated → 变更前重读比对(乐观锁) → 备份 → **单写本侧**
+  → 本侧 ACTIVE Line2 同步(STATUS/PHASE/TASKS/BLOCKERS/UPDATED) → 单源校验(runpy validate-state.py)
+  → 失败回滚(本侧 state + ACTIVE) → 自留痕(write-claims.jsonl + gate-audit.log STATE_APPLY) → 释放锁
+
+★ FIX-49（2026-10-15 实施 · 四件套 v2.4 · 用户裁定 R1/R9）:
+  canonical = **当前宿主侧**（CodeBuddy → .codebuddy；Claude Code → .claude），宿主身份四级解析
+  （STATE_APPLY_SIDE[仅测试/演练] > GATE_HOST_IDE[shim 注入] > *_PROJECT_DIR env > 脚本自身位置）；
+  解析失败 = **fail-closed（rc=2）**，不做"猜一侧"兜底（R1）。
+  **单写本侧**：写路径零跨侧触碰（原「双副本写 + 回落护栏 + 强制镜像」随 R3/R37 一并作废）——
+  跨侧一致性 = 显式同步（`scripts/sync-runtime.py`，按"新者胜"收敛）。
 
 环境变量:
   STATE_FORCE_WRITE=1   跳过锁与版本比对（逃生口）
   STATE_APPLY_ROOT      演练/隔离根（默认 = 上溯 4 级项目根）
+  STATE_APPLY_SIDE      测试/演练显式侧名（★ R44 加固：须与 GATE_TEST_SANDBOX=1 或 STATE_APPLY_ROOT 同现）
+  STATE_APPLY_STATE     覆盖迭代 ID（默认读 ACTIVE）
   STATE_APPLY_SESSION   留痕用 session id（默认 pid-<pid>）
 
 不覆盖（仍走人工/文件工具）: reopen 10 步协议、归档重命名、多 Story 全量重置、stories[] 深层。
@@ -69,6 +78,40 @@ ALLOWED_CONFIRM_BY = ('qq#', 'ide', 'handoff', 'bypass')
 
 def rt(ide):
     return ROOT / ('.' + ide) / 'skills' / 'iteration-workflow' / 'runtime'
+
+
+def norm_ide(v):
+    """宿主侧名归一（白名单；未知值一律视为未解析）—— 与 gate-check.mjs normalizeHostIde 对称（R2/R27）"""
+    s = (v or '').strip().lstrip('.')
+    return s if s in ('codebuddy', 'claude') else ''
+
+
+def resolve_side():
+    """★ FIX-49 v2.4：宿主侧解析（四级，与门禁三级 + 测试口对称）。失败返回 ''（调用方 fail-closed）。
+
+    ① `STATE_APPLY_SIDE` —— 测试/演练显式口（★ R44 加固：须与 `GATE_TEST_SANDBOX=1` 或
+       `STATE_APPLY_ROOT` 同现才生效；否则**忽略并告警**，防生产环境残留变量静默改写 canonical）
+    ② `GATE_HOST_IDE` —— hook shim 注入（shim 位置 = 宿主位置）
+    ③ 环境变量 `CODEBUDDY_PROJECT_DIR` > `CLAUDE_PROJECT_DIR`
+    ④ 脚本自身位置（…/<IDE>/skills/iteration-workflow/scripts/state-apply.py → parents[3]）
+    """
+    explicit = norm_ide(os.environ.get('STATE_APPLY_SIDE'))
+    if explicit:
+        if os.environ.get('GATE_TEST_SANDBOX') == '1' or os.environ.get('STATE_APPLY_ROOT'):
+            return explicit
+        sys.stderr.write('[state-apply][FIX-49] 忽略 STATE_APPLY_SIDE={}：该口仅限测试/演练'
+                         '（须与 GATE_TEST_SANDBOX=1 或 STATE_APPLY_ROOT 同现）。\n'.format(explicit))
+    inj = norm_ide(os.environ.get('GATE_HOST_IDE'))
+    if inj:
+        return inj
+    if os.environ.get('CODEBUDDY_PROJECT_DIR'):
+        return 'codebuddy'
+    if os.environ.get('CLAUDE_PROJECT_DIR'):
+        return 'claude'
+    try:
+        return norm_ide(SELF.parents[3].name)      # 片1 2a 已核：parents[3] = <IDE> 目录
+    except Exception:
+        return ''
 
 
 def say(msg=''):
@@ -254,14 +297,24 @@ def main():
         return 0 if argv else 2
     cmd, args = argv[0], argv[1:]
 
-    canon = 'claude' if (rt('claude') / 'ACTIVE').exists() else 'codebuddy'
-    mirror = 'codebuddy' if canon == 'claude' else 'claude'
+    # ★ FIX-49 v2.4：恒 canon = **本宿主侧**（单写；无 OTHER / 无回落 / 无镜像）
+    #   · 身份解析失败 ⇒ fail-closed（R1）：不做"猜一侧"兜底，暴露注入链/环境问题。
+    #   · 本侧数据缺失两态语义：α 态（本侧 runtime 全空）⇒ 正常"无活跃迭代"路径，跨侧对齐由
+    #     `scripts/sync-runtime.py` 显式执行；β 态（ACTIVE 有值但 state 缺失）⇒ 上层门禁拦截
+    #     （gate ③-2b 提示跑 sync）。
+    canon = resolve_side()
+    if canon not in ('codebuddy', 'claude'):
+        msg = ('[state-apply][FIX-49] 宿主身份解析失败（STATE_APPLY_SIDE/GATE_HOST_IDE/'
+               '*_PROJECT_DIR env/脚本自身位置四级均不可识别）——R1 裁定不做兜底，fail-closed（rc=2）；'
+               '请排查运行环境而非"猜一侧"。\n')
+        sys.stderr.write(msg)
+        say(msg)
+        return 2
     iid = os.environ.get('STATE_APPLY_STATE') or active_id(canon)
     if iid in ('', 'none'):
         say('无活跃迭代（ACTIVE=none/缺失）→ 拒绝')
         return 2
     spath = rt(canon) / (iid + '.state.yaml')
-    mpath = rt(mirror) / (iid + '.state.yaml')
     if not spath.exists():
         say('canonical state 不存在: ' + str(spath))
         return 2
@@ -530,21 +583,15 @@ def main():
         bak = SNAPSHOTS / ('state-apply-{}-{}.state.yaml.bak'.format(
             datetime.datetime.now().strftime('%Y%m%d-%H%M%S'), iid))
         write_text(bak, orig, crlf)
-        m_orig = read_text(mpath).replace('\r\n', '\n') if mpath.exists() else None
-        apath_c, apath_m = rt(canon) / 'ACTIVE', rt(mirror) / 'ACTIVE'
-        ab_c = ab_m = None
+        # ★ FIX-49 v2.4（R9 方案 B）：**单写本侧** —— 跨侧文件（mpath/他侧 ACTIVE）零触碰。
+        apath_c = rt(canon) / 'ACTIVE'
+        ab_c = None
         if apath_c.exists():
             with open(apath_c, 'rb') as f:
                 ab_c = f.read()
-        if apath_m.exists():
-            with open(apath_m, 'rb') as f:
-                ab_m = f.read()
 
         write_text(spath, new, crlf)
-        if m_orig is not None:
-            write_text(mpath, new, crlf)
         sync_active_line2(canon, new, stamp)
-        sync_active_line2(mirror, new, stamp)
 
         vrc, vbuf = 0, io.StringIO()
         o_argv, o_out = sys.argv, sys.stdout
@@ -562,15 +609,10 @@ def main():
 
         if vrc != 0:
             write_text(spath, orig, crlf)
-            if m_orig is not None:
-                write_text(mpath, m_orig, crlf)
             if ab_c is not None:
                 with open(apath_c, 'wb') as f:
                     f.write(ab_c)
-            if ab_m is not None:
-                with open(apath_m, 'wb') as f:
-                    f.write(ab_m)
-            say('❌ validate-state.py 校验失败（rc={}），已回滚 state + ACTIVE 双侧；输出：'.format(vrc))
+            say('❌ validate-state.py 校验失败（rc={}），已回滚本侧 state + ACTIVE；输出：'.format(vrc))
             say(vbuf.getvalue()[-800:])
             return 1
 
@@ -578,8 +620,8 @@ def main():
         say('✅ {} 完成（{}）'.format(cmd, iid))
         for c in changed:
             say('  · ' + c)
-        say('  双副本: {} + {} | ACTIVE Line2 已同步 | validate exit 0 | 留痕: write-claims + STATE_APPLY | 备份: {}'.format(
-            canon, mirror, bak.name))
+        say('  单写本侧: {}（canonical=本宿主侧，FIX-49）| 本侧 ACTIVE Line2 已同步 | validate exit 0 | 留痕: write-claims + STATE_APPLY | 备份: {}'.format(
+            canon, bak.name))
         log('{} OK iter={} {}'.format(cmd, iid, '; '.join(changed)))
         return 0
     finally:

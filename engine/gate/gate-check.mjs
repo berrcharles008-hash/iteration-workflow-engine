@@ -68,17 +68,59 @@
  */
 
 import { readFileSync, existsSync, appendFileSync, writeFileSync, statSync, mkdirSync, unlinkSync, openSync, readSync, closeSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, basename } from 'path';
+import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 
 // ── 配置 ──────────────────────────────────────────────
 const PROJECT_DIR = process.env.CODEBUDDY_PROJECT_DIR
   || process.env.CLAUDE_PROJECT_DIR
   || process.cwd();
-const RUNTIME_DIR = process.env.GATE_TEST_RUNTIME_DIR
-  || (existsSync(join(PROJECT_DIR, '.claude/skills/iteration-workflow/runtime'))
-    ? join(PROJECT_DIR, '.claude/skills/iteration-workflow/runtime')
-    : join(PROJECT_DIR, '.codebuddy/skills/iteration-workflow/runtime'));
+
+// ── ★ FIX-49（2026-10-15 实施 · 方案 v2.4）：RUNTIME_DIR = **本宿主侧**（宿主自适应解析）──
+//   前史：原实现「`.claude` 目录存在即优先」⇒ CodeBuddy 宿主恒读写 Claude Code 时代的遗留数据
+//   目录（2026-09-28 因 §B.3 强制同步触发**确定性翻转**，10-11 双副本死锁 / 10-10 canonical 静默
+//   覆盖两案例；根源 = 双副本 + 无 owner/provenance）。
+//   口径（用户 2026-10-11/10-15 裁定）：各宿主只读本侧；身份解析失败 = **fail-closed，不兜底**
+//   （R1：需要兜底即说明某环节有问题 ⇒ 暴露问题而非"猜一侧"）。
+//   三级解析（与 `scripts/state-apply.py` 对称，R2）：
+//     ① shim 注入 `GATE_HOST_IDE`（shim 位置 = 宿主位置；`hooks/gate-check.mjs` FIX-49 段）
+//     ② 环境变量（`CODEBUDDY_PROJECT_DIR` > `CLAUDE_PROJECT_DIR`）
+//     ③ 本文件自身位置（…/<IDE>/skills/iteration-workflow/engine/gate/gate-check.mjs → 上溯 5 级）
+//   依据：`runtime/FIX-49-四件套.md` v2.4（③-2 / ③-2g / R1 / R9）。
+const REL_RUNTIME = join('skills', 'iteration-workflow', 'runtime');
+const sideRuntime = (ide) => join(PROJECT_DIR, '.' + ide, REL_RUNTIME);
+/** R27：宿主名白名单归一（①③层对称；未知值一律视为未解析） */
+const normalizeHostIde = (v) => {
+  const s = String(v || '').trim().replace(/^\./, '');
+  return (s === 'codebuddy' || s === 'claude') ? s : '';
+};
+const HOST_IDE = (() => {
+  const inj = normalizeHostIde(process.env.GATE_HOST_IDE);
+  if (inj) return inj;
+  if (process.env.CODEBUDDY_PROJECT_DIR) return 'codebuddy';
+  if (process.env.CLAUDE_PROJECT_DIR) return 'claude';
+  try {   // …/<IDE>/skills/iteration-workflow/engine/gate/gate-check.mjs → 上溯 5 级 = <IDE>
+    let p = fileURLToPath(import.meta.url);
+    for (let i = 0; i < 5; i++) p = dirname(p);
+    return normalizeHostIde(basename(p));
+  } catch { return ''; }
+})();
+const RUNTIME_DIR = process.env.GATE_TEST_RUNTIME_DIR || (() => {
+  if (!HOST_IDE) {
+    // ★ R1 裁定：不做兜底（不按存在性探测"猜一侧"）—— 宁可拒服务也要暴露注入链问题。
+    process.stderr.write('[gate][FIX-49] 宿主身份解析失败（GATE_HOST_IDE / *_PROJECT_DIR / 自身位置三级均空）'
+      + '——按 R1 裁定不做兜底，fail-closed。请排查 shim 注入链/运行环境，暴露问题而非"猜一侧"。\n');
+    process.exit(2);
+  }
+  return sideRuntime(HOST_IDE);   // 身份已知 ⇒ 恒本侧；本侧缺失 ⇒ α/β 态语义（③-2f 提示，不回落）
+})();
+/** 审计用：runtime 落点（项目相对路径；供 `host=`/`runtime=` 字段判定读侧，R25/P1） */
+const RUNTIME_TAG = (() => {
+  const p = RUNTIME_DIR.replace(/\\/g, '/');
+  const b = PROJECT_DIR.replace(/\\/g, '/');
+  return p.startsWith(b + '/') ? p.slice(b.length + 1) : p;
+})();
 
 // ── ★GATE-1①（2026-09-20）：调用留痕 —— 让「静默放行」变成可对账的事实 ──
 //   背景：实测 2 次删除类调用既无 block 也无 allow 留痕（`deleteGate` 的审计同样缺失）
@@ -86,8 +128,26 @@ const RUNTIME_DIR = process.env.GATE_TEST_RUNTIME_DIR
 //   故超时 / 被 kill / 空 stdin 等早退路径**同样**留下证据。
 //   对账判据：count(HOOK_ENTER) == count(allow) + count(BLOCK) + count(BYPASS)（差值 = 0 ⇒ 无幽灵调用）
 if (!process.argv.includes('--stop-check')) {
-  audit('HOOK_ENTER', `pid=${process.pid} ppid=${process.ppid} tty=${process.stdin.isTTY === true} argv=${process.argv.slice(1).join(' ')}`);
+  // ★ FIX-49 ③-2c（R25/P1）：`host=` + `runtime=` 字段 —— 一次写入即可从审计判定"读的是哪一侧"
+  //   （比"看哪个文件变新"更强；也是 H1~H8 的断言判据）。
+  audit('HOOK_ENTER', `host=${HOST_IDE || '?'} runtime=${RUNTIME_TAG} pid=${process.pid} ppid=${process.ppid} tty=${process.stdin.isTTY === true} argv=${process.argv.slice(1).join(' ')}`);
 }
+
+// ── ★ FIX-49（v2.2 · 复核 R41）：双宿主复活检测 —— **只留痕，零放行面变化** ──
+//   语义：把"两宿主并用须重新裁定"从文档字句变成可观测信号（另一侧 hooks/settings 现身
+//   = 双宿主场景复活 ⇒ 跨宿主并发禁则/镜像面口径需重新评估）。dedup 标记防每条调用刷屏。
+try {
+  const otherSide = HOST_IDE === 'codebuddy' ? 'claude' : (HOST_IDE === 'claude' ? 'codebuddy' : '');
+  if (otherSide) {
+    const otherSettings = join(PROJECT_DIR, '.' + otherSide, 'settings.json');
+    const otherHook = join(PROJECT_DIR, '.' + otherSide, 'hooks', 'gate-check.mjs');
+    const warned = join(RUNTIME_DIR, '.fix49-multihost-warned');
+    if ((existsSync(otherSettings) || existsSync(otherHook)) && !existsSync(warned)) {
+      audit('FIX49_MULTIHOST_WARNING', `另一侧 .${otherSide} 存在 hooks/settings —— 跨宿主并用需重新裁定（本侧 host=${HOST_IDE}）`);
+      try { writeFileSync(warned, new Date().toISOString() + '\n', 'utf-8'); } catch { /* 标记写入失败不阻断 */ }
+    }
+  }
+} catch { /* 探测失败不影响判定 */ }
 
 // ── ★GATE-1①（2026-09-20）：exit 留痕 —— **注册点上移**（原位于逃生口分支之后）──
 //   原因：逃生口分支直接 `process.exit(0)` 早退，原注册点在其后 ⇒ 逃生口生效期间
@@ -224,7 +284,14 @@ const STAGE_EXEMPT_PATHS = {
   // ★ GATE-7（2026-09-27）：无活跃迭代期的纯文档放行 —— 立项前需求登记
   //   （实测 requirements/待排期需求登记.md 被拦 2 次）与迭代文档预写。
   //   业务代码 / docs 其它子目录 / knowledge-base 在 none 态仍然全拦（fail-closed）。
-  'NONE': { dirs: ['docs/iterations/'], mdDirs: ['requirements/', 'feasibility/'] },
+  // ★ FIX-45（2026-10-11）：增 runtime 立项文件豁免 —— 死锁实证：headless 立项必须先写
+  //   runtime/ACTIVE + runtime/<迭代ID>.state.yaml，而 none 态不放行任何 runtime/ 写入
+  //   ⇒「创建迭代」被自己的门禁拦死（job c10b6fe6 卡 20+ 分钟无法立项，鸡生蛋）。
+  //   范围严格限定 runtime/ 目录下的 ACTIVE 与 *.state.yaml（业务码/其它 runtime 文件仍拦）。
+  'NONE': {
+    dirs: ['docs/iterations/'], mdDirs: ['requirements/', 'feasibility/'],
+    runtimeFiles: ['ACTIVE', '*.state.yaml'],
+  },
 };
 
 /**
@@ -241,6 +308,14 @@ function matchStageExempt(phase, relPath) {
   if (hasTraversal(p)) return null;
   const hit = (pat) => p.startsWith(pat) || p.includes('/' + pat);
   for (const f of rule.files || []) if (p === f || p.endsWith('/' + f)) return f;
+  // ★ FIX-45（2026-10-11）：runtime 立项文件豁免 —— 命中「skills/iteration-workflow/runtime/」下的
+  //   ACTIVE（精确）或 *.state.yaml（后缀）。防越权：仅末段文件名参与匹配，still 受 hasTraversal 前置约束。
+  if (rule.runtimeFiles && p.includes('skills/iteration-workflow/runtime/')) {
+    const seg = p.split('/').pop();
+    for (const rf of rule.runtimeFiles) {
+      if (rf === seg || (rf.startsWith('*') && seg.endsWith(rf.slice(1)))) return 'runtime/' + seg;
+    }
+  }
   for (const d of rule.dirs || []) if (hit(d)) return d;
   if (/\.md$/i.test(p)) {
     for (const d of rule.mdDirs || []) if (hit(d)) return d;
@@ -833,12 +908,52 @@ const INTERPRETER_INLINE_PATTERNS = [
   /\b(?:bash|sh|zsh)\s+-c\b/i,
 ];
 
-/** 按链式分隔符拆分复合命令（&& || ; & | 换行） */
+/**
+ * 按链式分隔符拆分复合命令（&& || ; & | 换行）。
+ * ★ FIX-50（2026-10-14 · 迭代 2026-10-14-001）：**引号感知** —— 单/双引号内的分隔符
+ *   不参与切分（引号内 = 数据，与 GATE-A② `stripQuotedText` 同口径）；段内保留**原文**
+ *   （供 extractPathsFromCommand 提取真实路径，候选 B「整条 strip」据此否决）。
+ *   fail-closed 六约束（评审路 3-A4，防 5 类新漏放面）：
+ *     ① 未闭合引号 ⇒ 整体回退原 split（禁止「吞并到串尾」掩蔽后续真命令）；
+ *     ② 闭合引号后可继续切分（含无空格紧邻 `echo "a"|del y`）；
+ *     ③ 双引号态内 `` ` `` 转义跳过下一字符（PS 语义；单引号态不处理）；
+ *     ④ 单/双引号状态独立（异种引号不切换状态）；
+ *     ⑤ 换行不重置引号态（跨行未闭合 ⇒ 落 ① 回退）；
+ *     ⑥ 引号态外 `&` `|`（单双皆切，与原正则结果等价）、`;`、换行 ⇒ 切分。
+ *   依据：audit 2026-10-14T01:12:22Z（引号内 `|delete |` 被误切 ⇒ deleteGate 空目标误拦）；
+ *   评审：引擎 3 路独立评审 + step-3x 交叉审查（见 runtime/FIX-50-四件套.md）。
+ */
 function splitCommandChain(cmd) {
-  return String(cmd || '')
-    .split(/&&|\|\||[;&|\n]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const src = String(cmd || '');
+  const naiveSplit = () => src.split(/&&|\|\||[;&|\n]/).map((s) => s.trim()).filter(Boolean);
+  const segs = [];
+  let buf = '';
+  let quote = null;                        // 引号态：null / "'" / '"'
+  for (let i = 0; i < src.length; i += 1) {
+    const ch = src[i];
+    if (quote) {
+      if (ch === '`' && quote === '"') {   // ③ PS 转义（仅双引号态内）
+        buf += ch + (src[i + 1] || '');
+        i += 1;
+        continue;
+      }
+      if (ch === quote) quote = null;      // ④ 仅同种引号退出
+      buf += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; buf += ch; continue; }
+    if (ch === '&' || ch === '|') {        // ⑥ 单双皆切（&& / || 与单字符结果等价）
+      segs.push(buf);
+      buf = '';
+      if (src[i + 1] === ch) i += 1;
+      continue;
+    }
+    if (ch === ';' || ch === '\n') { segs.push(buf); buf = ''; continue; }
+    buf += ch;
+  }
+  if (quote) return naiveSplit();          // ① 未闭合 ⇒ 回退（fail-closed）
+  segs.push(buf);
+  return segs.map((s) => s.trim()).filter(Boolean);
 }
 
 /**
@@ -1042,6 +1157,20 @@ if (!WATCHED_TOOLS.includes(toolName)) {
   process.exit(0);
 }
 
+// ── ★ FIX-47（2026-10-11 用户拍板）：headless 身份整体免门禁 ─────────────────
+//   设计决策：headless（PIVAS_HANDOFF_OWNER 环境变量，由 qqbot 注入 serve/print 进程，
+//   job 及其 hook 继承）是**用户 QQ 授权的执行者**；其纪律由接管任务书（第 12/13 条：
+//   禁止越阶段 / 不可逆一律 QQ 确认）与 ask.js 确认门约束，不再由门禁逐点硬拦。
+//   动因：逐点打补丁不可持续（2026-10-11 一天内暴露两个拦截点：接管锁拦 job 自身、
+//   none 态拦 Bash 写命令——每修一个都要开闸+重启一轮）。
+//   保留的防线：① 审计留痕（每次放行可对账）② IDE 侧一切照旧（env 天然区分——只有
+//   serve/print 的 job 有该变量）③ 锁对「IDE 侧」的拦截不变（防双写）④ 不可逆操作
+//   从来靠 QQ 确认门（门禁本就不懂 DDL/DML 语义）。
+if (process.env.PIVAS_HANDOFF_OWNER) {
+  audit('HANDOFF_OWNER_ALLOW', `[ALL] tool=${String(toolName || '')} target=${String(filePath || '')}`.substring(0, 200));
+  process.exit(0);
+}
+
 // ── execute_command 命令风险分级 ──────────────────────
 if (toolName === 'execute_command' || toolName === 'Bash') {
   // ★ FIX-8：CodeBuddy 传入的规范化名是 'Bash'（非 'execute_command'），必须一并接受。
@@ -1106,7 +1235,8 @@ if (toolName === 'execute_command' || toolName === 'Bash') {
   }
 
   // ★ FIX-9d：解释器内联「疑似删除」仅审计留痕（不拦截，理由见 isInlineDeleteSuspect 注释）
-  //   ★ 用**整条命令**判定：内联代码含 `;` 会被 splitCommandChain 拆段，逐段判定会漏检
+  //   ★ 用**整条命令**判定：内联代码含**未引号** `;` 会被 splitCommandChain 拆段
+  //   （★FIX-50 起引号内分隔符不拆），逐段判定会漏检
   if (isInlineDeleteSuspect(cmd)) {
     audit('AUDIT_SUSPECT', `[CMD] ${cmd.substring(0, 140)}`);
   }
@@ -1149,6 +1279,25 @@ await concLockCheck(relativePath, toolName);
 // ── ★ RESUME-3 批次 3 路线 I：阶段推进留痕观测（S8 · ALLOW+NOTIFY · fail-open）──
 // 必须挂在第 1 关 ALWAYS_ALLOW 之前（state.yaml 命中 runtime/ 豁免段，挂后面=死代码）。
 await phaseAdvanceGuard(relativePath);
+
+// ── ★ FIX-49 ③-2e（R8 甲 · 写侧路由）：镜像面「他侧」直写拦截 ─────────────
+//   背景（复核 R36/P0-1）：三个咽喉点（ALWAYS_ALLOW_SEGMENTS / FIX-45 none 态豁免 / 04 全放行）
+//   对 runtime/** 的放行**不分侧** ⇒ 手工/工具直写"非本侧镜像面文件"会持续制造单侧漂移且零检测。
+//   形态甲（2026-10-15 裁定）：写类工具命中「镜像面白名单 且 非本侧」⇒ block + 文案。
+//   边界：① 仅写类工具（Bash 伪路径走命令通道、Delete 走 deleteGate 各自既有口径）
+//        ② 本侧镜像面行为不变（ALWAYS_ALLOW / FIX-45 语义不缩不放）
+//        ③ 非镜像面文件（*.state.archived.yaml / *.bak / 审计日志等）不受影响
+//           —— ③-15 切换规程需归档他侧 gate-audit.log / write-claims.jsonl。
+const mirrorFace = otherSideMirrorFace(relativePath, toolName);
+if (mirrorFace) {
+  audit('MIRROR_WRITE_BLOCK', `[FIX-49] ${relativePath} (host=${HOST_IDE}, other=.${mirrorFace.ide})`);
+  block(
+    '镜像面文件（ACTIVE / state.yaml）不允许直写「非本宿主侧」。',
+    `目标: ${relativePath}（本侧 = .${HOST_IDE}）`,
+    '依据 FIX-49（R8/甲 + R9 方案 B）：镜像面白名单只经**本侧**写入（state-apply.py），跨侧对齐走 sync-runtime.py。',
+    `跨侧对齐: python .${HOST_IDE}/skills/iteration-workflow/scripts/sync-runtime.py（按「新者胜」收敛，幂等可重跑）`
+  );
+}
 
 // ── 第1关：ALWAYS_ALLOW（★ FIX-9：段前缀匹配，不再子串 includes）────
 if (isAlwaysAllow(relativePath)) {
@@ -1292,6 +1441,11 @@ async function gateCheck(fsPath, cmdCtx) {
   }
 
   if (!activeId || activeId === 'none') {
+    // ★ FIX-49 ③-2f（α 态纠偏 · R38/P0-6）：本侧无活跃迭代时的跨侧**只读探测** —— 仅产出提示
+    //   文案、不参与任何放行判定。原话术「业务代码修改请先创建新迭代」在 α 态（本侧 runtime
+    //   未初始化/为空而另一侧有活跃迭代）下会诱导 Agent 自建**重复迭代**（随后与另一侧真实迭代
+    //   镜像覆盖）⇒ 改为分支提示"请勿新建迭代，先对齐本侧"。
+    const alphaLines = alphaStateLines();
     // ★ GATE-7（2026-09-27）：none 态放行纯文档路径（立项前需求登记 / 迭代文档预写）。
     //   Bash 伪路径不享豁免（matchStageExempt 内 `[` 守卫，与 FIX-24 口径一致）。
     const noneHit = matchStageExempt('NONE', fsPath);
@@ -1300,9 +1454,20 @@ async function gateCheck(fsPath, cmdCtx) {
       process.exit(0);
     }
     if (cmdCtx) {
+      // ★ FIX-46（2026-10-11）：headless 自身（PIVAS_HANDOFF_OWNER）在 none 态放行写类命令 ——
+      //   背景：headless 立项必须写文件，而 serve 环境的 write_to_file 被 worktree 引擎阻塞
+      //   （pending 永不返回，2026-10-11 两次实证）⇒ 任务书要求改用 Bash 写；但 none 态拦
+      //   "含写/删/变更语义"的命令 ⇒ 立项被自家门禁二次拦死（鸡生蛋）。
+      //   范围：仅 none 态的 Bash 命令分支豁免；仅 PIVAS_HANDOFF_OWNER 会话（serve/print 的
+      //   headless job 自身，随 serve 进程注入）；01-07 阶段豁免表与阶段门均不变。
+      if (process.env.PIVAS_HANDOFF_OWNER) {
+        audit('HANDOFF_OWNER_ALLOW', `[NONE-cmd] ${fsPath}`);
+        process.exit(0);
+      }
       block(
         '当前无活跃迭代：该命令含「写/删/变更」语义，已拒绝。',
         `本次尝试: ${fsPath}`,
+        ...alphaLines,
         ...cmdGateLines(cmdCtx)
       );
     }
@@ -1310,8 +1475,10 @@ async function gateCheck(fsPath, cmdCtx) {
       '当前无活跃迭代。',
       '所有代码修改必须经过迭代工作流。',
       `本次尝试: ${fsPath}`,                       // ★ FIX-11：拦截留痕带目标，便于回溯
+      ...alphaLines,
       '',
       'none 态仅放行纯文档: docs/iterations/ · requirements/*.md · feasibility/*.md',
+      '（★ FIX-45：立项写入 runtime/ACTIVE 与 runtime/*.state.yaml 亦放行）',
       '业务代码修改请先创建新迭代（开始迭代 / 进入01阶段）。'
     );
   }
@@ -1319,7 +1486,13 @@ async function gateCheck(fsPath, cmdCtx) {
   // ── 第3关：读取迭代状态 ─────────────────────────────────
   const stateFile = join(RUNTIME_DIR, `${activeId}.state.yaml`);
   if (!existsSync(stateFile)) {
-    block(`活跃迭代「${activeId}」的状态文件丢失。`);
+    // ★ FIX-49 ③-2b：跨侧**只读**探测 —— 另一侧存在同名 state ⇒ 提示"跑 sync 对齐本侧"
+    //   （不消费另一侧数据、不参与放行判定；β 态 = 本侧 ACTIVE 有值但 state 缺失）。
+    const otherHint = otherSideStateHint(activeId);
+    block(
+      `活跃迭代「${activeId}」的状态文件丢失。`,
+      ...(otherHint ? [otherHint] : [])
+    );
   }
 
   const stateContent = readFileSync(stateFile, 'utf-8');
@@ -1496,6 +1669,66 @@ function isInlineDeleteSuspect(seg) {
  */
 function hasTraversal(p) {
   return /(?:^|\/)\.\.(?:\/|$)/.test(String(p || ''));
+}
+
+/**
+ * ★ FIX-49 ③-2e（R8 甲）：他侧镜像面直写判定。
+ * 命中条件（全部满足）：① 宿主身份已解析 ② 非删除类工具 ③ 目标为**真实路径**（非 Bash 伪路径）
+ *   ④ 无上跳段 ⑤ 路径形如 `.{ide}/skills/iteration-workflow/runtime/(ACTIVE|<ID>.state.yaml)`
+ *   ⑥ 该 ide ≠ 本宿主侧。
+ * 返回 { ide, file }；未命中返回 null（本侧镜像面 ⇒ 维持 ALWAYS_ALLOW 原放行）。
+ */
+function otherSideMirrorFace(relPath, tool) {
+  if (!HOST_IDE) return null;                                    // 身份未解析（已 fail-closed 前置）
+  if (tool === 'Delete' || tool === 'delete_file' || tool === 'delete_files') return null;
+  const raw = String(relPath || '');
+  if (!raw || raw.startsWith('[')) return null;                  // Bash 伪路径不参与（口径同 matchStageExempt）
+  const p = raw.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (hasTraversal(p)) return null;
+  const m = /^\.([a-z]+)\/skills\/iteration-workflow\/runtime\/(ACTIVE|[^/]+\.state\.yaml)$/.exec(p);
+  if (!m) return null;
+  const ide = m[1];
+  if (!['codebuddy', 'claude', 'cursor', 'codex'].includes(ide)) return null;
+  if (ide === HOST_IDE) return null;                             // 本侧 ⇒ 不拦
+  return { ide, file: m[2] };
+}
+
+/**
+ * ★ FIX-49 ③-2b（β 态）：跨侧**只读**探测另一侧同名 state —— 仅产出提示文案，
+ * 不消费其数据、不参与任何放行判定（R1 边界内的"只读探测"）。
+ */
+function otherSideStateHint(activeId) {
+  if (!HOST_IDE || !activeId) return '';
+  const other = HOST_IDE === 'codebuddy' ? 'claude' : 'codebuddy';
+  try {
+    const p = join(PROJECT_DIR, '.' + other, REL_RUNTIME, `${activeId}.state.yaml`);
+    if (existsSync(p)) {
+      audit('FIX49_OTHER_SIDE_STATE', `[${activeId}] 另一侧 .${other} 存在同名 state（本侧 host=${HOST_IDE}）`);
+      return `另一侧（.${other}）存在该迭代状态（跨宿主切换/副本未同步）——跑 scripts/sync-runtime.py 对齐本侧后重试。`;
+    }
+  } catch { /* 探测失败不影响判定 */ }
+  return '';
+}
+
+/**
+ * ★ FIX-49 ③-2f（α 态）：本侧无活跃迭代时的跨侧只读探测文案（**不参与放行判定**）。
+ * α 态 = 本侧 runtime 未初始化/为空而另一侧有活跃迭代（跨宿主切换/副本未同步）。
+ */
+function alphaStateLines() {
+  if (!HOST_IDE) return [];
+  const other = HOST_IDE === 'codebuddy' ? 'claude' : 'codebuddy';
+  try {
+    const oa = join(PROJECT_DIR, '.' + other, REL_RUNTIME, 'ACTIVE');
+    if (!existsSync(oa)) return [];
+    const v = String(readFileSync(oa, 'utf-8') || '').replace(/^\uFEFF/, '').split(/\r?\n/)[0].trim();
+    if (!v || v === 'none') return [];
+    audit('FIX49_ALPHA_DETECT', `[NONE] 本侧无活跃迭代 + 另一侧 .${other} 有活跃迭代 ${v}（host=${HOST_IDE}）`);
+    return [
+      '',
+      `★ 检测到另一侧（.${other}）有活跃迭代 ${v}（跨宿主切换/副本未同步）——请勿新建迭代，`,
+      '  先按首次接入指引对齐本侧: python scripts/sync-runtime.py --from ' + other,
+    ];
+  } catch { return []; }
 }
 
 /** 相对路径是否落在工作流 runtime 目录（ALWAYS_ALLOW） */

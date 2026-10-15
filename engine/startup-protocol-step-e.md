@@ -1,7 +1,7 @@
 # 启动协议 — Step E 每日工作日志
 
 > 引用 `engine/startup-protocol.md` 的 Step A-D 通用启动流程。
-> 本条仅为项目级补充：对话结束前写入每日工作日志（Claude Code 特有，CodeBuddy 已有自己的日志机制）。
+> 本条仅为项目级补充：对话结束前写入每日工作日志（落在**本宿主侧** `{IDE}/memory/`，FIX-49；CodeBuddy 另有自己的日志机制，两者互不冲突）。
 
 ---
 
@@ -13,8 +13,12 @@
 ### E.1 日志路径
 
 ```
-.claude/memory/YYYY-MM-DD.md
+{IDE}/memory/YYYY-MM-DD.md
 ```
+
+> ★ FIX-49（2026-10-15）：落**本宿主侧** —— CodeBuddy ⇒ `.codebuddy/memory/`；Claude Code ⇒
+> `.claude/memory/`（两侧均已有存量日志）。原硬编码 `.claude/memory/` 已废止（那是"每轮都在写
+> 另一侧"的行为，且 `.gitignore` 只保护 `.codebuddy/memory/**`）。
 
 日期使用当前对话日期。文件不存在则创建，存在则追加。
 

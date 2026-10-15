@@ -7,8 +7,8 @@
 
 ```
 目标文件列表：
-  1. {PROJECT_ROOT}/.claude/skills/iteration-workflow/project/lessons-learned.md
-  2. {PROJECT_ROOT}/.claude/skills/iteration-workflow/project/review-models.json
+  1. {PROJECT_ROOT}/{IDE}/skills/iteration-workflow/project/lessons-learned.md
+  2. {PROJECT_ROOT}/{IDE}/skills/iteration-workflow/project/review-models.json
   3. {PROJECT_ROOT}/.codebuddy/memory/MEMORY.md ← [仅 CodeBuddy IDE]
 
 遍历目标文件：

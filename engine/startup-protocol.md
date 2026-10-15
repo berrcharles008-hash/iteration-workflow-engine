@@ -29,6 +29,9 @@
    Cursor `.cursor` / Codex `.codex` 已被 hook 识别，但**不承诺**其引擎副本存在。
 2. 实现层路径白名单**必须逐宿主枚举**（`engine/gate/gate-check.mjs` 的数组字面量），故**不变量化**；`{IDE}` 仅用于文档指代，
    读到「实现未跟随文档」时按本理解读，不得据此改 hook。
+   ★ **2026-10-11 FIX-49 起该禁令解除**（2026-10-15 实施）：宿主侧解析已在实现层落地
+   （shim 注入 `GATE_HOST_IDE` + 三级解析 + 解析失败 fail-closed），`engine/gate/gate-check.mjs`
+   按宿主自适应取 `{IDE}/skills/iteration-workflow/runtime/`；`{IDE}` 仍仅用于文档指代。
 3. ★ **派发时主 Agent 必须把 `{IDE}` 解析为实际目录后再嵌入成员 prompt** —— 成员 prompt 内**不得残留字面量**
    （成员无解析义务，残留会导致照字面创建目录）。
 4. 同一文件内**禁止**与 `{{IDE_DIR}}` 混用；后者仅限脚本渲染的模板（渲染实现见 `scripts/setup-gate.py`）。
@@ -91,19 +94,23 @@
 ### B.3：ACTIVE 双副本一致性校验（★ 强制）
 
 > 解决问题：`.claude/` 和 `.codebuddy/` 双目录下的 ACTIVE 可能因 sync 延迟或手动操作而不同步。
+> ★ **FIX-49（2026-10-15 实施）**：本步**不再"写向另一侧"** —— 单写本侧（R9 方案 B）下，
+> 跨侧一致性由 `scripts/sync-runtime.py` 显式收敛（"新者胜"双判 + 幂等可重跑）；
+> 旧口径"以 {IDE} 为准 + 手工同步另一侧"已废止（那正是 09-28 确定性翻转的触发器）。
 
 **校验逻辑**（不阻塞流程，仅输出警告）：
 
 ```
-1. 读取 .claude/skills/iteration-workflow/runtime/ACTIVE
-2. 读取 .codebuddy/skills/iteration-workflow/runtime/ACTIVE
+1. 读取本侧（{IDE}）/skills/iteration-workflow/runtime/ACTIVE      ← 判定源 = 本宿主侧
+2. 读取另一侧 /skills/iteration-workflow/runtime/ACTIVE
 3. 双文件都存在：
    ├── 内容一致 → 静默通过
-   └── 内容不一致 → 输出警告，以 {IDE}（当前宿主目录）为准
-4. 仅 .codebuddy 存在：
-   └── 同步到 .claude 端
-5. 仅 .claude 存在：
-   └── 同步到 .codebuddy 端
+   └── 内容不一致 → 输出警告；**对齐动作 = 跑 sync-runtime.py**（禁止手工 copy 覆盖）
+4. 仅另一侧存在（本侧 runtime 未初始化 = α 态）：
+   └── 按「首次接入指引」跑 sync-runtime.py --from <有数据的侧>
+       （自动建本侧 runtime/ 并复制镜像面白名单；★ 禁止新建重复迭代）
+5. 仅本侧存在：
+   └── 无需动作（接力方接入时由其**在自己那侧**跑 sync 收敛）
 6. 双文件都不存在（首次使用）：
    └── 静默通过，等 01 阶段启动时创建
 ```
@@ -111,12 +118,13 @@
 **不一致警告格式**：
 ```
 ⚠️ ACTIVE 指针双副本不一致：
-  .claude/runtime/ACTIVE     → {内容}
-  .codebuddy/runtime/ACTIVE  → {内容}
-  已以 {IDE}（当前宿主目录）为准，请检查 sync 脚本是否正常运行。
+  {IDE}/runtime/ACTIVE       → {内容}      ← 本侧（判定源）
+  另一侧/runtime/ACTIVE      → {内容}
+  对齐动作：python {IDE}/skills/iteration-workflow/scripts/sync-runtime.py（按"新者胜"收敛）
 ```
 
 > **变更记录（2026-07-23 S4.1）**：新增 Step B.3 ACTIVE 双副本一致性校验，不阻塞流程。
+> **变更记录（2026-10-15 FIX-49）**：判定源改本宿主侧；"手工同步另一侧"改走 `sync-runtime.py`（③-7/③-3b）。
 
 ---
 
