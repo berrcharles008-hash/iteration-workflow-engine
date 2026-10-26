@@ -76,20 +76,23 @@ def _read_template_version() -> str:
 
 # ─── 环境检测 ───────────────────────────────────────────
 
-def detect_environment(ide_hint=None):
+def detect_environment(ide_hint=None, project_root_hint=None):
     """检测 IDE 环境，返回 (ide_key, target_path, ide_dir)
     
     Args:
         ide_hint: 指定的 IDE key，如 "codebuddy"/"claude-code"/"cursor"。
                   None 时自动检测（优先 CodeBuddy → Claude Code → Cursor）。
+        project_root_hint: ★ 2026-10-26（F3）：显式项目根。不传时沿用「从脚本位置向上找
+                  含 IDE 目录的祖先」的启发式 —— 该启发式在「安装源 ≠ 安装根」时会把
+                  MEMORY.md 写到**源侧**（实测：install.ps1 从源副本调用时命中源项目）。
 
     Returns:
         (ide_key, target_path, ide_dir) 或 (None, None, None)
     """
     # 找到项目根目录（包含任意 IDE 目录的目录）
     candidate = SCRIPT_DIR
-    project_root = None
-    for _ in range(5):
+    project_root = Path(project_root_hint).resolve() if project_root_hint else None
+    for _ in range(5 if project_root is None else 0):
         if (candidate / ".codebuddy").is_dir() or \
            (candidate / ".claude").is_dir() or \
            (candidate / ".cursor").is_dir():
@@ -286,9 +289,12 @@ def main():
                         help="Target IDE (default: auto-detect)")
     parser.add_argument("--check", action="store_true", help="Check only, no write")
     parser.add_argument("--force", action="store_true", help="Force re-injection")
+    parser.add_argument("--project-root", default=None,
+                        help="★ 2026-10-26（F3）：显式项目根；不传则从脚本位置向上启发式探测")
     args = parser.parse_args()
 
-    ide_key, target_path, ide_dir = detect_environment(ide_hint=args.ide)
+    ide_key, target_path, ide_dir = detect_environment(ide_hint=args.ide,
+                                                       project_root_hint=args.project_root)
 
     if ide_key is None:
         safe_print(f"[FAIL] Unknown IDE: {args.ide}")

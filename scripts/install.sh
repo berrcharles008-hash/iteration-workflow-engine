@@ -9,6 +9,8 @@
 # v2.1.0 — 038迭代：新增 Step 5 ACTIVE初始化 + Step 6模板注入验证 + Step 7多IDE冷启动微核
 # v2.2.0 — ★ FIX-49（2026-10-15）：detect_ide 探测顺序反转（.codebuddy 优先）+ env 加分信号
 #          + 双目录并存需显式 --ide / --force（防把宿主 skill 装到废弃侧）
+# v2.5.0 — ★ F1/F2/F3（2026-10-26 TOOL-ENGCLOSE-1026）：Step 6 前引导填空 specs_dir（F1）·
+#          Step 8 改跑已装副本（F2）· Step 4 源缺 hooks 硬失败 / Step 7 传安装根（F3）· 新增 --specs-dir
 # ============================================================
 
 set -e
@@ -21,6 +23,8 @@ ENGINE_DIR="$(dirname "$SCRIPT_DIR")"
 DRY_RUN=false
 IDE=""
 FORCE=false
+# ★ F1（2026-10-26）：覆盖 bootstrap-manifest.py 的推导默认值（空 ⇒ 按 IDE 推导）
+SPECS_DIR=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --dry-run|-n)
@@ -29,6 +33,8 @@ while [[ $# -gt 0 ]]; do
             IDE="$2"; shift 2 ;;
         --force)
             FORCE=true; shift ;;
+        --specs-dir)
+            SPECS_DIR="$2"; shift 2 ;;
         *)
             echo "Unknown option: $1"; exit 1 ;;
     esac
@@ -147,7 +153,7 @@ if $DRY_RUN; then
             ;;
     esac
     echo "  Step 8 (门禁自检):"
-    echo "    $ node scripts/run-gate-tests.mjs --quick"
+    echo "    $ node scripts/run-gate-tests.mjs   # 已装副本；分母应为 81（--quick 只精简明细，勿用于验收）"
     echo ""
     echo "╔══════════════════════════════════════════════════╗"
     echo "║  DRY RUN 完成。使用无 --dry-run 参数执行实际安装。  ║"
@@ -198,6 +204,13 @@ esac
 # ── Step 4: Hook 安装（单源 gate-check.mjs）────
 echo "[Step 4/8] Installing gate hook..."
 if [ -n "$HOOK_TARGET" ]; then
+    # ★ F3（2026-10-26）：源缺 hooks/ 时旧写法只让 cp 报错，随后仍打印「✅ installed」
+    #   ⇒ 装出的项目没有门禁却显示成功。改为硬失败（安装源必须是引擎仓库）。
+    if [ ! -f "$ENGINE_DIR/hooks/gate-check.mjs" ]; then
+        echo "  ❌ gate hook source missing: $ENGINE_DIR/hooks/gate-check.mjs"
+        echo "     The install source must be the engine repo (it carries hooks/gate-check.mjs)."
+        exit 1
+    fi
     mkdir -p "$HOOK_TARGET"
     cp "$ENGINE_DIR/hooks/gate-check.mjs" "$HOOK_TARGET/"
     
@@ -253,6 +266,35 @@ if [ ! -f "$MANIFEST_PATH" ] && [ -f "$MANIFEST_TPL" ]; then
     cp "$MANIFEST_TPL" "$MANIFEST_PATH"
     echo "  ✅ Created project.manifest.yaml from template (to be filled in)"
 fi
+
+# ★ F1（2026-10-26）：模板 ★必填全空，而注入器把空串当缺键并**拒绝落盘**
+#   （inject-template.py 2026-10-25 BLOCKER-1 的反腐化设计）⇒ 两者相邻使全新 clone 必然装不上。
+#   SKILL.template.md 只需要 SPECS_DIR / KB_DIR，kb_dir 有默认值 ⇒ 只需填 paths.specs_dir。
+#   按已探测 IDE 推导，仅填空值（幂等），--specs-dir 可覆盖。
+case "$DETECTED_IDE" in
+    codebuddy|claude-code|cursor|codex)
+        PY_BOOTSTRAP="$(command -v python || command -v python3 || true)"
+        if [ -n "$PY_BOOTSTRAP" ] && [ -f "$ENGINE_DIR/scripts/bootstrap-manifest.py" ]; then
+            # set -e 下必须捕获退出码（`|| rc=$?`），否则会在此处静默中断而不打印原因
+            rc=0
+            if [ -n "$SPECS_DIR" ]; then
+                "$PY_BOOTSTRAP" "$ENGINE_DIR/scripts/bootstrap-manifest.py" --manifest "$MANIFEST_PATH" --ide "$DETECTED_IDE" --specs-dir "$SPECS_DIR" || rc=$?
+            else
+                "$PY_BOOTSTRAP" "$ENGINE_DIR/scripts/bootstrap-manifest.py" --manifest "$MANIFEST_PATH" --ide "$DETECTED_IDE" || rc=$?
+            fi
+            if [ $rc -ne 0 ]; then
+                echo "  ❌ manifest bootstrap failed."
+                echo "     Fix: set paths.specs_dir in $MANIFEST_PATH (or pass --specs-dir <path>) and re-run."
+                exit 1
+            fi
+        else
+            echo "  ⚠  bootstrap-manifest.py / python not available — paths.specs_dir must be filled manually."
+        fi
+        ;;
+    *)
+        echo "  ⏭  manifest bootstrap skipped（generic 模式无 IDE 推导）"
+        ;;
+esac
 
 if command -v python &>/dev/null; then
     # 显式传入 template/output 绝对路径：脚本默认值是相对当前工作目录，
@@ -313,7 +355,8 @@ case $DETECTED_IDE in
     codebuddy|claude-code|cursor)
         if command -v python &>/dev/null || command -v python3 &>/dev/null; then
             PY_CMD=$(command -v python || command -v python3)
-            $PY_CMD "$ENGINE_DIR/scripts/setup-gate.py" --ide "$DETECTED_IDE"
+            # ★ F3（2026-10-26）：显式传安装根，避免「源≠安装根」时把 MEMORY.md 写到源侧
+            $PY_CMD "$ENGINE_DIR/scripts/setup-gate.py" --ide "$DETECTED_IDE" --project-root "$(pwd)"
             if [ $? -eq 0 ]; then
                 echo "  ✅ Cold-start gate nucleus injected (or already present)"
             else
@@ -330,11 +373,19 @@ esac
 
 # ── Step 8: 门禁自检 ──────────────────────────────────
 echo "[Step 8/8] Gate self-test..."
-GATE_TEST="$ENGINE_DIR/scripts/run-gate-tests.mjs"
-if [ -f "$GATE_TEST" ]; then
-    node "$GATE_TEST" --quick || echo "⚠ Self-test issues found. Review output above."
+# ★ F2（2026-10-26）：必须跑**已装副本**里的 run-gate-tests。
+#   跑源副本（$ENGINE_DIR/scripts/...）时 resolveHook() 首选项 SKILL_ROOT/hooks/ 会命中源仓库根的
+#   hooks/，旧布局判据只看「父目录是否叫 hooks」⇒ 误判为项目布局 ⇒ dirname×3 反推出错的项目根
+#   ⇒ SHIM/HOST 组整组跳过或全误红（实测 66/60/6、68/23/45）。实测对照：已装副本 = 81/81。
+#   同时去掉 --quick（只精简「已知漏洞」明细，不改分母），并先断言 hook 已落盘。
+GATE_TEST="$SKILL_TARGET/scripts/run-gate-tests.mjs"
+if [ ! -f "$GATE_TEST" ]; then
+    echo "  ⚠  run-gate-tests.mjs not found in $SKILL_TARGET（skipping self-test）"
+elif [ -n "$HOOK_TARGET" ] && [ ! -f "$HOOK_TARGET/gate-check.mjs" ]; then
+    echo "  ❌ Gate hook missing at $HOOK_TARGET/gate-check.mjs — self-test would prove nothing. Aborting."
+    exit 1
 else
-    echo "  ⚠  run-gate-tests.mjs not found（skipping self-test）"
+    node "$GATE_TEST" || echo "⚠ Self-test issues found. Review output above."
 fi
 
 echo ""

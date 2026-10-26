@@ -83,7 +83,13 @@ const HOOK = resolveHook();
 // ★ T4-4（2026-10-24）：布局判定 —— SHIM/HOST 两组都假设 HOOK 位于 `<proj>/.{ide}/hooks/`
 //   并据此 `dirname×3` 反推 implProj。HOOK 落在 engine/gate/（引擎仓库直跑）时该假设不成立，
 //   必须整组 SKIP（否则假红，见 3 路评审 R-15）；项目布局下行为与改前逐字节一致。
-const IS_PROJECT_LAYOUT = basename(dirname(HOOK)) === 'hooks';
+// ★ F2（2026-10-26）：原判据只问「父目录是否叫 hooks」，而引擎仓库根的 `hooks/` 同样满足
+//   ⇒ 仓库直跑被误判成项目布局，`dirname×3` 反推出错的项目根（<repo> 的上一级）⇒ SHIM/HOST
+//   组找不到实现 ⇒ 整组静默跳过或全误红（install Step 8 实测 66/60/6、68/23/45）。
+//   收紧为「父目录 = hooks **且** 祖父目录是 IDE 目录」，与 implProj 的反推前提一致。
+const IDE_DIRS = new Set(['.codebuddy', '.claude', '.cursor', '.codex']);
+const IS_PROJECT_LAYOUT = basename(dirname(HOOK)) === 'hooks'
+  && IDE_DIRS.has(basename(dirname(dirname(HOOK))));
 
 // ── 运行时目录 ────────────────────────────────────────
 // 始终隔离（可用 --runtime-dir 或 GATE_TEST_RUNTIME_DIR 覆盖），
@@ -470,7 +476,7 @@ const TESTS = [
 //   背景：CLI bg worktree 隔离区缺 engine/** ⇒ 原 5 候选全空 ⇒ fail-closed 拦死 headless job；
 //   修复 = shim 从 `<根>/.git`（`gitdir: <主仓库>/.git/worktrees/<id>`）反推主仓库实现。
 //   ★ 用例直调「sandbox 内 shim 副本」+ 显式 projectDirOverride —— 否则本地候选会命中真实项目实现，测不到边界。
-if (!IS_PROJECT_LAYOUT) console.log('  [SHIM] ⏭ 非项目布局（HOOK 不在 hooks/）⇒ 整组 SKIP（不计入分母）');
+if (!IS_PROJECT_LAYOUT) console.log('  [SHIM] ⏭ 非项目布局（HOOK 不在 <proj>/.{ide}/hooks/）⇒ 整组 SKIP（不计入分母）');
 if (IS_PROJECT_LAYOUT) {
   const implRel = join('.codebuddy', 'skills', 'iteration-workflow', 'engine', 'gate', 'gate-check.mjs');
   const implProj = dirname(dirname(dirname(HOOK)));   // 项目布局：<proj>/.codebuddy/hooks/x → <proj>
@@ -523,7 +529,7 @@ if (IS_PROJECT_LAYOUT) {
 //     ⇒ **exit code 即可判定"读的是哪一侧"**（0=读本侧 / 2=读另一侧）。
 //   组内统一**白名单式清 4 变量**：GATE_TEST_RUNTIME_DIR（第一优先级短路）/ GATE_HOST_IDE /
 //     CODEBUDDY_PROJECT_DIR / CLAUDE_PROJECT_DIR（身份源）—— 随后各用例按需显式设置（hostEnv）。
-if (!IS_PROJECT_LAYOUT) console.log('  [HOST] ⏭ 非项目布局（HOOK 不在 hooks/）⇒ 整组 SKIP（不计入分母）');
+if (!IS_PROJECT_LAYOUT) console.log('  [HOST] ⏭ 非项目布局（HOOK 不在 <proj>/.{ide}/hooks/）⇒ 整组 SKIP（不计入分母）');
 if (IS_PROJECT_LAYOUT) {
   const HOST_SB = join(SANDBOX, 'host');
   const RUNTIME_REL = join('skills', 'iteration-workflow', 'runtime');

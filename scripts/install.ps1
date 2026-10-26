@@ -15,13 +15,19 @@
 # v2.3.1 — GAP-4/加固②：新增 Step 7b —— MEMORY.md 注入配额自检（余量 <10% 预警 / 超限告警）
 # v2.4.0 — ★ FIX-49（2026-10-15）：Detect-IDE 探测顺序反转（.codebuddy 优先）+ env 加分信号
 #          + 双目录并存需显式 -Ide / -Force（防把宿主 skill 装到废弃侧）
+# v2.5.0 — ★ F1/F2/F3（2026-10-26 TOOL-ENGCLOSE-1026）：
+#          F1 Step 6 前用 bootstrap-manifest.py 按 IDE 推导并写回空 specs_dir
+#             （否则全新 clone 必然注入失败 exit 1）；新增 -SpecsDir 覆盖入口
+#          F2 Step 8 改跑「已装副本」的 run-gate-tests（跑源副本会因 hooks 布局误判而误红）
+#          F3 Step 4 源缺 hooks 硬失败（原静默打 ✅）、Step 7/7b 统一以安装根为项目根
 # ============================================================
 
 param(
     [string]$Ide = $null,
     [switch]$DryRun = $false,
     [switch]$NoBackup = $false,
-    [switch]$Force = $false
+    [switch]$Force = $false,
+    [string]$SpecsDir = $null
 )
 
 # ── Step 1: 检测 IDE 环境（与 install.sh 统一优先级 · ★ FIX-49 R24 修订）────
@@ -137,7 +143,7 @@ if ($DryRun) {
         Write-Host ""
     }
     Write-Host "  Step 8 (门禁自检):"
-    Write-Host "    > node scripts\run-gate-tests.mjs --quick"
+    Write-Host "    > node scripts\run-gate-tests.mjs   # 已装副本；分母应为 81（--quick 只精简明细，勿用于验收）"
     Write-Host ""
     Write-Host "╔══════════════════════════════════════════════════╗"
     Write-Host "║  DRY RUN 完成。使用无 -DryRun 参数执行实际安装。    ║"
@@ -299,8 +305,18 @@ switch ($DetectedIde) {
 # ── Step 4: Hook 安装（单源 gate-check.mjs）────
 Write-Host "[Step 4/8] Installing gate hook..."
 if ($HookTarget) {
+    # ★ F3（2026-10-26）：源缺 hooks/ 时旧写法只让 Copy-Item 报错，随后仍打印「✅ installed」
+    #   ⇒ 装出的项目没有门禁却显示成功（实测：用「已装副本」当安装源即触发，因为装完后
+    #   hooks/ 只存在于 <proj>\.{ide}\hooks，skill 目录内没有）。改为硬失败。
+    $hookSrc = "$EngineDir\hooks\gate-check.mjs"
+    if (-not (Test-Path $hookSrc)) {
+        Write-Host "  ❌ gate hook source missing: $hookSrc"
+        Write-Host "     The install source must be the engine repo (it carries hooks/gate-check.mjs)."
+        Write-Host "     Using an already-installed copy as the source is not supported."
+        exit 1
+    }
     New-Item -ItemType Directory -Force -Path $HookTarget | Out-Null
-    Copy-Item -Force "$EngineDir\hooks\gate-check.mjs" "$HookTarget\"
+    Copy-Item -Force $hookSrc "$HookTarget\"
     Write-Host "  ✅ $DetectedIde Hook installed to $HookTarget"
 } else {
     Write-Host "  ⚠  Generic mode: no Hook available（prompt-level gate only）"
@@ -409,6 +425,27 @@ if (-not (Test-Path $manifestPath) -and (Test-Path $manifestTpl)) {
     Write-Host "  ✅ Created project.manifest.yaml from template (to be filled in)"
 }
 
+# ★ F1（2026-10-26）：模板里 ★必填全空，而注入器把空串当缺键并**拒绝落盘**
+#   （inject-template.py 2026-10-25 BLOCKER-1 的反腐化设计：宁可不写，也不产出 `specs_dir: /`）。
+#   两者相邻 ⇒ 全新 clone 必然在下面这段注入 exit 1，永远装不上。
+#   `SKILL.template.md` 只需要 SPECS_DIR / KB_DIR 两个 ① 类变量，kb_dir 模板有默认值，
+#   故唯一要填的是 paths.specs_dir：这里按已探测 IDE 推导（-SpecsDir 可覆盖），仅填空值 ⇒ 幂等。
+if ($pythonCmd) {
+    $bsScript = "$EngineDir\scripts\bootstrap-manifest.py"
+    if (Test-Path $bsScript) {
+        $bsArgs = @($bsScript, '--manifest', $manifestPath, '--ide', $DetectedIde)
+        if ($SpecsDir) { $bsArgs += @('--specs-dir', $SpecsDir) }
+        & $pythonCmd @bsArgs
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  ❌ manifest bootstrap failed (exit $LASTEXITCODE)."
+            Write-Host "     Fix: set paths.specs_dir in $manifestPath (or pass -SpecsDir <path>) and re-run."
+            exit 1
+        }
+    } else {
+        Write-Host "  ⚠  bootstrap-manifest.py not found — paths.specs_dir must be filled manually."
+    }
+}
+
 if ($pythonCmd) {
     # 显式传入 template/output 绝对路径：脚本默认值是相对当前工作目录，
     # 不传会导致从项目根找不到 SKILL.template.md 而注入失败
@@ -456,7 +493,9 @@ Write-Host "[Step 7/8] Cold-start gate nucleus..."
 $nucleusSupported = @("codebuddy","claude-code","cursor")
 if ($DetectedIde -in $nucleusSupported) {
     if ($pythonCmd) {
-        & $pythonCmd "$EngineDir\scripts\setup-gate.py" --ide $DetectedIde
+        # ★ F3（2026-10-26）：setup-gate.py 原本从**脚本自身位置**向上找 IDE 目录推项目根
+        #   ⇒ 源≠安装根时会把 MEMORY.md 写到源侧。显式传安装根（cwd）消除歧义。
+        & $pythonCmd "$EngineDir\scripts\setup-gate.py" --ide $DetectedIde --project-root (Get-Location).Path
         if ($LASTEXITCODE -eq 0) {
             Write-Host "  ✅ Cold-start gate nucleus injected (or already present)"
         } else {
@@ -474,7 +513,9 @@ if ($DetectedIde -in $nucleusSupported) {
 Write-Host "[Step 7b/8] Memory injection quota..."
 $quotaScript = "$EngineDir\scripts\memory_quota.py"
 if ($DetectedIde -eq "codebuddy" -and $pythonCmd -and (Test-Path $quotaScript)) {
-    & $pythonCmd $quotaScript ".codebuddy\memory\MEMORY.md"
+    # ★ F3（2026-10-26）：原来传 cwd 相对路径，而 Step 7 的基准是安装根 ⇒ 源≠cwd 时
+    #   memory_quota.py 直接 FileNotFoundError traceback（非致命但吓人）。改传绝对路径。
+    & $pythonCmd $quotaScript (Join-Path (Get-Location).Path '.codebuddy\memory\MEMORY.md')
     switch ($LASTEXITCODE) {
         1 { Write-Host "  ❌ Over budget — tail will be truncated. Slim MEMORY.md now." }
         2 { Write-Host "  ⚠  Margin below 10% — plan a slimming pass soon." }
@@ -486,12 +527,22 @@ if ($DetectedIde -eq "codebuddy" -and $pythonCmd -and (Test-Path $quotaScript)) 
 
 # ── Step 8: 门禁自检 ──────────────────────────
 Write-Host "[Step 8/8] Gate self-test..."
-$gateTestScript = "$EngineDir\scripts\run-gate-tests.mjs"
-if (Test-Path $gateTestScript) {
-    node $gateTestScript --quick
-    if ($LASTEXITCODE -ne 0) { Write-Host "⚠ Self-test issues found. Review output above." }
+# ★ F2（2026-10-26）：必须跑**已装副本**里的 run-gate-tests。
+#   跑源副本（$EngineDir\scripts\...）时：resolveHook() 首选项 SKILL_ROOT/hooks/ 会命中
+#   源仓库根的 hooks/，而 IS_PROJECT_LAYOUT 旧判据只看「父目录是否叫 hooks」⇒ 误判为项目布局
+#   ⇒ dirname×3 反推出错的项目根 ⇒ SHIM/HOST 组整组跳过或全误红（实测 66/60/6、68/23/45），
+#   用户看到「装好了但 45 个红」。实测对照：在安装根跑已装副本 = 81/81。
+#   同时去掉 --quick（它只精简「已知漏洞」明细，不改分母），并先断言 hook 真的落盘。
+$gateTestScript = "$SkillTarget\scripts\run-gate-tests.mjs"
+$installedHook = if ($HookTarget) { Join-Path $HookTarget 'gate-check.mjs' } else { $null }
+if (-not (Test-Path $gateTestScript)) {
+    Write-Host "  ⚠  run-gate-tests.mjs not found in $SkillTarget（skipping self-test）"
+} elseif ($installedHook -and -not (Test-Path $installedHook)) {
+    Write-Host "  ❌ Gate hook missing at $installedHook — self-test would prove nothing. Aborting."
+    exit 1
 } else {
-    Write-Host "  ⚠  run-gate-tests.mjs not found（skipping self-test）"
+    node $gateTestScript
+    if ($LASTEXITCODE -ne 0) { Write-Host "⚠ Self-test issues found. Review output above." }
 }
 
 Write-Host ""
