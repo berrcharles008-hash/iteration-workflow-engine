@@ -176,10 +176,23 @@ fi
 echo "[Step 2/8] Copying core engine..."
 mkdir -p "$SKILL_TARGET"
 # 先删除再复制，避免更新安装时 cp -r 合并导致 engine/engine/ 嵌套
-rm -rf "$SKILL_TARGET/engine" "$SKILL_TARGET/project" "$SKILL_TARGET/scripts"
+# ⚠ project/ 不参与整目录替换（对齐 install.ps1 Step 2 的既有语义）：它存放用户已填的项目配置，
+#   而引擎仓库的 project/ 只有 *.template（project.manifest.yaml 由本脚本 Step 6 从模板生成）——
+#   先 rm 就再没有源可补，Step 6 只会拿空模板回填 ⇒ 升级安装把用户配置**静默重置成待填空表**
+#   （安装照常打印成功，用户以为只是升级了引擎）。故这里只对缺失条目做增量补齐，已存在的一律不动。
+rm -rf "$SKILL_TARGET/engine" "$SKILL_TARGET/scripts"
 cp -r "$ENGINE_DIR/engine/"             "$SKILL_TARGET/engine/"
-cp -r "$ENGINE_DIR/project/"            "$SKILL_TARGET/project/"
 cp -r "$ENGINE_DIR/scripts/"            "$SKILL_TARGET/scripts/"
+mkdir -p "$SKILL_TARGET/project"
+# 用 -e 判存在（同时覆盖文件与子目录）；无匹配时 glob 原样返回 ⇒ 首个 -e 即跳过
+for _pj in "$ENGINE_DIR"/project/*; do
+    [ -e "$_pj" ] || continue
+    _pname="$(basename "$_pj")"
+    if [ ! -e "$SKILL_TARGET/project/$_pname" ]; then
+        cp -r "$_pj" "$SKILL_TARGET/project/$_pname"
+        echo "  [+] project/$_pname (new)"
+    fi
+done
 cp "$ENGINE_DIR/SKILL.template.md"      "$SKILL_TARGET/"
 cp "$ENGINE_DIR/README.md" "$ENGINE_DIR/LICENSE" "$ENGINE_DIR/CONTRIBUTING.md" "$SKILL_TARGET/" 2>/dev/null || true
 
