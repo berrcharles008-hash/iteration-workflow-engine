@@ -2444,8 +2444,10 @@ function sendGateNotify(ev) {
           '',
           '此类操作不会自动执行，也不会被 headless 代跑；请在 IDE 内确认，或回「确认#N」登记意图。',
         ].join('\n');
+        // ★ 2026-10-26：`ask.js` 改「默认等待」⇒ 本回路必须显式 `--no-wait`：
+        //   本 spawn 是 detached + hook 15s 超时后不等子进程 ⇒ 若默认等待会白挂 300s 成孤儿。
         const askChild = spawn(process.execPath,
-          [askPath, '--prompt', askPrompt, '--kind', 'irreversible', '--timeoutSec', '7200'],
+          [askPath, '--prompt', askPrompt, '--kind', 'irreversible', '--timeoutSec', '7200', '--no-wait'],
           { detached: true, stdio: 'ignore', windowsHide: true });
         askChild.unref();
         audit('QQ_ASK_IRREVERSIBLE', msg + ` | 工具=${ev.tool || '?'} 目标=${target || '-'}`);
