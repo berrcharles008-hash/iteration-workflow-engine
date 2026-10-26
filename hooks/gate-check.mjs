@@ -52,6 +52,19 @@ const candidates = [
   join(ROOT, '.codex', ...REL),
 ];
 
+// ★ F5（2026-10-26）：引擎仓库布局兜底 —— 仓库里 hooks/ 直接挂在仓库根
+//   （不是 `<proj>/.{ide}/hooks/`），上面 5 个候选全指向「已装 skill」路径
+//   ⇒ 在引擎仓库内跑回归/自检时实现恒缺失 ⇒ 全量 fail-closed(2)
+//   （实测 45 红：41 例 expect=0 被拒 + 4 例退出码正确但审计行未落）。
+//   仅在「hooks 的父目录不是 IDE 目录」时追加 `<repo>/engine/gate/gate-check.mjs`：
+//   · 安装态 IDE_DIR = `<proj>/.codebuddy` ⇒ 本分支不进入，该路径本也不存在 ⇒ 对已装项目零影响；
+//   · 始终排在 5 个标准候选**之后** ⇒ 不改变任何既有解析优先级；
+//   · 解析失败时不追加任何东西 ⇒ fail-closed 语义不变（改名/删除实现仍会 exit 2）。
+const IDE_DIR_NAME = basename(IDE_DIR).replace(/^\./, '');
+if (!['codebuddy', 'claude', 'cursor', 'codex'].includes(IDE_DIR_NAME)) {
+  candidates.push(join(IDE_DIR, 'engine', 'gate', 'gate-check.mjs'));
+}
+
 // ★ FIX-48①：git worktree 反推主仓库实现 —— worktree 根的 .git 是**文件**
 //   （单行 `gitdir: <主仓库>/.git/worktrees/<id>`；4/4 实测绝对路径/正斜杠），
 //   主仓库根 = gitdir 路径中 `/.git/worktrees/` 之前的部分 ⇒ 加载主仓库权威实现。

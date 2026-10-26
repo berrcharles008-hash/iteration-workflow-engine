@@ -868,6 +868,15 @@ function runHook(testCase) {
     env.CLAUDE_PROJECT_DIR = hookProjDir;
     delete env.CODEBUDDY_PROJECT_DIR;
   }
+  // ★ F5（2026-10-26）：仓库布局（无 shim 注入）下由 harness 显式指定宿主侧。
+  //   shim 在 `<proj>/.{ide}/hooks/` 时按自身位置注入 GATE_HOST_IDE；引擎仓库里 shim 在
+  //   `<repo>/hooks/`，`basename` 不是 IDE 名 ⇒ 不注入 ⇒ 实现层落到第②层，而下面这段在
+  //   `--ide` 未传时写的是 CLAUDE_PROJECT_DIR ⇒ HOST_IDE=claude ⇒ 用例写 `.codebuddy/**/runtime/state.yaml`
+  //   被判「非本宿主侧」镜像面直写（实测 S8a-d / AD-A / AD-C 六例 exit=2）。
+  //   仅非项目布局生效 ⇒ 对项目布局 81 例零影响；HOST 组用 hostMode 自设身份，先设后清不吃这条。
+  if (!IS_PROJECT_LAYOUT && !testCase.hostMode) {
+    env.GATE_HOST_IDE = IDE_ARG || 'codebuddy';
+  }
   if (testCase.gateBypass) {
     env.GATE_BYPASS = '1';
   }
@@ -1087,7 +1096,7 @@ for (const tc of TESTS) {
       console.log(`🟡 KNOWN (exit=${result.exitCode}, expect=${tc.expectExit})`);
       knownFails++;
     } else {
-      console.log(`❌ FAIL (exit=${result.exitCode}, expect=${tc.expectExit})${assertDetail ? ' | ' + assertDetail : ''}`);
+      console.log(`❌ FAIL (exit=${result.exitCode}, expect=${tc.expectExit})${assertDetail ? ' | ' + assertDetail : ''}${process.env.GATE_TEST_DEBUG_STDERR && result.stderr ? '\n      STDERR: ' + String(result.stderr).split('\n').slice(0, 4).join(' / ') : ''}`);
       failed++;
     }
 
