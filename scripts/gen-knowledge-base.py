@@ -189,47 +189,36 @@ def load_manifest():
 
 
 # --- Term mapping tables (PascalCase reverse-lookup) ---
+#
+# ★ 2026-10-25（迭代 `2026-10-25-002` · G07 / C-4 / C-8）：三段词表**外置**到
+#   `project/kb-terms.yaml`。此前 41 / 27 / 43 条写死在源码里 ⇒ 换项目必须改引擎源码。
+#   消费点（L3 映射遍历，见 `_compute_l3_mappings`）**零改动** —— 仍是同名字典/集合查表。
+#
+# 失效形态（缺文件 / 空段）：降级为 `{}` / `{}` / `set()` ⇒ 所有类名落「未映射」清单，
+#   **不报错、不中断生成**（产物仍可读，只是人工补录面变大）。
+# 迁移完整性基线（04 期实测）：business 41 / tech 27 / noise 43；`Adapter` 在 tech 与 noise **双列**。
 
-# Business domain terms: these appear in the L3 business mapping table.
-BUSINESS_TERMS = {
-    "Order": "医嘱", "Admixture": "混合调配", "Label": "标签", "Batch": "批次",
-    "Check": "核对", "Delivery": "配送", "DeliveryHandover": "配送交接",
-    "Audit": "审核", "Drug": "药品", "Solution": "溶媒", "IV": "静脉输液",
-    "Pivas": "静配中心", "Ward": "病区", "Nurse": "护士",
-    "NurseStation": "护士工作站", "Pharmacist": "药师",
-    "QualityControl": "质控", "QC": "质控", "Production": "生产",
-    "Dashboard": "看板", "Receive": "接收", "Print": "打印", "Scan": "扫描",
-    "Plan": "用药计划", "Sync": "同步", "His": "医院信息系统(HIS)",
-    "Patient": "患者", "Prescription": "处方", "Dose": "剂量",
-    "Frequency": "频次", "Route": "给药途径", "Report": "报表",
-    "Stat": "统计", "Monitor": "监测", "User": "用户", "Role": "角色",
-    "Menu": "菜单", "Permission": "权限", "Status": "状态",
-    "Dict": "数据字典", "Record": "记录",
-}
+def load_terms():
+    """读取三段术语表；**永不抛**（缺文件 ⇒ 空表降级）。"""
+    empty = ({}, {}, set())
+    try:
+        import project_config
+    except Exception as e:                                     # pragma: no cover
+        sys.stderr.write('[INFO] project_config 不可用 ⇒ 术语表降级为空：%s\n' % e)
+        return empty
+    path = project_config.SKILL_ROOT / 'project' / 'kb-terms.yaml'
+    errors = []
+    business = dict(project_config.read_pairs(path, 'business', errors))
+    tech = dict(project_config.read_pairs(path, 'tech', errors))
+    noise = set(project_config.read_bare(path, 'noise', errors))
+    sys.stderr.write('[INFO] kb-terms: business=%d tech=%d noise=%d\n'
+                     % (len(business), len(tech), len(noise)))
+    if not business and not tech and not noise:
+        sys.stderr.write('[WARN] kb-terms 三段皆空 ⇒ 全部类名将落「未映射」清单\n')
+    return business, tech, noise
 
-# Technical naming patterns: listed separately as a naming-convention reference.
-TECH_TERMS = {
-    "Mgr": "管理器（BLL 业务类后缀）", "Manager": "管理器", "Service": "服务",
-    "Dto": "数据传输对象", "Entity": "实体", "Model": "模型",
-    "Query": "查询", "Queries": "查询集", "Config": "配置",
-    "Result": "结果", "Base": "基类", "Guid": "全局唯一标识",
-    "Item": "明细项", "Detail": "明细", "Web": "接口层", "WebApi": "Web 接口",
-    "BLL": "业务逻辑层", "Inf": "基础设施层", "Component": "组件",
-    "Store": "状态存储", "Const": "常量", "Exception": "异常",
-    "Helper": "辅助类", "SoftDelete": "软删除", "Adapter": "适配器",
-    "Sys": "系统", "Param": "参数",
-}
 
-# Technical noise: excluded from the "unmapped, needs manual input" list.
-TECH_NOISE = {
-    "Adapter", "Gateway", "Options", "Registry", "Factory", "Log",
-    "Consts", "Codes", "Error", "Framework", "Bootstrapper", "Checks",
-    "Smoke", "Orchestrator", "Read", "Only", "Non", "Std", "Oracle",
-    "Meta", "Mapper", "Paged", "Sql", "Binder", "Parameter", "Metrics",
-    "Diagnostics", "Assembly", "Info", "Interface", "Operation",
-    "Add", "Update", "Delete", "Remove", "Get", "Set", "Save", "Find",
-    "Count", "Total", "Time", "Date",
-}
+BUSINESS_TERMS, TECH_TERMS, TECH_NOISE = load_terms()
 
 
 def pascalcase_split(name):
@@ -872,8 +861,8 @@ def _parse_l2_file_list(l2_file):
     """Parse file paths recorded in an L2 wiki's file-list tables.
 
     Returns set of file paths. Rows look like:
-      | 1 | back-end/.../PivasOrder.cs | Class | PivasOrder | |
-      | 1 | pivas-prototype/src/components/m8/X.vue | Component | |
+      | 1 | <后端根>/.../XxxOrder.cs | Class | XxxOrder | |
+      | 1 | <前端根>/src/components/xxx/Xxx.vue | Component | |
     """
     if not l2_file.exists():
         return set()

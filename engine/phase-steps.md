@@ -128,7 +128,7 @@
 | step-3-execute | 自动执行【自动】用例 | ✅ | 始终 |
 | step-4-output | 生成测试报告 | ✅ | 始终 |
 | step-fix-05-1-register | 缺陷登记（写入 `defects[]` + 根因分档 + 判 `design_changed`） | — | 存在 `open` 缺陷 |
-| step-fix-05-2-code | 就地修复编码（**须用户开闸**；涉后端码 ⇒ 不得就地修，回 04） | — | step-fix-05-1-register 完成 |
+| step-fix-05-2-code | 就地修复编码（**05 期预授权窗口内**；窗口未开 ⇒ 发一次预授权卡；涉后端码 ⇒ 不得就地修，回 04） | — | step-fix-05-1-register 完成 |
 | step-fix-05-3-regress | 失败用例回归（含动作链用例；**既有用例结果不回改**，新增续接编号） | — | step-fix-05-2-code 完成 |
 | step-fix-05-4-reclose | 缺陷关闭（置 `fixed` + `verified_by` + 按 §3.3 R8 补 `fix_files`） | — | step-fix-05-3-regress 通过 |
 
@@ -136,7 +136,7 @@
 >
 > ★ **05 侧缺陷修复窗口（2026-10-02 E-2 新增；方案 α）**：这四个步骤把历史上「游离自造步骤块」正规化
 > （先例：`2026-09-28-001` 六条缺陷、`2026-09-30-002` 五条缺陷均在 05 就地修但步骤未进 SSOT）。
-> **与 04 侧 `step-fix-*` 的分工**：① 不涉后端码、无需 `/t:Rebuild` 的 L1 小修 ⇒ **05 侧就地**（用户开闸 + `fix_files` 对账）；
+> **与 04 侧 `step-fix-*` 的分工**：① 不涉后端码、无需 `/t:Rebuild` 的 L1 小修 ⇒ **05 侧就地**（**阶段级一次预授权**覆盖整窗 + `fix_files` 对账，口径见 `phase-05.md` §步骤清单注记）；
 > ② 涉后端码 / 需重跑构建 ⇒ **回 04** 走 `step-fix-1-register` ~ `-5-reclose`（04 是唯一免开闸窗口）。
 > ③ 无论走哪侧，**既有用例结果保留、新增续接编号**（`state-protocol.md` §5.3）。
 
@@ -221,3 +221,4 @@
 | 2026-10-07 | 1.8 | ★ **TOOL-QQGATE 项 A**：阶段三/四/五/六各补一行 waiting-protocol 指针（用户确认类步骤等待方式 A/B/D + ask.js 登记铁律），对齐阶段二既有指针。根因 = #19 迭代 02/03 确认点漏发 QQ 通知；联动项 B（state-apply.py 附注）/ C（G1 强制化立项）见 `runtime/TOOLING-TODO.md` |
 | 2026-10-10 | 1.9 | ★ **TOOL-INTV A 批（需求澄清访谈化）**：阶段一 `step-2-5` 名称更新为「闭环追问（复述确认 → 动态追问 → 5W2H 兜底）」，与 `phase-01.md` 双处同步（原「5W2H 七维度穷举生成问题清单」）。零新增步骤 ID；实施基准 `runtime/TOOL-INTV-四件套.md` v2 |
 | 2026-10-12 | 1.10 | ★ **FIX-SHORTSESS**：04 修复窗口新增 `step-fix-1-5-handoff`（交接卡生成，register 后 / code 前），`step-fix-2-code` 触发改挂 handoff，五步扩为**六步**。定义见 `phase-04.md` Step F §F0。零脚本/门禁改动 |\r\n| 2026-10-14 | 1.11 | ★ **#67 预估与偏差度量**：三表各加 1 行（`step-2-7-estimate` 初估 / `step-3-5-reestimate` 复估 / `step-3-6-attribution` 归因）；强制列取 `—`；头部补 mandatory 权威源注记；phase-01/03/07 补行 + 执行说明；登记见 `complexity-scoring.md` §二 |
+| 2026-10-23 | 1.12 | ★ MOTIV-RECHECK：§F0 动机数据无法复现（实测 >600k 轮次=0）⇒ 4.8min·轮作废、交接卡降级、step 保留；03 新增 §3.0 改动点锚点表（必填）。详见 `_跨迭代专题/2026-10-23-FIX-SHORTSESS-A-B验证清单` |

@@ -119,8 +119,8 @@ UI 层     ：组件渲染方式是否正确？显示什么数据？
 
 | 不够精确 ❌ | 精确 ✔ |
 |------------|--------|
-| "未正确异步加载" | "select 模式下 InHospital 分支未调用 GetDictionaryItems，lstTriageDestinationItems 保持初始空数组" |
-| "字典用错了" | "OutHospital 分支未定义，走了默认值 ET_DICT_DEPT_COME（科室字典），应使用 ET_DICT_TRIAGE_TRANSFER_HOSPITAL（转出入医院字典）" |
+| "未正确异步加载" | "select 模式下 X 分支未调用字典加载，下拉项保持初始空数组" |
+| "字典用错了" | "Y 分支未定义，走了默认值 ET_DICT_XXX（科室字典），应使用 ET_DICT_YYY（业务字典）" |
 | "缺少过滤" | "where 参数为空字符串，未包含 unit_id='${currUserUnitId}' 条件" |
 
 ---
@@ -189,7 +189,7 @@ UI 层     ：组件渲染方式是否正确？显示什么数据？
 | select（下拉框） | OutHospital | lstTransferHospital（已有缓存） | 无需过滤 |
 | input-select（弹窗） | InHospital | ET_DICT_IN_HOSPITAL_DEPT | where: unit_id='${currUserUnitId}' |
 | input-select（弹窗） | OutPatient | ET_DICT_OUT_PATIENT_DEPT | where: unit_id='${currUserUnitId}' |
-| input-select（弹窗） | OutHospital | ET_DICT_TRIAGE_TRANSFER_HOSPITAL | where: unit_id='${currUserUnitId}' |
+| input-select（弹窗） | OutHospital | ET_DICT_XXX | where: unit_id='${currUserUnitId}' |
 ```
 
 **关键定义**：
@@ -213,7 +213,7 @@ UI 层     ：组件渲染方式是否正确？显示什么数据？
 
 #### TC2：input-select - OutHospital 字典正确
 - **步骤**：选择分诊去向"转出院" → 点击去向详情输入框
-- **预期**：弹窗显示转出入医院字典（ET_DICT_TRIAGE_TRANSFER_HOSPITAL），而非科室字典
+- **预期**：弹窗显示业务字典（ET_DICT_XXX），而非科室字典
 
 #### TC3：select - InHospital 下拉不为空
 - **步骤**：选择分诊去向"转住院"（配置为 select 渲染）
@@ -268,7 +268,7 @@ UI 层     ：组件渲染方式是否正确？显示什么数据？
 ```
 UI 层（select / input-select 组件渲染）
         ↓
-前端逻辑层（SetTriageDestinationDetailDisplay / TriageHospitalDeptInputSelect_Changed）
+前端逻辑层（SetXxxDetailDisplay / XxxInputSelect_Changed）
         ↓
 字典/接口层（GetDictionaryItems + where 条件 / Dict 弹窗）
 ```

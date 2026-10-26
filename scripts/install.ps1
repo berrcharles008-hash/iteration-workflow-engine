@@ -94,7 +94,6 @@ if ($DryRun) {
     Write-Host "  Step 2 (核心引擎):"
     Write-Host "    + engine\             → $SkillTarget\engine\"
     Write-Host "    + project\            → $SkillTarget\project\"
-    Write-Host "    + domain-plugins\     → $SkillTarget\domain-plugins\"
     Write-Host "    + scripts\            → $SkillTarget\scripts\"
     Write-Host "    + SKILL.template.md   → $SkillTarget\"
     Write-Host "    + README.md LICENSE   → $SkillTarget\"
@@ -125,7 +124,7 @@ if ($DryRun) {
     Write-Host "  Step 6 (模板注入):"
     Write-Host "    > 若 project.manifest.yaml 不存在，从 .template 创建"
     Write-Host "    > python scripts\inject-template.py --manifest $SkillTarget\project\project.manifest.yaml --template $SkillTarget\SKILL.template.md --output $SkillTarget\SKILL.md"
-    Write-Host "    > 验证: 扫描 SKILL.md 中残留 {{}} 占位符"
+    Write-Host "    > 验证: python scripts\inject-template.py --check --compare $SkillTarget\SKILL.md"
     Write-Host ""
     if ($DetectedIde -in @("codebuddy","claude-code","cursor")) {
         Write-Host "  Step 7 (冷启动微核):"
@@ -256,13 +255,13 @@ if ($DetectedIde -eq "generic") {
     Write-Host "   See adapters\generic\README.md for manual instructions."
 }
 
-# ── Step 2: 核心引擎 + 领域插件 ──────────────
+# ── Step 2: 核心引擎（G02：领域插件层已下线，不再复制其目录）──────────────
 Write-Host "[Step 2/8] Copying core engine..."
 New-Item -ItemType Directory -Force -Path $SkillTarget | Out-Null
 # 先删除再复制，避免更新安装时 Copy-Item -Recurse 合并导致 engine/engine/ 嵌套
 # ⚠ project/ 不参与整目录替换：它存放用户已填的项目配置，删除 = 配置全丢（需手工备份恢复）。
 #   这里只对缺失文件做增量补齐，已存在的一律不动。
-@("engine","domain-plugins","scripts") | ForEach-Object {
+@("engine","scripts") | ForEach-Object {
     Remove-Item -Recurse -Force "$SkillTarget\$_" -ErrorAction SilentlyContinue
     Copy-Item -Recurse -Force "$EngineDir\$_" "$SkillTarget\$_"
 }
@@ -415,32 +414,41 @@ if ($pythonCmd) {
     # 不传会导致从项目根找不到 SKILL.template.md 而注入失败
     & $pythonCmd "$EngineDir\scripts\inject-template.py" --manifest "$manifestPath" --template "$SkillTarget\SKILL.template.md" --output "$SkillTarget\SKILL.md"
 
-    # ── 方案 B: 占位符验证 ──
+    # ★ 必须透传退出码：注入器现在会在「① 类未解析 / 未定义占位符」时 exit 1 且不写盘。
+    #   历史行为是继续往下走，于是「注入失败」只体现为残留扫描报错，语义链条断裂。
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  ❌ Template injection failed (exit $LASTEXITCODE, see messages above)."
+        Write-Host "     Fix: pip install pyyaml && re-run install (check manifest / template)"
+        exit 1
+    }
+
+    # ── 方案 B: 占位符验证（★ 复用注入器的判据，不另写一套正则）──
+    # 历史写法用本文件的 `\w` 正则把**任意** `{{...}}` 都当错误 ⇒ 与注入器的放行口径
+    # （②运行时/③脚本渲染/④内容槽 允许保留）直接矛盾，且是**第三套**规则：
+    # 模板哪天保留 {{ITERATION_ID}} 就会「注入通过、安装器硬失败」。
+    # 现改为调 `--check --compare SKILL.md`：前者判「该解析的解析了」，后者确认**盘上文件
+    # 就是本次注入结果**（防写入被截断/被占用而静默留旧文件）。退出码即结论。
     $skillMdPath = "$SkillTarget\SKILL.md"
     if (Test-Path $skillMdPath) {
-        $residuals = [regex]::Matches((Get-Content $skillMdPath -Raw -Encoding UTF8), '\{\{(\w+(?:[\._-]\w+)*)\}\}') |
-                     ForEach-Object { $_.Value } | Select-Object -Unique
-        if ($null -ne $residuals -and @($residuals).Count -gt 0) {
-            Write-Host "  ❌ Unresolved template placeholders found in SKILL.md:"
-            $residuals | ForEach-Object { Write-Host "     $_" }
-            Write-Host ""
-            Write-Host "     This usually means inject-template.py failed silently (e.g. missing yaml module)."
-            Write-Host "     Fix: pip install pyyaml && re-run install"
+        & $pythonCmd "$EngineDir\scripts\inject-template.py" --manifest "$manifestPath" --template "$SkillTarget\SKILL.template.md" --check --compare "$skillMdPath"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  ❌ Template injection verification failed (exit $LASTEXITCODE)."
+            Write-Host "     Fix: check project.manifest.yaml (missing/empty keys) or SKILL.template.md"
             exit 1
-        } else {
-            Write-Host "  ✅ Template injection verified（no unresolved placeholders）"
         }
+        Write-Host "  ✅ Template injection verified（判定通过 + 产物与磁盘字节一致）"
     } else {
-        Write-Host "  ⏭  SKILL.md not found, skipping placeholder verification"
+        Write-Host "  ❌ SKILL.md not found after injection — write step failed, refusing to continue."
+        exit 1
     }
 } else {
-    # 无 Python 兜底：直接复制模板，保证 SKILL.md 可用
-    if ((Test-Path "$SkillTarget\SKILL.template.md") -and -not (Test-Path "$SkillTarget\SKILL.md")) {
-        Copy-Item "$SkillTarget\SKILL.template.md" "$SkillTarget\SKILL.md" -Force
-        Write-Host "  ✅ SKILL.md created by direct copy (Python unavailable)"
-    }
-    Write-Host "  ⚠  Python not found. Skipping template injection."
-    Write-Host "     Run manually: python $EngineDir\scripts\inject-template.py --manifest $manifestPath --template $SkillTarget\SKILL.template.md --output $SkillTarget\SKILL.md"
+    # ★ 不再「复制模板兜底」：模板含占位符，复制即产出「看起来装好了」的腐化 SKILL.md
+    #   （本迭代失效案例 3）。无 Python ⇒ 无法注入 ⇒ 明确失败，交用户装 Python 后重跑。
+    Write-Host "  ❌ Python not found — cannot inject SKILL.template.md into SKILL.md."
+    Write-Host "     Template placeholders would be written verbatim; refusing to produce a broken SKILL.md."
+    Write-Host "     Fix: install Python 3 + pyyaml, then re-run this installer."
+    Write-Host "     Manual: python $EngineDir\scripts\inject-template.py --manifest $manifestPath --template $SkillTarget\SKILL.template.md --output $SkillTarget\SKILL.md"
+    exit 1
 }
 
 # ── Step 7: 冷启动微核注入（多 IDE）───────────

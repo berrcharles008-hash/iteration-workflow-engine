@@ -95,7 +95,6 @@ sj-iteration-workflow-engine/
 │   ├── gen-knowledge-base.py        ← L1/L2/L3 知识库生成/过时检测
 │   ├── init-checklist.ps1           ← 项目初始化向导 (P-039)
 │   └── run-gate-tests.mjs           ← 门禁回归测试
-├── quickstart.md                    ← 5分钟快速入门
 ├── SKILL.md                         ← Claude Code 入口
 └── SKILL.template.md                ← 新项目初始化模板
 ```
@@ -124,7 +123,7 @@ sj-iteration-workflow-engine/
 
 #### 在项目中接入
 
-引擎代码已直接内嵌在 `.claude/skills/iteration-workflow/` 中，无需额外安装。首次使用 Skill 时会自动引导配置。
+引擎代码已直接内嵌在 `{IDE}/skills/iteration-workflow/` 中，无需额外安装。首次使用 Skill 时会自动引导配置。
 
 项目级配置位于 `project/` 目录下，请根据项目实际情况编辑：
 
@@ -140,7 +139,7 @@ sj-iteration-workflow-engine/
 
 ### 项目级覆盖
 
-项目可在 `.claude/skills/iteration-workflow/project/` 下创建以下文件覆盖引擎默认行为：
+项目可在 `{IDE}/skills/iteration-workflow/project/` 下创建以下文件覆盖引擎默认行为：
 
 | 文件 | 用途 | Git 跟踪 |
 |------|------|:--------:|
@@ -232,7 +231,6 @@ sj-iteration-workflow-engine/
 │   ├── gen-knowledge-base.py        ← L1/L2/L3 knowledge base generator
 │   ├── init-checklist.ps1           ← Project init wizard (P-039)
 │   └── run-gate-tests.mjs           ← Gate regression test
-├── quickstart.md                    ← 5-minute quick start
 ├── SKILL.md                         ← Claude Code SKILL entry
 └── SKILL.template.md                ← Project init template
 ```
@@ -261,7 +259,7 @@ At the end of each phase, a 5-step retrospective runs automatically, extracting 
 
 #### Add to Your Project
 
-The engine code is already embedded in `.claude/skills/iteration-workflow/` — no additional installation required. Configuration is auto-prompted on first Skill load.
+The engine code is already embedded in `{IDE}/skills/iteration-workflow/` — no additional installation required. Configuration is auto-prompted on first Skill load.
 
 Project-level configuration lives in `project/`. Edit these files to match your project:
 
@@ -277,7 +275,7 @@ Project-level configuration lives in `project/`. Edit these files to match your 
 
 ### Project-Level Overrides
 
-Projects can override engine defaults by creating files under `.claude/skills/iteration-workflow/project/`:
+Projects can override engine defaults by creating files under `{IDE}/skills/iteration-workflow/project/`:
 
 | File | Purpose | Git Tracked |
 |------|---------|:-----------:|

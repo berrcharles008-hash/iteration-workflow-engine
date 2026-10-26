@@ -68,8 +68,8 @@ Agent 准备修改文件
             │   ║                                                  ║
             │   ║  当前阶段：{current_phase} - {phase_status}      ║
             │   ║  代码修改仅在 04-开发实现 阶段允许。             ║
-            │   ║  ★ 05 阶段例外：L1 小修可走「开闸就地修」——      ║
-            │   ║    用户开闸 + gate_window + fix_files 成对留痕    ║
+            │   ║  ★ 05 阶段例外：L1 小修走「阶段级预授权」——      ║
+            │   ║    确认一次 + gate_window + fix_files 成对留痕    ║
             │   ║    （§三-C / state-protocol §3.3 R8）。           ║
             │   ║  请选择：                                        ║
             │   ║  1️⃣ 继续推进当前迭代到 04 阶段                   ║
@@ -100,9 +100,25 @@ Agent 准备修改文件
                     （见下节「04 阶段的删除类操作校验」；未登记即 BLOCK，fail-closed）
 ```
 
-> ★ **FIX-11（2026-09-16）**：上述决策树**不适用** `{IDE}/memory/` 工作记忆写入/维护（与迭代状态无关、任何阶段放行；范围严格限定 memory/，不含 temp/hooks/skills）—— 规则与实现见 §四 门禁豁免 FIX-11 条目（`engine/gate/gate-check.mjs` `isMetaWriteExempt()`）。
-> ★ **FIX-12②（2026-09-17）**：05/06/07 阶段的「本职文档产出」按 `STAGE_EXEMPT_PATHS` 阶段化放行（业务代码与命令仍拦）—— 规则与实现见 §四 门禁豁免 FIX-12② 条目（`matchStageExempt()`，排除 Bash 伪路径 `[CMD] …`；放行写 `STAGE_ALLOW` 审计）。
+> ★ **FIX-11（2026-09-16）**：上述决策树**不适用** `{IDE}/memory/` 工作记忆写入/维护（与迭代状态无关、任何阶段放行；范围严格限定 memory/，不含 temp/hooks/skills）—— 规则与实现见 §四 门禁豁免 FIX-11 条目（实现 = `engine/gate/gate-check.mjs` 的元层写入豁免判定）。
+> ★ **FIX-12②（2026-09-17）**：05/06/07 阶段的「本职文档产出」按阶段化豁免表放行（业务代码与命令仍拦）—— 规则与实现见 §四 门禁豁免 FIX-12② 条目（阶段豁免判定；排除 Bash 伪路径 `[CMD] …`，放行写 `STAGE_ALLOW` 审计）。
 > ★ **FIX-16（2026-09-17）**：07 阶段另放行写 `project/lessons-learned.md`（模式库；`project/` 其它文件仍拦）—— 规则与实现见 §四 门禁豁免 FIX-16 条目（`STAGE_EXEMPT_PATHS['07'].files`，**精确后缀匹配、自动跨 IDE 前缀**）。
+>
+> ★ **G01 真值源派生（2026-10-24 迭代 `2026-10-24-001` · 批次 1A）**：三张豁免表的**数据**已迁至
+> `engine/gate/exempt-tables.mjs`（判定逻辑仍在 `engine/gate/gate-check.mjs`）。生效口径由
+> `GATE_EXEMPT_MODE` 决定：
+>
+> | 模式 | 生效表 | 副作用 |
+> |:--|:--|:--|
+> | `shadow`（**缺省**） | **字面量现值**（与改前逐字节相同） | 派生结果只写 `EXEMPT_SHADOW` 审计（`eq=/mf=/n=`） |
+> | `derive` | manifest 派生（`paths.docs_iterations` / `kb_dir` / `specs_dir`） | 放行面随配置变化 —— **切换需独占验证窗口** |
+>
+> 因此本迭代「放行面零变化」是**构造性**的，不依赖测试证明。派生等价性口径：24 项字面量 =
+> 12 项 manifest 派生 + 12 项常量（引擎自引用 4 · 记忆目录 2 · 可行性目录 2 · 结构项 4）；
+> 缺键**或空串**一律回落现值。对账入口 = `node engine/gate/derive-exempt.mjs --print`（`schema:1`），
+> 由 `audit-engine.py` 的 **A10-c** 校验（Python 独立算期望 + 冻结基线 + 变异沙箱）。
+> 另：headless 身份变量名改由 `project.short_name` 派生（`{SHORT_NAME}_HANDOFF_OWNER`），
+> 旧名 `PIVAS_HANDOFF_OWNER` 兼容一版（G03）。
 
 ### 04 阶段的删除类操作校验（★ FIX-9 · 2026-09-14 用户定）
 
@@ -152,10 +168,10 @@ Agent 准备修改文件
 > 在 01-03 与 05 **均命中豁免前缀而直接放行** ⇒ 存在一条**无需开闸、无 `gate_window` 留痕**的写业务码通道。
 
 - **规则**：所有**前缀/包含型**豁免判定，路径含**完整上跳段**（`..`）⇒ **不认定豁免**（fail-closed）。
-- **覆盖判定点**（实现 `engine/gate/gate-check.mjs`，公共函数 `hasTraversal()`）：
-  ① `matchStageExempt`（05/06/07/NONE）② `isMetaWriteExempt`（memory）③ 01-03 的 `EXEMPT_PATHS`
-  ④ 01-03 的 `EXEMPT_PATHS_MD_ONLY` ⑤ `isDeleteExempt`（删除豁免）。
-- **不适用**：`isE3BuiltinExempt` —— 其入参已过 `e3Normalize()`（天然剥除 `..` 段），无需再加。
+- **覆盖判定点**（实现 `engine/gate/gate-check.mjs`，由上跳段守卫统一承担）：
+  ① 阶段豁免判定（05/06/07/NONE）② 元层写入豁免判定（memory）③ 01-03 的豁免前缀表
+  ④ 01-03 的仅文档豁免表 ⑤ 删除豁免判定。
+- **不适用**：E3 内置豁免 —— 其入参已过 E3 路径归一化（天然剥除 `..` 段），无需再加。
 - **判据**：只认**完整路径段**的 `..`（`a/../b`、`../x`、`x/..`）；**不误伤** `a..b`、`v1.2..3`。
 - **话术**：命中时提示「路径含上跳段（..）……请改写成不含 `..` 的字面路径后重试」（与 GATE-6 同口径）。
 - **回归**：`scripts/run-gate-tests.mjs` 的 **06T 组 8 用例**（含 3 条正向防误伤用例）。
@@ -179,26 +195,26 @@ Agent 准备修改文件
 
 ```yaml
 dispatch_whitelist:
-  - path: "back-end/IntravenousAdmixtureCenter/BLL/PivasUserMgr.cs"
-  - path: "front-end/pivas_admixture_center/src/pages/pivas/dept_ward_list/dept_ward_list.ts"
+  - path: "<后端根>/.../BLL/XxxMgr.cs"
+  - path: "<前端根>/src/pages/xxx/xxx_list.ts"
 ```
 
 > ⇒ 必须写成 `- path: "<项目内相对路径>"`（**裸字符串不被识别**；与 `delete_allow` 同构）。
-> 实现：`deleteGate()` 先做豁免过滤，全豁免项交回阶段门禁；`gateCheck()` 再对 memory 放行。
+> 实现：删除类校验先做豁免过滤、全豁免项交回阶段门禁；主门禁判定再对 memory 放行。
 
 **强度上限（如实声明）**：`runtime/` 属 `ALWAYS_ALLOW` ⇒ `delete_allow` 本身可被 Agent 修改，
 故本机制保证的是「**删除必须先登记并经用户确认**」的流程约束 + 可追溯性，非不可绕过；
 最终防线仍为 SVN/git 提交前的人工审阅。
 
-**路径判定增强（GATE-6 · 2026-09-24，现行 hook 行为）**：`extractPathsFromCommand()` 对**同一条命令内**做 shell 变量赋值收集与字面替换（`collectShellAssignments` + `expandShellVars`，支持变量套变量，最多 3 轮）；解析不出的变量**原样保留 ⇒ 仍 fail-closed**（**不扩大放行面**，只消除「能解析却被误拦」的假阳性）；拦截话术追加「门禁只能字面判定，请改写字面路径」。沿革与回归详见 `runtime/gate-protocol-CHANGELOG.md` 及 `runtime/TOOLING-TODO.md` GATE-6 工单。
+**路径判定增强（GATE-6 · 2026-09-24，现行 hook 行为）**：命令的路径提取环节对**同一条命令内**做 shell 变量赋值收集与字面替换（支持变量套变量，最多 3 轮）；解析不出的变量**原样保留 ⇒ 仍 fail-closed**（**不扩大放行面**，只消除「能解析却被误拦」的假阳性）；拦截话术追加「门禁只能字面判定，请改写字面路径」。沿革与回归详见 `runtime/gate-protocol-CHANGELOG.md` 及 `runtime/TOOLING-TODO.md` GATE-6 工单。
 
 **★ FIX-26（2026-10-01 · 用户批准 · 开闸实施）state 归档命令误拦收口**（三处，均为「消除假阳性/收紧」，非放宽）：
 - **① 同目录改名解析**：`Rename-Item -LiteralPath '<path>' -NewName '<裸名>'` 中，`-NewName` 只接受**名称**（PowerShell 语义，给路径会报错）⇒ 其目录 ≡ `-Path` 的父目录，可静态确定；
-  实现 `resolveRenameNewName()`：`-NewName` 为裸名且同段**恰好一个**带目录分量的目标作锚点时，将该裸名展开为 `{锚点父目录}/{裸名}` 后再交 `deleteGate` 判定，留痕 `RENAME_SAMEDIR`。
+  同目录改名解析：`-NewName` 为裸名且同段**恰好一个**带目录分量的目标作锚点时，将该裸名展开为 `{锚点父目录}/{裸名}` 后再交删除类校验判定，留痕 `RENAME_SAMEDIR`。
   边界：仅认 `Rename-Item`/`rni`；`-NewName` 带路径 / 无锚点 / 多锚点 ⇒ 原样返回（继续 fail-closed）。**`Move-Item`/`Copy-Item`/`Remove-Item` 不适用**（其路径参数是完整路径，裸名按 CWD 解析，不能假定同目录）。
   起因（实测 `gate-audit.log` 2026-10-01T08:47:27Z）：归档命令报的目标是裸名 `…state.archived.yaml` ⇒ 不匹配 `runtime/` 前缀而 BLOCK，**同一命令的源路径却已按 runtime/ 豁免放行** ⇒ 两端判定自相矛盾。
 - **② `runtime/` 状态维护命令豁免**（关闭通道不一致）：**所有危险段**的目标都落在 `ALWAYS_ALLOW`（`skills/iteration-workflow/runtime/`）内时放行，留痕 `STAGE_ALLOW [CMD-RUNTIME]`；
-  任一目标解析不出 / 项目外绝对路径 / 落在非 runtime 目录 ⇒ 返回 null，继续走原阶段门禁（fail-closed 不变）。实现 `runtimeMaintenanceTargets()`。
+  任一目标解析不出 / 项目外绝对路径 / 落在非 runtime 目录 ⇒ 返回 null，继续走原阶段门禁（fail-closed 不变）。判定由「runtime 维护命令目标解析」承担。
   依据：文件工具写/删 runtime/ 在第 1 关无条件放行，而命令通道在 01-03 一律拦（FIX-24）——同一路径两种结果（实测 2026-10-01T08:48:37Z：`DELETE_EXEMPT` 已放行、随后被阶段层拦），使归档 state 等维护动作只能开闸或绕道。
 - **③ 上跳段守卫（`isAlwaysAllow`）**：路径含 `..` 段一律不认定豁免（原实现只看前缀，`<runtime>/../../hooks/x` 会被判「在 runtime 内」被判豁免）。只收紧、不放宽，为 ② 的放行面兜住路径穿越。
 
@@ -284,6 +300,25 @@ dispatch_whitelist:
 3. **收尾检查**：微核逃生口行已补「**收尾必检：标记已删**」。
 
 **审计分类**：`BYPASS reason=.gate-bypass_file forever(empty)` ／ `… ttl until=<ISO>` ／ `BYPASS_EXPIRED … mode=expired`。
+
+### ★ 05 期阶段级预授权（FIX-ALLOW-1 方案 A · 2026-10-19 用户拍板）
+
+> 背景：05 期「每缺陷一次确认」实测 2026-10-07~10-19 共 **131 次 OPEN**（日均 ~10、峰值 21），
+> 用户确认成为主要打断源。方案 A = **确认次数从 N（缺陷数）降到 1（阶段）**；
+> **不改变**「人开的闸」原则 —— 确认与执行仍由用户 QQ + qqbot 服务完成。
+
+**规则**：
+
+1. **一次授权**：进入 05 阶段（或首个需就地修的 L1 缺陷出现）时发一张预授权卡 ——
+   `node tools/qqbot/request-confirm.js --prompt "05 期就地修复预授权：覆盖本迭代 05 期全部 L1 不涉后端码缺陷，TTL <N>" --command "node tools/gate/open-bypass.js --ttl <N>"`；
+   用户确认一次后服务开闸。**Agent 仍不得直跑执行器或自建标记**（GAP-4 红线不变）。
+2. **窗口内自主**：逐缺陷修复**不再逐条发卡**；每缺陷仍必须登记 `gate_window`（confirm id + 时段）与 `fix_files`（`state-protocol.md` §3.3 R8 成对校验不变）。
+3. **TTL**：240（半日）/ 480（全天，`open-bypass.js` 上限）；跨天或窗口被并行会话 `--revoke` 连坐关闭 ⇒ **重发同一**预授权卡（恢复同一授权，非新决策）。
+4. **收口**：05 收口（推进 06 前）主动 `--revoke` + 关闸负向对照（05 期业务区探针被拦）+ 逐条 `gate_window` 对账。
+5. **边界**：预授权**仅**覆盖 05 期 L1 不涉后端码的业务码就地修；**不**覆盖 L2/L3、涉后端码、06/07 阶段、元层（`skills/**` / `hooks/**`）——元层改动仍单独确认。
+6. **验收判据**：单迭代 05 期 OPEN 次数 ≈ 阶段天数（1 次/天）而非缺陷数；`gate_window`/`fix_files` 零缺失；收口 revoke + 对照有留痕。
+
+**依据**：`runtime/TOOLING-TODO.md` FIX-ALLOW-1 · 项目记忆 fix_allow 决策链（六次改判）。
 
 ---
 
@@ -530,11 +565,13 @@ phase_confirm:
   to: "05"
   by: "ide"              # qq#N（QQ 确认门登记已消费）/ ide（本会话通过语）/ handoff（headless 继承 PIVAS_HANDOFF_OWNER）/ bypass（逃生口，走 BYPASS 审计）
   at: "2026-10-01T01:40:00"
-  quote: "通过，进入05"   # ★ by=ide 时必填：用户通过语原文（无 quote 视为无效留痕）
+  quote: "通过，进入05"   # ★ by=ide 时必填：用户通过语**逐字原文**（无 quote 视为无效留痕；
+                          #   引用无授权答复 / 含 answer= 等元数据会被 state-apply 拒绝，见 waiting-protocol §5/§8）
 ```
 
 - ★ **事故教训（2026-10-01 实锤）**：迭代 2026-09-30-002 的 04→05 由离机指令「完成后关机」驱动连续收口——该指令**不含**上述通过语清单 ⇒ §三-B 被穿透且事后无法审计（`phase_history[04]` 无 review_gate、无任何确认字段）。`phase_confirm` 即为堵此审计盲区。
-- `by:"qq#N"` 须对应已消费登记；`by:"ide"` 的 quote 必须是**本轮用户原话**；合写判定 = 仅以 `current_phase` 单字段合取（与 `iteration_status` 等其他字段合写**仍须留痕**，防漏网）。
+- `by:"qq#N"` 须对应已消费登记；`by:"ide"` 的 quote 必须是**本轮用户原话（逐字）**；合写判定 = 仅以 `current_phase` 单字段合取（与 `iteration_status` 等其他字段合写**仍须留痕**，防漏网）。
+- ★ **无原话的答复不得作为 `by:"ide"` 来源**（TOOL-ANSWERKIND · 2026-10-20）：`defer-ide`（QQ 作废、未作答）/`cancel`/`timeout` 天生无"用户通过语"；机器校验在 `state-apply.py`（`--quote-src` 逐字命中 / 元数据拒绝 / 引用无授权 `ask#N` 拒绝），细则见 `waiting-protocol.md` §5/§8。
 - **观测期说明**：`gate-check.mjs` 对 current_phase 变更当前为**通知不拦截**（fail-open，QQ 推送留痕缺失告警）；强制化（fail-closed 拦截）须另行拍板（RESUME-3 批次 3 路线 I → G1）。
 - 等待用户确认的方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`。
 
@@ -584,7 +621,8 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
          ① **走 04 修复窗口**（`step-fix-1-register` ~ `-5-reclose`）→ 修完回归、置 `fixed` 后方可推进
            ★ **05 侧修复窗口（2026-10-02 E-5 新增）**：**不涉后端码、无需 `/t:Rebuild`** 的 L1 小修
              ⇒ 走 `step-fix-05-1-register` ~ `-4-reclose`（SSOT = `phase-steps.md` §阶段五）；
-             须**用户开闸**，且 `defects[].gate_window` 与 `fix_files` **成对**（机器校验 = `state-protocol.md` §3.3 R8）
+             **阶段级一次预授权**（2026-10-19 方案 A：进 05 发一张确认卡 ⇒ 窗口内逐缺陷自主修），
+             且 `defects[].gate_window` 与 `fix_files` **成对**（机器校验 = `state-protocol.md` §3.3 R8）
          ② **用户显式 defer** → 置 `status: "deferred"` + 写 `defer_reason`（视为通过，但须在 05 报告「遗留问题」节列出）
          ③ **判定为 L2 / L3** → 按阶段回退协议退回 03 / 01，**不得**走修复窗口
         ⚠️ 禁止在存在 open 缺陷时推进 06（防「带未关闭缺陷进上线」）。
@@ -669,7 +707,7 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
 - ★ **`{IDE}/memory/MEMORY.md` 的写入侧配额守卫**（MAINT-3 P-5 · 2026-09-22 用户批准）——
   在 FIX-11 的 memory 豁免**之上**追加的唯一约束：写前估算「写后 UTF-16 码元」，
   **> 8000 拦一次**（超限会被 IDE 从头部截断、尾部丢失）、**> 7200 仅 stderr 告警**（余量 <10%）。
-  - 实现：`engine/gate/gate-check.mjs` 的 `memoryQuotaGuard()`（在 `gateCheck()` 的 `isMetaWriteExempt` 分支内调用）；
+  - 实现：`engine/gate/gate-check.mjs` 的 MEMORY.md 配额守卫（在主门禁判定的元层写入豁免分支内调用）；
     估算口径：`write_to_file`/`Write` 用 `content`；`replace_in_file`/`Edit` 在 `old_str` **唯一命中**时
     按替换差值计算（含 `\n ⇄ \r\n` 兼容），其余情形 ⇒ **fail-open**（放行 + `MEMORY_QUOTA_SKIP` 留痕）。
   - 语义：与 FIX-11 同层（**与迭代阶段无关**）；**逃生口优先级更高**（上游已放行）；
@@ -685,10 +723,34 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
   **07** → `docs/iterations/`（回顾报告）· `{IDE}/skills/iteration-workflow/project/lessons-learned.md`（**模式库写入**，FIX-16）；
   **仍拦（fail-closed）**：`ACTIVE=none` 全部、业务区（`back-end/` `front-end/` `sql/` …）、
   05/07 的 `requirements/`、06 的 `requirements` 非 `.md` 文件、07 的 `project/` 其它文件、**所有 Bash 命令**（伪路径不享豁免）。
-  实现：`engine/gate/gate-check.mjs` 的 `STAGE_EXEMPT_PATHS` + `matchStageExempt()`；放行写 `STAGE_ALLOW` 审计。
+  实现：`engine/gate/gate-check.mjs` 的阶段化豁免表 + 阶段豁免判定；放行写 `STAGE_ALLOW` 审计。
 - ⛔ **创建逃生口标记（`.gate-bypass`）**（GAP-4/加固① · 2026-09-16）—— **不在豁免范围**：
   由 §一「逃生口自建拦截」**绝对拒绝**（任何阶段，含 04）。逃生口须由**用户手动开启**；
   **删除**标记不受此限（标记存在时上游逃生口检查已放行）。
+
+### 四-A. VCS 判定档（`vcs.type` · G12 · 2026-10-25）
+
+> 依据迭代 `2026-10-25-002-引擎VCS归位与脚本去项目化`。真值源 = `project/project.manifest.yaml`
+> 顶层 `vcs.type`；派生单源 = `engine/gate/vcs-profile.mjs`（`gate-check.mjs` 装载期 IIFE 求值一次）。
+
+| 配置值 | 通用 base | svn 族 | git 族 | 与改前现值关系 |
+|:--|:--:|:--:|:--:|:--|
+| 缺键 / 空串 / 非法值 / 大小写混写 | ✓ | ✓ | ✓ | **逐元素等价**（回落 svn；audit 记 `default` / `invalid`） |
+| `svn` | ✓ | ✓ | ✓ | 等价（工作区可能并存 git 检出：skills 仓库 / worktree ⇒ 关掉 git 族会把 `git commit` 从阻断退化为放行） |
+| `git` | ✓ | ✗ | ✓ | 少拦 svn 族（opt-in） |
+| `none` | ✓ | ✗ | ✗ | 仅通用动词与原语（`Remove-Item` / 重定向 / 打包压缩**仍拦**） |
+
+- **方向性不变式**：任何取值相对现值**只会更少拦截**，缺省档恒等于现值（含 flags 与元素顺序）。
+- 求值抛错 ⇒ 回落到未过滤的字面量档（**未过滤全量现值** = 收紧方向），审计记 `VCS_PROFILE_FALLBACK`。
+  仅 `import` 级语法错不在 try/catch 内 ⇒ 由 `node --check` 前置拦截。
+- **禁止** `new RegExp([...].join('|'))` 式拼接：只允许搬运既有 RegExp 字面量
+  （拼接极易造出 `^(?:)` 这类 source 非空但全匹配的表达式 ⇒ 放行面全开）。产物须过探针守卫
+  （不得匹配 `__gate_probe_no_match__`）。
+- `deleteSegmentSubs` 用 `Map`（普通对象会命中原型键 `constructor`/`toString` ⇒ `.test` 非函数）；
+  **不得含 `git` 键**（`:1684-1688` 的 git 只读例外须先于查表）；VCS 族未启用时必须 `return false`
+  而非继续扫下一 token（否则 `:1691` 通用正则里的 `delete` 仍会命中 ⇒ `none` 档形同未生效）。
+- 回归：`scripts/run-gate-tests.mjs` **V1 组 9 例**（行为 5 + 归一化 4）。观察窗口必须是 **01 阶段**：
+  04 阶段全放行、删除类又先走 `deleteGate` ⇒ 用 `svn delete` 在 04 阶段测不出档位差异。
 
 ---
 
@@ -745,7 +807,7 @@ Agent 准备修改 current_phase（M → M+1），且 M 阶段存在 `mandatory:
 | 关闭 | `CONC_LOCK=0|off` 或标记文件 `hooks/.conc-off` |
 | ★ 边界 | 与阶段门禁**正交**、**fail-open**（本关自身异常绝不阻断写入）；**不改** `state-protocol.md` §九 |
 
-实现：`engine/gate/gate-check.mjs` → `concLockCheck()`｜回归：`scripts/run-gate-tests.mjs` 的 `CONC-1~5`｜工单：`runtime/TOOLING-TODO.md` → CONC-1。
+实现：`engine/gate/gate-check.mjs` → 并发写锁检查｜回归：`scripts/run-gate-tests.mjs` 的 `CONC-1~5`｜工单：`runtime/TOOLING-TODO.md` → CONC-1。
 
 ---
 

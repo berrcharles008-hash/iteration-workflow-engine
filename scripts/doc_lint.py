@@ -85,9 +85,55 @@ def strip_links(s):
     return LINK_RE.sub(r'\1', s)
 
 
+# ── 迭代目录（G09 · 2026-10-25 迭代 2026-10-25-002）─────────────────────────
+# 判定基准不再写死 `'/iterations/'`：三级取值
+#   ① `--iterations-dir <rel>`  ② manifest `paths.docs_iterations`  ③ 缺省 `docs/iterations`
+# 失效形态（旧实现）：manifest 把迭代目录改名后，自检仍只认 `docs/iterations`
+#   ⇒ 新目录下的文档**零检查**（假绿），偏偏那是最该被检查的产物。
+DEFAULT_ITERATIONS_DIR = 'docs/iterations'
+ITER_DIR_MARKERS = ('/' + DEFAULT_ITERATIONS_DIR + '/',)
+
+
+def _iter_marker(rel):
+    """把相对目录归一为 `/<dir>/`（小写）—— 用于「路径是否落在迭代目录内」的包含判定。"""
+    r = str(rel or '').strip().replace('\\', '/').strip('/')
+    return '/' + r.lower() + '/' if r else ''
+
+
+def resolve_iterations_dir(cli_value=None):
+    """解析迭代目录并**重设**模块级 `ITER_DIR_MARKERS`；返回 `(dir, source)`。
+
+    **永不抛**：manifest 不可读 / 抽键为空 / 归一后为空 ⇒ 回落缺省并打印 1 行 INFO。
+    """
+    global ITER_DIR_MARKERS
+    chosen, source = '', 'cli'
+    if cli_value:
+        chosen = str(cli_value)
+    else:
+        source = 'manifest'
+        try:
+            import project_config
+            cfg = project_config.read_scalars('project/project.manifest.yaml')
+            chosen = (cfg.get('paths.docs_iterations') or '').strip()
+        except Exception:
+            chosen = ''
+        if not chosen:
+            source = 'default'
+            print('[INFO] iterations-dir fallback=%s' % DEFAULT_ITERATIONS_DIR)
+    marker = _iter_marker(chosen)
+    if not marker:
+        source = 'default'
+        chosen = DEFAULT_ITERATIONS_DIR
+        marker = _iter_marker(chosen)
+        print('[INFO] iterations-dir fallback=%s' % DEFAULT_ITERATIONS_DIR)
+    ITER_DIR_MARKERS = (marker,)
+    return chosen, source
+
+
 def is_produced_doc(path):
-    """D10/D11 只检查真实产出文档（docs/iterations/）——模板与规范中的示例链接/脚注不适用。"""
-    return '/iterations/' in path.replace('\\', '/').lower()
+    """D10/D11 只检查真实产出文档（迭代文档目录）——模板与规范中的示例链接/脚注不适用。"""
+    p = path.replace('\\', '/').lower()
+    return any(m in p for m in ITER_DIR_MARKERS)
 
 
 def is_iter_doc(path):
@@ -96,7 +142,8 @@ def is_iter_doc(path):
     nm = os.path.basename(p)
     if nm.endswith('.example.md') or nm.startswith('cold-start'):
         return False
-    return ('/iterations/' in p) or nm.startswith('phase-0') or nm.startswith('bug-requirement')
+    return (any(m in p for m in ITER_DIR_MARKERS)
+            or nm.startswith('phase-0') or nm.startswith('bug-requirement'))
 
 
 def is_separator_row(cells):
@@ -284,7 +331,13 @@ def main():
     ap.add_argument('-q', '--quiet', action='store_true', help='只输出汇总')
     ap.add_argument('--json', action='store_true', help='机器可读输出')
     ap.add_argument('--max-per-rule', type=int, default=8, help='每文件每规则最多报告条数（默认 8）')
+    ap.add_argument('--iterations-dir', default='',
+                    help='迭代文档目录（相对项目根）；缺省取 manifest paths.docs_iterations，再缺省 docs/iterations')
     args = ap.parse_args()
+
+    iter_dir, iter_src = resolve_iterations_dir(args.iterations_dir)
+    if not args.quiet:
+        print('[INFO] iterations-dir=%s (source=%s)' % (iter_dir, iter_src))
 
     files = collect_targets(args.paths)
     if not files:

@@ -104,7 +104,6 @@ if $DRY_RUN; then
     echo "  Step 2 (核心引擎):"
     echo "    + engine/             → $SKILL_TARGET/engine/"
     echo "    + project/            → $SKILL_TARGET/project/"
-    echo "    + domain-plugins/     → $SKILL_TARGET/domain-plugins/"
     echo "    + scripts/            → $SKILL_TARGET/scripts/"
     echo "    + SKILL.template.md   → $SKILL_TARGET/"
     echo "    + README.md LICENSE   → $SKILL_TARGET/"
@@ -138,7 +137,7 @@ if $DRY_RUN; then
     echo "  Step 6 (模板注入 + 验证):"
     echo "    $ 若 project.manifest.yaml 不存在，从 .template 创建"
     echo "    $ python scripts/inject-template.py --manifest $SKILL_TARGET/project/project.manifest.yaml --template $SKILL_TARGET/SKILL.template.md --output $SKILL_TARGET/SKILL.md"
-    echo "    $ 验证: 扫描 SKILL.md 中残留 {{}} 占位符"
+    echo "    $ 验证: python scripts/inject-template.py --check --compare $SKILL_TARGET/SKILL.md"
     echo ""
     case $DETECTED_IDE in
         codebuddy|claude-code|cursor)
@@ -167,14 +166,13 @@ if [ "$DETECTED_IDE" = "generic" ]; then
     echo "   See adapters/generic/README.md for manual instructions."
 fi
 
-# ── Step 2: 核心引擎 + 领域插件 ──────────────
+# ── Step 2: 核心引擎（G02：领域插件层已下线，不再复制其目录）──────────────
 echo "[Step 2/8] Copying core engine..."
 mkdir -p "$SKILL_TARGET"
 # 先删除再复制，避免更新安装时 cp -r 合并导致 engine/engine/ 嵌套
-rm -rf "$SKILL_TARGET/engine" "$SKILL_TARGET/project" "$SKILL_TARGET/domain-plugins" "$SKILL_TARGET/scripts"
+rm -rf "$SKILL_TARGET/engine" "$SKILL_TARGET/project" "$SKILL_TARGET/scripts"
 cp -r "$ENGINE_DIR/engine/"             "$SKILL_TARGET/engine/"
 cp -r "$ENGINE_DIR/project/"            "$SKILL_TARGET/project/"
-cp -r "$ENGINE_DIR/domain-plugins/"     "$SKILL_TARGET/domain-plugins/"
 cp -r "$ENGINE_DIR/scripts/"            "$SKILL_TARGET/scripts/"
 cp "$ENGINE_DIR/SKILL.template.md"      "$SKILL_TARGET/"
 cp "$ENGINE_DIR/README.md" "$ENGINE_DIR/LICENSE" "$ENGINE_DIR/CONTRIBUTING.md" "$SKILL_TARGET/" 2>/dev/null || true
@@ -258,37 +256,54 @@ fi
 
 if command -v python &>/dev/null; then
     # 显式传入 template/output 绝对路径：脚本默认值是相对当前工作目录，
-    # 不传会导致从项目根找不到 SKILL.template.md 而注入失败
-    python "$ENGINE_DIR/scripts/inject-template.py" --manifest "$MANIFEST_PATH" --template "$SKILL_TARGET/SKILL.template.md" --output "$SKILL_TARGET/SKILL.md" && INJECTED_OK=1 || true
-elif command -v python3 &>/dev/null; then
-    python3 "$ENGINE_DIR/scripts/inject-template.py" --manifest "$MANIFEST_PATH" --template "$SKILL_TARGET/SKILL.template.md" --output "$SKILL_TARGET/SKILL.md" && INJECTED_OK=1 || true
-else
-    # 无 Python 兜底：直接复制模板，保证 SKILL.md 可用
-    if [ -f "$SKILL_TARGET/SKILL.template.md" ] && [ ! -f "$SKILL_TARGET/SKILL.md" ]; then
-        cp "$SKILL_TARGET/SKILL.template.md" "$SKILL_TARGET/SKILL.md"
-        echo "  ✅ SKILL.md created by direct copy (Python unavailable)"
+    # 不传会导致从项目根找不到 SKILL.template.md 而注入失败。
+    # ★ 必须透传退出码：历史写法 `... && INJECTED_OK=1 || true` 使 INJECTED_OK 恒为 0
+    #   ⇒ 下方占位符验证分支（`if [ $INJECTED_OK -eq 1 ]`）永不执行 ⇒ 注入失败被静默吞掉。
+    if python "$ENGINE_DIR/scripts/inject-template.py" --manifest "$MANIFEST_PATH" --template "$SKILL_TARGET/SKILL.template.md" --output "$SKILL_TARGET/SKILL.md"; then
+        INJECTED_OK=1
+    else
+        echo "  ❌ Template injection failed (see messages above)."
+        echo "     Fix: pip install pyyaml && re-run install (check manifest / template)"
+        exit 1
     fi
-    echo "  ⚠  Python not found. Skipping template injection."
-    echo "     Run manually: python $ENGINE_DIR/scripts/inject-template.py --manifest $MANIFEST_PATH --template $SKILL_TARGET/SKILL.template.md --output $SKILL_TARGET/SKILL.md"
+elif command -v python3 &>/dev/null; then
+    if python3 "$ENGINE_DIR/scripts/inject-template.py" --manifest "$MANIFEST_PATH" --template "$SKILL_TARGET/SKILL.template.md" --output "$SKILL_TARGET/SKILL.md"; then
+        INJECTED_OK=1
+    else
+        echo "  ❌ Template injection failed (see messages above)."
+        echo "     Fix: pip install pyyaml && re-run install (check manifest / template)"
+        exit 1
+    fi
+else
+    # ★ 不再「复制模板兜底」：模板含占位符，复制即产出「看起来装好了」的腐化 SKILL.md
+    #   （本迭代失效案例 3：用户得到 89 处未解析占位符的产物却以为安装成功）。
+    #   无 Python ⇒ 无法注入 ⇒ 明确失败，交用户装 Python 后重跑。
+    echo "  ❌ Python not found — cannot inject SKILL.template.md into SKILL.md."
+    echo "     Template placeholders would be written verbatim; refusing to produce a broken SKILL.md."
+    echo "     Fix: install Python 3 + pyyaml, then re-run this installer."
+    echo "     Manual: python $ENGINE_DIR/scripts/inject-template.py --manifest $MANIFEST_PATH --template $SKILL_TARGET/SKILL.template.md --output $SKILL_TARGET/SKILL.md"
+    exit 1
 fi
 
-# ── 方案 B: 占位符验证 ──
+# ── 方案 B: 占位符验证（★ 复用注入器的判据，不另写一套正则）──
+# 历史写法是 `perl ... 2>/dev/null | sort -u || true`：三重吞噬 —— 新引入 perl 依赖、
+# 吞掉 stderr、`|| true` 抹平退出码 ⇒ 无 perl 的机器上 RESIDUALS 恒空、打印「✅ verified」
+# 假绿。且它把**任意** `{{...}}` 都当错误，与注入器放行 ②③④ 的口径冲突（第二套规则）。
+# 现改为调 `--check --compare`：前者判「该解析的解析了」，后者确认盘上文件就是本次注入结果。
 if [ $INJECTED_OK -eq 1 ]; then
     SKILL_MD="$SKILL_TARGET/SKILL.md"
-    if [ -f "$SKILL_MD" ]; then
-        RESIDUALS=$(perl -ne 'print "$&\n" while /\{\{\w+(?:[\._-]\w+)*\}\}/g' "$SKILL_MD" 2>/dev/null | sort -u || true)
-        if [ -n "$RESIDUALS" ]; then
-            echo "  ❌ Unresolved template placeholders found in SKILL.md:"
-            echo "$RESIDUALS" | while read -r line; do echo "     $line"; done
-            echo ""
-            echo "     This usually means inject-template.py failed silently (e.g. missing yaml module)."
-            echo "     Fix: pip install pyyaml && re-run install"
-            exit 1
-        else
-            echo "  ✅ Template injection verified（no unresolved placeholders）"
-        fi
+    PY_INJECT="$(command -v python || command -v python3)"
+    if [ ! -f "$SKILL_MD" ]; then
+        echo "  ❌ SKILL.md not found after injection — write step failed, refusing to continue."
+        exit 1
+    fi
+    if "$PY_INJECT" "$ENGINE_DIR/scripts/inject-template.py" --manifest "$MANIFEST_PATH" --template "$SKILL_TARGET/SKILL.template.md" --check --compare "$SKILL_MD"; then
+        echo "  ✅ Template injection verified（判定通过 + 产物与磁盘字节一致）"
     else
-        echo "  ⏭  SKILL.md not found, skipping placeholder verification"
+        rc=$?
+        echo "  ❌ Template injection verification failed (exit $rc)."
+        echo "     Fix: check project.manifest.yaml (missing/empty keys) or SKILL.template.md"
+        exit 1
     fi
 fi
 

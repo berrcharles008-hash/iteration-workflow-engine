@@ -60,7 +60,7 @@
 | 前置注入 | 01 起点全量注入活跃区（≤20/≤10K） | `phase-01.md` 前置步骤 3 | 🆕⏳ |
 | 事故案例库 | 编号/根因/内化位置 | `project/lessons-learned.md` 事故记录区 | ✅ |
 
-## 4. 门禁与安全（9）
+## 4. 门禁与安全（11）
 
 | 能力 | 说明 | 落点 | 状态 |
 |:--|:--|:--|:--:|
@@ -73,6 +73,8 @@
 | 多会话写者互斥 | 同文件并发写保护（CONC） | `engine/gate/gate-check.mjs` | ✅ |
 | 不可逆动作决策回路 | 授权 + 登记双要件 | `engine/gate/gate-check.mjs`（IRREVERSIBLE_RE）· `gate-protocol.md` | ✅ |
 | 记忆配额守卫 | MEMORY.md 写前估算 + 拦截 | `engine/gate/gate-check.mjs` | ✅ |
+| VCS 判定档（G12） | `vcs.type` 派生三张判定表（svn/git/none）；缺省**逐元素等价**（含 flags 与顺序） | `engine/gate/vcs-profile.mjs` · `gate-protocol.md` §四-A | ✅ |
+| 出站通知适配器（G11） | 三处出站统一 `send()`（静默下沉 + `mode` 分通道）；入站 ask 不入 | `engine/gate/notify-adapter.mjs` | ✅ |
 
 ## 5. 状态与恢复（6）
 
@@ -85,19 +87,20 @@
 | ACTIVE 指针协议 | 2 行格式 + 释放铁律 | `state-protocol.md` §六 | ✅ |
 | 预估与偏差 | `estimate_*` 5 字段（[R9] 成组 / 数值 / 枚举）+ 看板三列现算（不落 state） | `scripts/validate-state.py` · `state-protocol.md` §3.3 · 项目侧 tools/gen_iteration_board.py | ✅ |
 
-## 6. 协作与异步（7）
+## 6. 协作与异步（8）
 
 | 能力 | 说明 | 落点 | 状态 |
 |:--|:--|:--|:--:|
 | Team 并行决策 | 四维判据 + ≤3 / ≤15 万 | `team-agent-strategy.md` | ✅ |
 | 成员直写白名单 | dispatch_whitelist | `phase-04.md` · `engine/gate/gate-check.mjs` | ✅ |
 | 成员增量落盘 | team-out + 完成标记 | `phase-04.md` | ✅ |
-| 等待协议 A/B/D | 工位/headless/QQ 唤醒 | `waiting-protocol.md` | ✅ |
+| 等待协议 A/B/D | 工位（`ask.js --wait` 首选 · 工具层待 TOOL-QQWAIT 落地）/ headless / QQ 唤醒 | `waiting-protocol.md` | ✅ |
 | QQ 指令集 | /help · 开新迭代 · 继续 · 模型列表 | 项目侧 tools/qqbot/ | ✅ |
 | 确认门 QQ 登记 | 未登记 ⇒ 单向提醒（G1） | `engine/gate/gate-check.mjs` | ✅ |
 | 接管会话面板 | hub 确认/接管/派发 | 项目侧 tools/session-hub/ | ✅ |
+| 成员等待协议 | 回合内等待（team-out 标记分片轮询 ≤10min + 总 30min 超时兜底） | `phase-04.md` · `team-agent-strategy.md` | ⏳ |
 
-## 7. 质量与审计（12）
+## 7. 质量与审计（13）
 
 | 能力 | 说明 | 落点 | 状态 |
 |:--|:--|:--|:--:|
@@ -105,7 +108,8 @@
 | 外部审查模型路由 | 多模型配置 + 降级（原则 13） | `cross-review-protocol.md` §八 · `scripts/review-models-configurator.py` · `scripts/review-gateway.py` | ✅ |
 | Spec 合规验证 | 04 Step 4.7 | `phase-04.md` §Step 4.7 | ✅ |
 | 代码审查矩阵 | 层触发 + 铁律 | `project/code-review-rules.md` · `phase-04.md` §Step 5 | ✅ |
-| 一致性审计 A1~A8 | 引擎自审 | `scripts/audit-engine.py` · `consistency-checklist.md` | ✅ |
+| 一致性审计 A1~A10 | 引擎自审（A10-b/c/d/e · A10-f 实现符号耦合自 2026-10-25 实检） | `scripts/audit-engine.py` · `consistency-checklist.md` | ✅ |
+| 占位符扫描与归零 | 五类 schema 分类 + 未归类归零 + CSV 指标 | `scripts/scan-placeholders.py` · `template-injection.md` §2.4 | ✅ |
 | 模板覆盖校验 | R1~R5/W1~W5 | `scripts/validate-template-coverage.py` | ✅ |
 | 门禁回归 | 48 例（`run-gate-tests.mjs` 实测；"157/157" 为另一历史口径） | `scripts/run-gate-tests.mjs` | ✅ |
 | 状态机回归 | T1~T10 | `scripts/run-state-tests.py` | ✅ |
@@ -114,14 +118,23 @@
 | 缺陷台账 | defects[] 即时登记 | `state-protocol.md` · `phase-05.md` | ✅ |
 | 引擎自演进安全 | 四件套 + 快照 + 收口 + 回流 | `evolution-safety.md` | ✅ |
 
-## 8. 度量与看板（4）
+## 8. 度量与看板（引擎 1 + 项目侧 3）
 
 | 能力 | 说明 | 落点 | 状态 |
 |:--|:--|:--|:--:|
-| 迭代看板 | BOARD.md + board.html | 项目侧 tools/gen_iteration_board.py | ✅ |
-| 阶段消耗 | 净工时 + wall-clock | 项目侧 docs/iterations/{id}/阶段消耗.md（机器生成） | ✅ |
+| 迭代看板 | BOARD.md + board.html | 项目侧实现（引擎不提供，需项目自建） | ⚠️ |
+| 阶段消耗 | 净工时 + wall-clock | 项目侧实现（引擎不提供，需项目自建） | ⚠️ |
 | metrics 链 | phase-align → refresh | `runtime/metrics/` | ✅ |
-| 崩溃监控 | HostStarvation 采样 | 项目侧 tools/eh-monitor.ps1 | ✅ |
+| 崩溃监控 | HostStarvation 采样 | 项目侧实现（引擎不提供，需项目自建） | ⚠️ |
+
+### 8-A 项目侧建议实现（引擎不提供）
+
+以下三项由项目按需自建：引擎只约定口径（数据从哪来、写到哪、字段含义），**不提供实现**，
+也不因其缺失而阻塞任何阶段。历史实现是某个项目的既有代码，不随引擎分发。
+
+1. **迭代看板** —— 从迭代状态文件汇总出可读看板（Markdown + 可折叠 HTML），字段口径与状态文件一致；
+2. **阶段消耗** —— 按阶段记录净工时与墙钟时长，落在迭代目录内，供回顾与偏差度量使用；
+3. **崩溃监控** —— 采样宿主进程资源曲线与结构性事件，用于事后定性崩溃根因（无采样器时相关结论只能是推测）。
 
 ## 9. 上下文与文档纪律（8）
 
@@ -130,18 +143,19 @@
 | 定点读纪律 | R1~R5 + ≤500 行/轮 | `context-discipline.md` | ✅ |
 | 大文件定点读映射 | 6 文件场景 → 节 | `startup-protocol.md` §引擎大文件定点读映射 | ✅ |
 | 知识库生成 | L1/L2/L3 + 过时检测 | `scripts/gen-knowledge-base.py` | ✅ |
-| 变量注入 | `{{占位符}}` 协议 | `template-injection.md` | ✅ |
+| 变量注入 | `{{占位符}}` 协议 + 五类 schema（51 种闭合）+ 写盘前失败 | `template-injection.md` §2.4 · `scripts/inject-template.py` | ✅ |
 | Delta 标记 | ADDED/MODIFIED | `delta-marking.md` | ✅ |
 | 版式规范 | D1~D10 | `doc-style-guide.md` | ✅ |
 | 模板解析优先级 | project 覆盖 engine | `startup-protocol.md` §模板解析优先级 | ✅ |
 | 命名冲突预检 | 03 阶段必做 | `naming-conflict-check.md` | ✅ |
 
-## 10. 项目层可配置面（2）
+## 10. 项目层可配置面（3）
 
 | 能力 | 说明 | 落点 | 状态 |
 |:--|:--|:--|:--:|
 | 项目配置文件 | manifest / build-verify / deploy-config / 规范 / 审查矩阵 / context / 模式库 / review-models | `project/` | ✅ |
 | 项目层模板覆盖 | 同名覆盖（路线 5；目录**未创建**，首次抽取时建） | `startup-protocol.md` §模板解析优先级 | 🆕⚠️ |
+| 配置的多语言消费 | `kb-terms.yaml`（L3 术语三段）· `memory-audit.yaml`（记忆白名单）· manifest `vcs.type` / `notifications.adapter`；JS 侧 `engine/gate/project-config.mjs`、Python 侧 `scripts/project_config.py`（**同口径**：零依赖 / 永不 throw / 定位基准 = SKILL_ROOT / 空串等同缺键） | `project/` · `scripts/project_config.py` | ✅ |
 
 ## 11. 安装与初始化（5）
 
@@ -149,7 +163,7 @@
 |:--|:--|:--|:--:|
 | 安装/初始化向导 | 项目接入与配置引导 | `scripts/init-checklist.ps1` | ✅ |
 | 门禁注入 | 微核/钩子安装 | `scripts/setup-gate.py` | ✅ |
-| 领域插件 | 领域门禁规则（enterprise-legacy / generic） | `domain-plugins/*/gate-rules.md` | ✅ |
+| 领域插件 | **未接线**（G02 · 2026-10-25）：规则迁至项目侧示例，不被任何代码加载 | 项目侧自建（样板见 domain-rules.example.md） | ⚠️ |
 | 回流同步 | 工作副本 → 源仓库 | `scripts/sync-back-to-engine-repo.ps1` | ✅ |
 | 引擎版本号 | 版本模板 | `engine-version.template.txt` | ✅ |
 
@@ -171,3 +185,6 @@
 | 2026-10-10 | 首次落盘：11 域 · 78 项能力索引 + 状态标记 + 缺口汇总（TOOL-CAPMAP；含 TOOL-INTV A+B 批 7 项新机制） |
 | 2026-10-10 | v2（评审后）：补 11 项（外部审查路由/知识库/Step E/Step A.5/门禁决策表/状态机回归/安装初始化×2/领域插件/回流/版本号）· 修 4 处错锚（须/建议分层 → 正文两段；关闸三件套 → §一/§四+P-118；不可逆回路 → 补 gate-check.mjs；接管面板 → session-hub）· 项目侧路径去反引号 · 基准/状态快照声明 |
 | 2026-10-14 | §5 状态与恢复 **+1 行「预估与偏差」**（`estimate_*` 5 字段 · [R9] 成组/数值/枚举 + 看板三列现算不落 state）· **节计数 `（5）`→`（6）`** + 本行。依据迭代 `2026-10-14-002-迭代工作量预估与偏差度量`（#67；原 B#2「state-apply 10 命令 → 11」随决策 A 失效，改判为本能力行） |
+| 2026-10-16 | §6 **+1 行「成员等待协议」**（回合内等待取代 2026-10-03 人工唤醒协议）+ 节计数 `（7）`→`（8）` + 本行。依据元层工单 TEAM-2（3 路评审核定 v2：`runtime/TEAM-2-四件套.md` + `runtime/TEAM-2-评审-3路.md`）；状态标 ⏳ = 待业务迭代实测首单 |
+| 2026-10-25 | §7 **+1 行「占位符扫描与归零」** + 节计数 `（12）`→`（13）`；同步把「一致性审计 A1~A8」更正为 **A1~A10**（b/e 已实检）+ §9「变量注入」补五类 schema/写盘前失败锚点 + 本行。依据迭代 `2026-10-25-001-引擎注入链与占位符二分` |
+| 2026-10-25 | §4 **+2 行**「VCS 判定档（G12）」「出站通知适配器（G11）」+ 节计数 `（9）`→`（11）`；§10 **+1 行**「配置的多语言消费」（含 `scripts/project_config.py` 指针）+ 节计数 `（2）`→`（3）` + 本行。依据迭代 `2026-10-25-002-引擎VCS归位与脚本去项目化` |

@@ -52,7 +52,7 @@
 | 1 | Inf/Entity/CISMoniterDev.cs | **ADDED** | 新建Entity，映射 CIS_MONITER_DEV 表 |
 | 2 | BLL/MonitorDeviceItemMappingMgr.cs | **MODIFIED-🔵追加** | 新增 6 个方法，不影响现有 5 个方法 |
 | 3 | src/net/et/config_monitor/config_monitor.ts | **ADDED** | 新建 Net 层文件 |
-| 4 | src/domain/triage_emergency_config.ts | **MODIFIED-🔵追加** | 追加 3 个方法到文件末尾 |
+| 4 | src/domain/xxx_config.ts | **MODIFIED-🔵追加** | 追加 3 个方法到文件末尾 |
 | 5 | BLL/OldFeatureMgr.cs | **REMOVED** | 功能合并到新 Mgr，删除旧文件 |
 ```
 

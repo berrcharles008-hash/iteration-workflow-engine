@@ -24,7 +24,7 @@
 | **S8** | 阶段推进留痕观测（RESUME-3 批次 3 路线 I） | ✅ in_progress | 任意 | `{ID}.state.yaml`（写入含 `current_phase` 变更） | **ALLOW+NOTIFY** | phaseAdvanceGuard：检测 current_phase 变更且无合法 `phase_confirm` ⇒ 放行但推 QQ 告警（fail-open 观测态）；强制化（BLOCK）另行拍板；现值/新值比对手法同 memoryQuotaGuard（`tool_input.content` / `old_str+new_str` 模拟替换） |
 | **S9** | 01-03 写 `requirements/iteration-context/` 下的 `.md`（R-14） | ✅ in_progress | 01/02/03 | `requirements/iteration-context/2026-10-01-002-context.md` | **ALLOW**（留痕 `EXEMPT_ALLOW … md-only`） | ★ E-6（2026-10-02）：**仅 .md**；同目录 `.cs/.sql` 仍 **BLOCK**（负向用例在案） |
 | **S10** | 04 派发白名单条目 + `.tmp`（原子写） | ✅ in_progress | 04 | `<白名单条目>.tmp` | **ALLOW** | ★ E-7（2026-10-02）：仅「**同条目** + `.tmp`」；非白名单 `*.tmp` 仍 **BLOCK**（负向用例在案） |
-| **S11** | 05 期「开闸就地修」的留痕对账 | ✅ in_progress | 05 | `{ID}.state.yaml`（`defects[]` 含 `gate_window`） | **脚本校验（非 hook）** | ★ α（2026-10-02）：**不新增放行面**；对账由 `validate-state.py [R8]` 判定（有 `gate_window` ⇒ `fix_files` 必填；`fixed`+窗口 ⇒ `verified_by` 必填） |
+| **S11** | 05 期就地修（方案 A：阶段级预授权）的留痕对账 | ✅ in_progress | 05 | `{ID}.state.yaml`（`defects[]` 含 `gate_window`） | **脚本校验（非 hook）** | ★ α（2026-10-02）：**不新增放行面**；对账由 `validate-state.py [R8]` 判定（有 `gate_window` ⇒ `fix_files` 必填；`fixed`+窗口 ⇒ `verified_by` 必填） |
 
 ### 主表验证命令模板
 

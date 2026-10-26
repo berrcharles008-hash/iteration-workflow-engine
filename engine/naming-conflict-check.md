@@ -14,7 +14,7 @@
 | 向已有类中追加新方法 | ✅ 必须 |
 | 向已有类中追加新属性/字段 | ✅ 必须 |
 | 新建文件（全新类） | ❌ 不需要（类名本身用下面的类名检查） |
-| 新增 API 端点 | ✅ 必须（同类中不能有重复 `[WebApiMethod]` 名） |
+| 新增 API 端点 | ✅ 必须（同类中不能有重复的端点特性名） |
 | 新增路由/菜单项 | ✅ 必须（Id 和 path 不能重复） |
 
 ---
@@ -26,7 +26,7 @@
 | 前端方法名 | 搜索目标文件中是否已有同名方法 | `search_content("{MethodName}", "{{TARGET_FILE}}")` |
 | 前端类名 | 搜索目标目录是否已有同名类 | `search_content("class {ClassName}", "{{TARGET_DIR}}")` |
 | 后端方法签名 | 搜索 IMgr 接口和 BLL 实现类中是否已有同名方法 | `search_content("{MethodName}\(", "{{INTERFACE_FILE}}")` |
-| 后端 API 端点 | 搜索 WebApi 类中是否已有同名 `[WebApiMethod]` | `search_content("{MethodName}", "{{WEBAPI_FILE}}")` |
+| 后端 API 端点 | 搜索端点类中是否已有同名端点特性 | `search_content("{MethodName}", "{{WEBAPI_FILE}}")` |
 | 路由 path | 搜索是否已有相同的 path | `search_content("/{route_path}", "{{ROUTER_FILE}}")` |
 | 菜单 Id | 搜索是否已有相同 Id | `search_content("{menu_id}", "{{MENU_FILE}}")` |
 

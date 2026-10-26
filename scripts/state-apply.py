@@ -14,10 +14,14 @@
                                             （--id 含 user-confirm 时输出 QQ 门登记附注，仅提醒不改状态）
   step-skip --id <step-id> --reason "…"     status = skipped + skip_reason
   task-done [--id <task-id>]                tasks_completed+1，从 tasks_pending 移除
-  phase-advance --to <NN> --confirm-by <by> [--quote "…"]
-                                            [--gate-result passed|conditionally_passed|rejected]
-                                            旧阶段入 phase_history + current_phase 推进
-                                            + phase_confirm（缺 confirm ⇒ 拒绝）
+  phase-advance --to <NN> --confirm-by <by> [--quote "…"] [--quote-src <文件>]
+                                           [--gate-result passed|conditionally_passed|rejected]
+                                           旧阶段入 phase_history + current_phase 推进
+                                           + phase_confirm（缺 confirm ⇒ 拒绝）
+                                           ★ TOOL-ANSWERKIND：quote 真伪校验（见 verify_quote）
+                                             --quote-src 给来源文件 ⇒ quote 必须逐字命中；
+                                             quote 含 answer=/allowed= 等元数据 ⇒ 拒绝；
+                                             quote 点名 ask#N 且该答案 allowed=false ⇒ 拒绝
   blocker-add --id <B-n> --desc "…" [--type <t>]
   blocker-rm  --id <B-n>
   defect-add  --id <D-n> --desc "…" [--severity P0|P1|P2] [--level L1|L2|L3]
@@ -74,6 +78,73 @@ LOG = RUNTIME_SELF / 'state-apply.log'
 SESSION = os.environ.get('STATE_APPLY_SESSION') or ('pid-' + str(os.getpid()))
 
 ALLOWED_CONFIRM_BY = ('qq#', 'ide', 'handoff', 'bypass')
+
+# ★ TOOL-ANSWERKIND（2026-10-20 · 工单见 runtime/TOOL-ANSWERKIND-四件套.md §9）：phase_confirm.quote 真伪校验。
+#   事故：用户 QQ 回选项 D「回 IDE 原会话拍板」，答案文件 answer=ide/defer-ide（allowed=false），
+#   主 Agent 读成「IDE 已确认」，自撰 quote「用户 IDE 确认评审通过（ask#2 answer=ide @…）」，
+#   旧实现只判「quote 非空」⇒ 通过，连续伪推进 01→02 / 02→03。
+#   三条 fail-closed 规则（专治"把答复元数据当用户原话"）：
+#     ① `--quote-src <文件>` ⇒ quote 必须逐字命中该文件（去空白后包含）；
+#     ② quote 自身含 answer= / allowed= / answerKind 等元数据 ⇒ 拒绝（用户不会这么说）；
+#     ③ quote 点名 ask#N / 答案#N / qq#N，而该答案文件 allowed=false ⇒ 拒绝（无授权答复不能充当确认来源）。
+#   ★ 不收紧 ALLOWED_CONFIRM_BY：`by:"ide"` = 用户在本会话直接发言，是最主要的合法路径
+#     （state-protocol §3.3；run-state-tests T6 断言其 rc=0），移除会逼出 bypass 滥用。
+ANSWER_SIDES = ('codebuddy', 'claude')
+QUOTE_META_RE = re.compile(r'(answer[A-Za-z]*\s*=|\ballowed\s*=|answerKind)', re.I)
+QUOTE_ASK_RE = re.compile(r'(?:ask\s*#|答案\s*#|qq\s*#)\s*(\d+)', re.I)
+
+
+def _flat(s):
+    """去空白归一（中文标点/换行/缩进不参与比对，防"逐字"过脆）"""
+    return re.sub(r'\s+', '', str(s or ''))
+
+
+def answer_file(ans_id):
+    """答案文件解析（双侧探测；FIX-49 单写本侧下两侧都可能存在）"""
+    for side in ANSWER_SIDES:
+        p = ROOT / ('.' + side) / 'temp' / 'qq-answers' / (str(ans_id) + '.json')
+        if p.exists():
+            return p
+    return None
+
+
+def answer_allowed(j):
+    """机器判据 = allowed（与 tools/qqbot 同口径）；旧答案文件按 answer 值回退"""
+    if isinstance(j, dict) and isinstance(j.get('allowed'), bool):
+        return j['allowed']
+    return str((j or {}).get('answer') or '') in ('confirm', 'choice', 'text')
+
+
+def verify_quote(quote, quote_src):
+    """quote 真伪前置校验（见本节头注释）。返回 (ok, reason)。"""
+    q = _flat(quote)
+    if not q:
+        return True, ''
+    if QUOTE_META_RE.search(quote or ''):
+        return False, ('quote 含答复元数据（answer= / allowed= / answerKind）⇒ 判定为自撰，'
+                       '不是用户原话；请填用户在 IDE 里的**逐字原话**')
+    if quote_src:
+        p = pathlib.Path(quote_src) if os.path.isabs(quote_src) else (ROOT / quote_src)
+        if not p.exists():
+            return False, '--quote-src 指向的文件不存在: ' + str(quote_src)
+        try:
+            body = _flat(p.read_text(encoding='utf-8', errors='replace'))
+        except Exception as e:
+            return False, '--quote-src 读取失败: ' + str(e)
+        if q not in body:
+            return False, 'quote 未逐字出现于 --quote-src 指定文件（去空白后不包含）'
+    for m in QUOTE_ASK_RE.findall(quote or ''):
+        p = answer_file(m)
+        if p is None:
+            continue
+        try:
+            j = json.loads(p.read_text(encoding='utf-8', errors='replace').lstrip('\ufeff'))
+        except Exception:
+            return False, 'quote 引用的答案文件无法解析: ' + str(p)
+        if not answer_allowed(j):
+            return False, ('quote 引用了**无授权答复** ask#' + str(m) + '（answer=' + str(j.get('answer'))
+                           + ' ⇒ allowed=false）—— 无授权答复不能作为 by:ide 的确认来源')
+    return True, ''
 
 
 def rt(ide):
@@ -427,6 +498,7 @@ def main():
             to = opt(args, '--to', '')
             by = opt(args, '--confirm-by', '')
             quote = opt(args, '--quote', '')
+            quote_src = opt(args, '--quote-src', '')
             gate = opt(args, '--gate-result', '')
             if not re.fullmatch(r'0[1-7]', to or ''):
                 say('phase-advance 需要 --to <01..07>')
@@ -436,6 +508,11 @@ def main():
                 return 2
             if by == 'ide' and not quote:
                 say('phase-advance 拒绝：by=ide 时 --quote 必填（用户通过语原文）')
+                return 2
+            # ★ TOOL-ANSWERKIND：quote 必须像"用户原话"，且不得引用无授权答复（详见 verify_quote 头注释）
+            okq, whyq = verify_quote(quote, quote_src)
+            if not okq:
+                say('phase-advance 拒绝：' + whyq)
                 return 2
             old = get_scalar(new, 'current_phase', '')
             if old == to:

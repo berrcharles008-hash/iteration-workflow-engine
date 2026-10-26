@@ -45,10 +45,18 @@ PLACEHOLDER_RE = re.compile(r'YYYY|MM-DD|\{[^}]*\}')
 SKILL_PREFIXES = ('runtime/', 'scripts/', 'project/', 'engine/', 'hooks/',
                   'SKILL.md', 'SKILL.template.md')
 IDE_PREFIXES = ('.codebuddy/', '.claude/', '.cursor/', '.codex/')
-PATH_PREFIXES = IDE_PREFIXES + SKILL_PREFIXES + (
+# 引擎通用结构前缀 —— **不外置**（属引擎自身约定，外置只会引入第二个配置面）
+# ★ G06/G13（2026-10-25）：下面两个业务根前缀是**通用目录约定**，不是某个项目的取值
+#   （任何项目都可能用同名根目录），故保留在引擎里。它们会被 A10-a 的 T4/T5 扫到并归 G13 基线
+#   （WARN 可见、不阻塞）；**不登记 A10_ALLOW** —— 登记只会把 WARN 变静默，零净收益。
+ENGINE_STRUCT_PREFIXES = (
     'skills/', 'tools/', 'sql/', 'docs/', 'requirements/', 'feasibility/',
-    'back-end/', 'front-end/', 'pivas-prototype/')
-MEM_BARE_PREFIXES = ('PIVAS-速查',)     # memory/ 目录下的裸名指针（允许解析）
+    'back-end/', 'front-end/')
+# ★ 2026-10-25（迭代 2026-10-25-002 · G08）：项目特有项改由
+#   `project/memory-audit.yaml` 追加（`load_audit_config()` 时重算），此处只保**基线**。
+#   改前把 `pivas-prototype/` / `PIVAS-速查` 写死在本文件 ⇒ 换项目必须改引擎源码。
+PATH_PREFIXES = IDE_PREFIXES + SKILL_PREFIXES + ENGINE_STRUCT_PREFIXES
+MEM_BARE_PREFIXES = ()                  # memory/ 下允许解析的裸名指针前缀（由配置填充）
 LINE_SUFFIX_RE = re.compile(r':\d+(?:-\d+)?$')
 
 
@@ -59,6 +67,30 @@ def code_units(text):
 def read_text(path):
     with io.open(path, encoding='utf-8', newline='') as fh:
         return fh.read()
+
+
+def load_audit_config():
+    """按 `project/memory-audit.yaml` 重算两个**模块级**白名单（G08）。
+
+    **永不抛**：配置缺失 / 读失败 ⇒ 项目侧两项为空（`PATH_PREFIXES` 回落基线，
+    `MEM_BARE_PREFIXES` 为空 ⇒ 裸名一律不判为路径、B/C 段打印 SKIP）。
+
+    为何改模块级全局：消费点有两处（`looks_like_path` 的裸名判定 + B 段 glob），
+    改全局可保证**两处同源**，不会出现「路径判定放宽了但分片统计没跟上」的分裂。
+    """
+    global PATH_PREFIXES, MEM_BARE_PREFIXES
+    extra_paths, bare = [], []
+    try:
+        import project_config
+        cfg_path = project_config.SKILL_ROOT / 'project' / 'memory-audit.yaml'
+        extra_paths = project_config.read_bare(cfg_path, 'path_prefixes')
+        bare = project_config.read_bare(cfg_path, 'bare_prefixes')
+    except Exception as e:
+        print('[INFO] memory-audit.yaml 不可用 ⇒ 项目侧白名单为空（%s）' % e)
+    PATH_PREFIXES = (IDE_PREFIXES + SKILL_PREFIXES + ENGINE_STRUCT_PREFIXES
+                     + tuple(x for x in extra_paths if x not in PATH_PREFIXES))
+    MEM_BARE_PREFIXES = tuple(bare)
+    return extra_paths, bare
 
 
 # ── 默认模式：配额自检 ──────────────────────────────────────
@@ -104,7 +136,10 @@ def looks_like_path(token, allow_bare=False):
     if '/' not in s:
         if not PATH_SUFFIX_RE.search(s):
             return False
-        return True if allow_bare else s.startswith(MEM_BARE_PREFIXES)
+        if allow_bare:
+            return True
+        # 空配置时**显式**返回 False（不依赖 `str.startswith(())` 的隐式空元组语义）
+        return bool(MEM_BARE_PREFIXES) and s.startswith(MEM_BARE_PREFIXES)
     return s.startswith(PATH_PREFIXES)
 
 
@@ -150,8 +185,10 @@ def index_check(project_root):
     mem_path = os.path.join(mem_dir, 'MEMORY.md')
     errs, warns = [], []
 
+    extra_paths, bare_prefixes = load_audit_config()
     print('mode      : --index-check')
     print('project   :', project_root)
+    print('cfg       : path_prefixes=+%d bare_prefixes=%d' % (len(extra_paths), len(bare_prefixes)))
 
     # A. §一登记表内路径可解析
     if not os.path.isfile(cc_path):
@@ -172,13 +209,23 @@ def index_check(project_root):
             errs.append('A: 索引登记路径不可解析 -> %s' % b)
 
     # B. 分片与登记双向一致
-    actual = sorted(os.path.basename(p) for p in glob.glob(os.path.join(mem_dir, 'PIVAS-速查*.md')))
-    declared = sorted(set(os.path.basename(t) for t in tokens
-                          if os.path.basename(t).startswith('PIVAS-速查')))
-    orphans = [a for a in actual if a not in declared]
-    ghosts = [d for d in declared if d not in actual]
-    print('  B parts      : actual=%d declared=%d orphans=%s' %
-          (len(actual), len(declared), orphans or 'none'))
+    #   ★ 2026-10-25（G08）：glob 由 `bare_prefixes` 派生，不再写死 `PIVAS-速查`。
+    #   glob 固定 `{prefix}*.md`（R6：不开放通配符键 —— 配错会静默 0 分片 ⇒ PASS 假绿）。
+    if not MEM_BARE_PREFIXES:
+        actual, declared, orphans, ghosts = [], [], [], []
+        print('  B parts      : SKIP (no bare_prefixes)')
+    else:
+        part_names = set()
+        for prefix in MEM_BARE_PREFIXES:
+            for p in glob.glob(os.path.join(mem_dir, prefix + '*.md')):
+                part_names.add(os.path.basename(p))
+        actual = sorted(part_names)
+        declared = sorted(set(os.path.basename(t) for t in tokens
+                              if any(os.path.basename(t).startswith(p) for p in MEM_BARE_PREFIXES)))
+        orphans = [a for a in actual if a not in declared]
+        ghosts = [d for d in declared if d not in actual]
+        print('  B parts      : actual=%d declared=%d orphans=%s' %
+              (len(actual), len(declared), orphans or 'none'))
     for o in orphans:
         errs.append('B: 孤儿分片（存在但未登记）-> %s' % o)
     for g in ghosts:
@@ -194,6 +241,8 @@ def index_check(project_root):
             warns.append('C: 分片超上限 %dKB -> %s %.1fKB' % (SIZE_LIMIT_KB, name, kb))
     if biggest:
         print('  C sizes      : max=%s %.1fKB / limit %dKB' % (biggest[0], biggest[1], SIZE_LIMIT_KB))
+    else:
+        print('  C sizes      : SKIP (no shards)')
 
     # D. MEMORY.md 指针可达
     if not os.path.isfile(mem_path):

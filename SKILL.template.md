@@ -10,12 +10,12 @@ description: |
   ★ 多 Story 并行模式触发词
 version: "2.2.1"
 config:
-  specs_dir: references/specs/
+  specs_dir: {{SPECS_DIR}}/
   specs_fallback_dirs:
     - .codebuddy/specs/
   # 活文档知识库根目录（L1/L2/L3 自动生成）
   # 读取路径: {kb_dir}/{l1_file}, {kb_dir}/{l2_dir}/, {kb_dir}/{l3_file}
-  kb_dir: docs/knowledge-base/
+  kb_dir: {{KB_DIR}}/
   l1_file: L1-overview.md
   l2_dir: L2-modules/
   l3_file: L3-glossary.md
@@ -48,7 +48,7 @@ config:
 | # | 对象 | 纪律 |
 |:--:|------|------|
 | 1 | 规格/计划类（`requirements/`、`03-技术方案.md`、任务清单） | 先 `search_content` 定位 → 再 `read_file offset/limit` 只读命中区间 |
-| 2 | 状态文件（`state.yaml`） | 只读 `current_phase` / `phase_steps` / `tasks_*` 区间（~50 行），禁全文回读 |
+| 2 | 状态文件（`state.yaml`） | 只读 `current_phase` / `phase_steps` / `tasks_*` 区间（~50 行），禁全文回读；★ **写入优先走 `scripts/state-apply.py`**（意图式命令，省 1 个 step；见 `state-protocol.md` §9.6）|
 | 3 | 源码 | 仅在"即将编辑 / 落盘前核对"时读，只读待替换片段，禁预读整个类文件 |
 | 4 | 引擎文件 | 只读**当前步骤**涉及的文件，禁"预读全套"；**到达确认等待点时**读 `engine/waiting-protocol.md`（全确认点统一等待细则） |
 | 5 | 大产物（>300 行） | 要求产出方给"摘要 + diff 片段" |
@@ -108,8 +108,8 @@ Agent 准备调用写入类工具时 → **必须先读 `engine/gate-protocol.md
 | 01-需求分析 | 独立 `01-需求记录.md` | 读 L1/L2/L3 知识库（references/specs/）→ 与用户确认需求 |
 | 02-需求评审 | 独立 `02-需求评审.md` | reviewer 视角审阅 → 提问题 → 用户决议 |
 | 03-技术方案 | 独立 `03-技术方案.md` | 六步漏斗代码定位 → 方案 → Delta标记 → 命名冲突预检 |
-| 04-开发实现 | 独立 `04-开发任务清单.md` + 代码 | 清单生成 → 自动审查 → 用户确认 → Team Agent → 构建 → 代码审查 |
-| 05-测试验证 | 独立 `05-测试验证报告.md` | 构建验证 → 用例生成 → 自动执行 → 降级手动 |
+| 04-开发实现 | 独立 `04-开发任务清单.md` + 代码 | 清单生成 → 自动审查 → 用户确认 → Team Agent → 构建 → 代码审查；★ 缺陷修复窗口 `step-fix-*`（按需） |
+| 05-测试验证 | 独立 `05-测试验证报告.md` | 构建验证 → 用例生成 → 自动执行 → 降级手动；★ 缺陷分诊（登记 `defects[]` + 根因判档 + 与报告对账） |
 | 06-发布上线 | 独立 `06-发布上线记录.md` | 编译 → 部署 → Spec 活文档更新 → **知识库无条件刷新** → ★ 不释放 ACTIVE；推进 current_phase → 07 |
 | 07-迭代回顾 | 独立 `07-迭代回顾.md` | ★ 强制不可跳过（含 🟢 简单迭代）；总结反思 → 问题清单 → 模式沉淀 → 归档释放 |
 
@@ -129,11 +129,23 @@ Agent 准备调用写入类工具时 → **必须先读 `engine/gate-protocol.md
 11. **★ 图优先原则**：涉及架构图、时序图等可视化内容时，优先使用 Mermaid 图表嵌入文档。
 12. **★ 独立Agent交叉审查（自审+互审双保险）**：🔴 复杂级 02/03/04 阶段启动独立 Agent 交叉审查；🟡 中等级 03/04 强制、02 可选。主 Agent 在需要时先启动独立 Agent，再立即执行自审。详见 `engine/cross-review-protocol.md`。
 ★ **"应执行" ≠ "mandatory"（两个维度）**：03/04 的交叉审查 = `mandatory=true`（门禁强制、不做即拦）；**02 = `mandatory=false`**（🔴 应执行但**不阻塞推进**）。`mandatory` 的**唯一权威源 = `complexity-scoring.md` §二**。
-★ 派发前须组装**锚点包**（符号→绝对路径→行号）并按模块/维度**分片**（🟡2 路 / 🔴2~4 路，每路限工具调用次数），禁止子 Agent 无目标全库探索（协议 §二-B / §三-A）。
+★ 派发前须组装**锚点包**（符号→绝对路径→行号）并按模块/维度**分片**（🟡2 路 / 🔴2~3 路，每路限工具调用次数），禁止子 Agent 无目标全库探索（协议 §二-B / §三-A）。
+  ★ **同批并行硬上限 ≤3 路**、单路上下文 ≤15 万 token（`engine/team-agent-strategy.md` §二维度五）：宿主过载会异常终止并连带停止所有 Team 成员。
 13. **★ 外部模型审查路由（v2.0.0）**：🔴 复杂级的 02 阶段强制使用，03/04 阶段优先使用。详见 `engine/cross-review-protocol.md` §八。
 14. **★ 每个阶段必须有独立目录产出**：复杂度只决定内容详细程度，不决定文件位置。🟢 简单：独立文件，内容极简（02 ~200字 / 03 ~300字 / 07 精简三段式）；🟡🔴：独立文件，标准/完整内容。
 15. **★ 知识库自动兜底**：`{{KB_DIR}}` 下 L1/L2/L3 由 `scripts/gen-knowledge-base.py` 维护（`--check` 检测缺失/过时 + **文件指纹**（mtime_ns+size，检出既有文件被改动），`--force` 刷新）。01 前置步骤与 step-1.6-dir-diff 发现缺失/过时时**自动刷新**（读前兜底，不等待用户确认）；03 step-1.2 读取 L2 前做新鲜度校验；**04 不刷新**（代码未验证、无消费者）；**06 `step-2-5-kb-refresh` 无条件刷新 = 最终态**（归档前）。人工编辑文件（`auto-generated: false`）永不被覆盖。
-16. **★ 上下文纪律（定点读）**：大文件禁全文入上下文 —— 先定位后定点读、状态文件只读关键区间、源码只读待改片段、单轮 `read_file` ≤ 500 行。详见 `engine/context-discipline.md`。
-17. **★★ 引擎自身修改 = 「引擎演进安全协议」**（用户 2026-09-20 立法，最高优先级）：**任何**对本 skill 的修改（`engine/**`、`scripts/**`、`hooks/**`、`SKILL.md`、模板等）**禁止"先改后报"** —— 四件套前置审批、核心文件快照、收口验证（3 脚本 + 回流水位）**全部**见 `engine/evolution-safety.md`，此处**不再复述**（★ 单点权威，防两份口径漂移）。
+16. **★ 缺陷处置分档（2026-09-23 DEFECT-1）**：05 发现缺陷先**判根因档**（判据见 `workflow-engine.md` §缺陷根因判定判据）—— L1 实现缺陷（`design_changed=false`）→ 回退 04 走 `step-fix-1-register` ~ `step-fix-5-reclose` 窗口；L2 方案缺陷 → 回退 03（**先改 03 再改码**）；L3 需求缺陷 → 回退 01/02。
+    - ★ **不得**用 `03-技术方案` 的 `needs_update` 判档 —— 实践中它被当**修复流水台账**用，恒 `true`、丧失区分力（2026-09-23 评审实证 9/9）。
+    - ★ 缺陷台账 SSOT = `state.yaml` 的 `defects[]`，与 05 报告「缺陷记录」节按 `D-xx` **双向对账**；存在 `open` 缺陷时**禁止推进 06**（`gate-protocol.md` §三-C）。
+    - ★ `step-fix-*` 与原则 3 / 6 的边界：小改动豁免 Team Agent，但**涉后端码必须重跑构建验证**（`/t:Rebuild`）。
+      窗口 = **双窗口（2026-10-02 α 口径）**：① **04 侧** `step-fix-1-register` ~ `-5-reclose` = 唯一**免开闸**窗口；
+      ② **05 侧** `step-fix-05-1-register` ~ `-4-reclose` = **仅 L1 且不涉后端码**的小修，须**用户开闸**，
+      且 `defects[].gate_window` 与 `fix_files` **成对留痕**（机器校验 = `state-protocol.md` §3.3 [R8] / `validate-state.py`）。
+      ★ **不新增写放行面**（方案 α，用户 2026-10-02 QQ#7 裁定）。
+      ★ **04 侧免开闸窗口系历史豁免先例**（QQ#17 裁定②，2026-10-02 加注 · GATE-TRV-DEL 同批）：
+      本条仅为既成事实的**定位声明**，不构成新增写放行面的立法先例——后续任何新放行面仍须走 α 口径审批。
+17. **★ 上下文纪律（定点读）**：大文件禁全文入上下文 —— 先定位后定点读、状态文件只读关键区间、源码只读待改片段、单轮 `read_file` ≤ 500 行。详见 `engine/context-discipline.md`。
+18. **★★ 引擎自身修改 = 「引擎演进安全协议」**（用户 2026-09-20 立法，最高优先级）：**任何**对本 skill 的修改（`engine/**`、`scripts/**`、`hooks/**`、`SKILL.md`、模板等）**禁止"先改后报"** —— 四件套前置审批、核心文件快照、收口验证（3 脚本 + 回流水位）**全部**见 `engine/evolution-safety.md`，此处**不再复述**（★ 单点权威，防两份口径漂移）。
 
 > 完整流程定义见 `engine/workflow-engine.md`，门禁规则见 `engine/gate-protocol.md`。
+> 能力全貌（11 域 · 状态标记）见 `engine/capability-map.md`。

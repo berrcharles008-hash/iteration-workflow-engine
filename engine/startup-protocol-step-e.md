@@ -63,8 +63,8 @@
 ## 015 系统分级配置 — 04开发实现完成
 
 **修改文件**：
-- `back-end/.../Inf/Dtos/DictTriageGradeDto.cs` — 追加 9 字段
-- `front-end/.../config_triage_grade.ts` — 与 upgrade 同步
+- `<后端>/.../Inf/Dtos/XxxDto.cs` — 追加 N 字段
+- `<前端>/.../config_xxx.ts` — 与升级包同步
 - ...（共 19 项）
 
 **遇到问题**：

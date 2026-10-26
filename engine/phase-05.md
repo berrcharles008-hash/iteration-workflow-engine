@@ -109,10 +109,26 @@
 | step-3-execute | 自动执行【自动】用例 | ✅ | 始终 |
 | step-4-output | 生成测试报告 | ✅ | 始终 |
 | step-fix-05-1-register | 缺陷登记（`defects[]` + 根因分档 + `design_changed`） | — | 存在 `open` 缺陷 |
-| step-fix-05-2-code | 就地修复编码（**须用户开闸**；涉后端码 ⇒ 回 04） | — | 上一步完成 |
+| step-fix-05-2-code | 就地修复编码（**05 期预授权窗口内自主修**；窗口未开 ⇒ 先发一次预授权卡；涉后端码 ⇒ 回 04） | — | 上一步完成 |
 | step-fix-05-3-regress | 失败用例回归（既有结果不回改、新增续接编号） | — | 上一步完成 |
 | step-fix-05-4-reclose | 缺陷关闭（`fixed` + `verified_by` + `fix_files` 对账） | — | 回归通过 |
 
 > ★ **05 侧缺陷修复窗口（2026-10-02 E-2 新增）**：SSOT 见 `phase-steps.md` §阶段五。要点：
-> ① 仅 **L1 且不涉后端码**可就地修（用户开闸，`defects[].gate_window` + `fix_files` 必须成对，机器校验 = §3.3 R8）；
+> ① 仅 **L1 且不涉后端码**可就地修（`defects[].gate_window` + `fix_files` 必须成对，机器校验 = §3.3 R8）；
 > ② 涉后端码 / 需 `/t:Rebuild` ⇒ **回 04** 走 `step-fix-*`；③ 禁止再自造游离步骤块。
+>
+> ★ **05 期开闸 = 阶段级一次预授权（2026-10-19 用户拍板方案 A · 工单 FIX-ALLOW-1）**：
+> - **时机**：进入 05 阶段（或首个需就地修的缺陷出现）时发**一张**预授权卡，用户 QQ 确认**一次**：
+>   `node tools/qqbot/request-confirm.js --prompt "05 期就地修复预授权：覆盖本迭代 05 期全部 L1 不涉后端码缺陷，TTL <N>" --command "node tools/gate/open-bypass.js --ttl <N>"`
+> - **窗口内逐缺陷修复不再逐条发卡**（这是方案 A 的全部收益：确认次数 N ⇒ 1）；
+> - **TTL**：240（半日）/ 480（全天，`open-bypass.js` 上限）；跨天或窗口被并行会话 `--revoke` 连坐关闭 ⇒ **重发同一预授权卡**（恢复同一授权，非新决策）；
+> - **每缺陷仍必做**：`gate_window`（记 confirm id + 时段）+ `fix_files` + 回归 + 关闭（R8 对账不变）；
+> - **收口（推进 06 前）必做**：`node tools/gate/open-bypass.js --revoke` + 关闸负向对照（05 期业务区探针被拦）+ `gate_window` 逐条对账；
+> - **边界**：预授权**不**改变「Agent 不得自建 `.gate-bypass`」红线（GAP-4）；**不**覆盖 L2/L3、涉后端码、06/07 阶段或元层（`skills/**`、`hooks/**`）——元层改动仍单独确认；
+> - **验收判据**（观察义务）：单迭代 05 期 OPEN 次数 ≈ 阶段天数（1 次/天）而非缺陷数；`gate_window`/`fix_files` 零缺失；收口 revoke + 对照有留痕。
+>
+> ★ **元层探针类动作（2026-10-26 新增）**：判据自证类用例需临时写 `engine/**` / `scripts/**`（元层），而 `stageExempt['05']` 不放行 `skills/**` ⇒ 该类动作须走**用户授权 TTL 窗口**，并做三件套：
+> ① 授权留痕（TTL 时长；缺陷类另记 `gate_window`）；
+> ② **立即还原**（探针零残留，用 `Select-String <探针标记>` 自证命中 0 处）；
+> ③ `revoke` 后**关闸负向对照**（再发一条写语义命令应被拦，证明闸确实关回）。
+> **禁止**把 `skills/**` 加进阶段豁免表 —— 那等于永久放开元层写入，与 GAP-4 红线反向；窗口式一次性授权才是正解。

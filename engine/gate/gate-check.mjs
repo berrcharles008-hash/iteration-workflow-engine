@@ -71,6 +71,14 @@ import { readFileSync, existsSync, appendFileSync, writeFileSync, statSync, mkdi
 import { join, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
+// ★ 2026-10-24（G01 批次 1A）：三张豁免表的**数据**迁至 exempt-tables.mjs（D-03-1）。
+//   判定逻辑（matchStageExempt / isMetaWriteExempt）仍在本文件，此处只取「本模式生效的三表」。
+import { resolveExemptTables, handoffOwnerEnv, LEGACY_HANDOFF_ENV, LITERAL } from './exempt-tables.mjs';
+// ★ 2026-10-25（迭代 `2026-10-25-002-引擎VCS归位与脚本去项目化` · G12/G11）：两处归位 ——
+//   vcs-profile.mjs  = VCS 族判定的**单源**（tag 过滤 + 探针守卫 + 缺省逐元素等价）
+//   notify-adapter.mjs = 出站通知的**统一契约**（send() 同步返回 / mode 分通道 / 静默下沉）
+import { resolveVcsProfile, literalProfile } from './vcs-profile.mjs';
+import { createNotifier, normalizeAdapter, notifySilentReason } from './notify-adapter.mjs';
 
 // ── 配置 ──────────────────────────────────────────────
 const PROJECT_DIR = process.env.CODEBUDDY_PROJECT_DIR
@@ -193,14 +201,19 @@ const DELETE_EXEMPT_PATTERNS = [
   /\.(?:tmp|log|orig|rej|swp|old)$/,
 ];
 
-/** ★ FIX-9 删除/移动类命令段（一并管重命名/移动：原路径将消失） */
-const DELETE_CMD_PATTERNS = [
-  /\b(?:Remove-Item|erase|rmdir|del|delete|delete_files)\b/i,
-  /\brm\b/i,
-  /\brd\b/i,
-  /\b(?:Move-Item|Rename-Item|mv|move|ren|rename)\b/i,
-  /\bsvn\s+(?:delete|rm|remove|move|mv|rename)\b/i,
-];
+/**
+ * ★ FIX-9 删除/移动类命令段（一并管重命名/移动：原路径将消失）
+ *
+ * ⚠️ 2026-10-25（迭代 `2026-10-25-002` · G12 / M-1 / **M-7**）：本表**零代码引用**
+ *   （实测：全文仅声明处 1 次；删除类判定现由 `isDeleteSegment` 与
+ *   `WRITE_DELETE_VERB_AT_POS_RE` 承担）⇒ **已整表删除**。
+ *   语义等价物 = `engine/gate/vcs-profile.mjs` 的 `DELETE_SUBS_RE`（`isDeleteSegment` 消费）。
+ *
+ *   ★ 与方案 §2.5.1「整体搬入 deleteCmd 族」的**有意偏差（M-7）**：原 5 条内联模式**无任何
+ *   消费者**，搬入只会新增死代码（零净收益，且日后易被误认为生效路径）。故只留本指针；
+ *   原文可在 `runtime/snapshots/2026-10-25-002/before/engine/gate/gate-check.mjs` 逐字查得。
+ *   反向判据：若将来有人恢复该表，必须先补消费者 + 回归用例，否则视为死代码回潮。
+ */
 
 /**
  * ★ FIX-21（2026-09-18）：门禁事件流（block / allow）—— 判定推迟到「会话结束」的唯一依据。
@@ -209,7 +222,8 @@ const DELETE_CMD_PATTERNS = [
 const GATE_EVENTS_FILE = join(PROJECT_DIR, '.codebuddy/temp/gate-events.jsonl');
 const STOP_GATE_WINDOW_MS = 10 * 60 * 1000;   // 拦截距「会话结束」超过 10 分钟 ⇒ 与本次无关，不通知
 // ★ FIX-21：上移自 notify 区（Stop 判定分支在逃生口块之前执行，晚声明会 TDZ）
-const QQ_NOTIFY_MIN_INTERVAL_MS = 20000;    // 全局最小间隔（防并发 spawn 连发）
+// ★ 2026-10-25（迭代 2026-10-25-002 · M-2）：`QQ_NOTIFY_MIN_INTERVAL_MS`（原 `:215`，20s 全局最小间隔）
+//   **零引用**（全文仅声明 1 次）⇒ 已删除。去重真源 = `QQ_NOTIFY_FP_WINDOW_MS`（同指纹 10 分钟窗口）。
 const QQ_NOTIFY_FP_WINDOW_MS = 600000;      // 同指纹窗口（10 分钟）
 const QQ_NOTIFY_OFF_MARKERS = [
   '.codebuddy/hooks/.qq-notify-off',
@@ -223,21 +237,103 @@ const RUNTIME_REL = RUNTIME_DIR_NORM.startsWith(PROJECT_DIR_NORM)
   ? RUNTIME_DIR_NORM.slice(PROJECT_DIR_NORM.length + 1).replace(/\/?$/, '/')
   : null;
 
-/** 01-03 阶段内允许写入的目录 */
-const EXEMPT_PATHS = [
-  '.codebuddy/skills/iteration-workflow/',
-  '.claude/skills/iteration-workflow/',
-  '.cursor/skills/iteration-workflow/',
-  '.codex/skills/iteration-workflow/',
-  'docs/iterations/',
-  // ★ FIX-23（2026-09-20）：知识库为纯生成物（gen-knowledge-base.py 产出，非业务代码）。
-  //   phase-01 前置步骤/step-1.6 要求"过时即刷新"，而该目录原不在放行表 ⇒ Agent 用 Write/Edit
-  //   维护知识库时与门禁互斥（消除口径冲突；脚本执行本就可跑，见 gate-protocol.md §四）。
-  //   放行口径与 06 阶段 STAGE_EXEMPT_PATHS['06'].dirs 一致。Bash 命令仍不享本豁免（FIX-24）。
-  'docs/knowledge-base/',
-  '.codebuddy/memory/',
-  '.claude/memory/',
-];
+/**
+ * ★ 2026-10-24（G01 · 批次 1A）：三张豁免表改由 `exempt-tables.mjs` 提供。
+ *   `GATE_EXEMPT_MODE`（缺省 `shadow`）决定**生效**哪一套：
+ *     · shadow ⇒ tables = 字面量现值（与本文件改前逐字节相同）⇒ 放行面构造性零变化；
+ *     · derive ⇒ tables = manifest 派生（切换另开窗口，需独占验证）。
+ *   派生结果与 diff 始终随 EXEMPT_RESOLUTION 返回，供 EXEMPT_SHADOW 审计与 A10-c 对账。
+ *
+ *   ⚠ 整段包 try/catch：入口 shim 对「实现加载抛错」走 fail-closed(exit 2)，若此处抛出，
+ *   全部工具调用都会被拦死（2026-10-24 实证：本文件一次语法错误即锁死所有工具）
+ *   ⇒ 任何异常降级为字面量（= 现值）并留痕，绝不让配置机制成为新的故障点。
+ */
+const EXEMPT_RESOLUTION = (() => {
+  try {
+    return resolveExemptTables({
+      mode: process.env.GATE_EXEMPT_MODE || 'shadow',
+      projectDir: PROJECT_DIR,
+    });
+  } catch (e) {
+    return {
+      mode: 'shadow',
+      rawMode: 'shadow',
+      manifest: { path: '', source: 'none', found: false, cfg: {} },
+      literal: LITERAL,
+      derived: LITERAL,
+      diff: { equal: true, count: 0 },
+      tables: LITERAL,
+      errors: ['EXEMPT_RESOLVE_FAILED: ' + String(e && e.message ? e.message : e)],
+    };
+  }
+})();
+
+/**
+ * ★ 2026-10-25（迭代 `2026-10-25-002` · G12 / D1 候选 A）：VCS 判定档 —— **装载期生成常量**。
+ *
+ * 为何在装载期生成（而非运行期分支）：运行期分支会散落成 N 处 `if (vcsType === …)`，
+ * 任一处漏改 = **静默放宽**且无法被断言；装载期派生可对「派生结果」整体 deepEqual 对账。
+ *
+ * 失败形态闭环（C-1）：
+ *   · 求值抛错 ⇒ 回落 `literalProfile()`（**未过滤全量现值** = 收紧方向，绝不放宽）；
+ *   · `import` 级语法错不在 try/catch 内 ⇒ 由 `node --check` 前置拦截（见 P-196）；
+ *   · 配置缺失/非法 ⇒ `resolveVcsProfile` 内部回落缺省档（= 现值），并留 `errors[]`。
+ */
+const VCS_PROFILE = (() => {
+  try {
+    const cfg = (EXEMPT_RESOLUTION.manifest && EXEMPT_RESOLUTION.manifest.cfg) || {};
+    const p = resolveVcsProfile(cfg);
+    audit('VCS_PROFILE', `type=${p.vcsType} source=${p.source}`
+      + (p.errors && p.errors.length ? ' errors=' + p.errors.join(',') : ''));
+    return p;
+  } catch (e) {
+    audit('VCS_PROFILE_FALLBACK', String((e && e.message) || e).slice(0, 140));
+    return literalProfile('VCS_PROFILE_FALLBACK');
+  }
+})();
+
+/**
+ * ★ 2026-10-25（迭代 `2026-10-25-002` · T2-1 / C-11）：manifest 解析**诊断**必须进 audit。
+ * 失效形态：4 空格缩进的 `notifications.adapter` 被静默忽略 ⇒ 回落 `none`
+ * ⇒ QQ 通知全静默且**零报错** ⇒ 只能靠这条审计发现。
+ */
+for (const cfgErr of (EXEMPT_RESOLUTION.errors || [])) {
+  audit('PROJECT_CONFIG_ERROR', String(cfgErr).slice(0, 160));
+}
+
+/**
+ * ★ 2026-10-25（迭代 `2026-10-25-002` · G11）：出站通知适配器（**单例**，装载期建）。
+ * 三处出站（阶段守卫 / G1 观测提醒 / 会话结束阻断通知）统一走 `NOTIFIER.send()`。
+ * ★ R3：`ask.js` 不可逆决策回路**不入适配器**（`none` 会让不可逆操作静默）——见 §sendGateNotify。
+ */
+const NOTIFIER = (() => {
+  try {
+    const cfg = (EXEMPT_RESOLUTION.manifest && EXEMPT_RESOLUTION.manifest.cfg) || {};
+    const norm = normalizeAdapter(cfg['notifications.adapter']);
+    if (norm.error) {
+      audit('NOTIFY_ADAPTER', `adapter=${norm.adapter} source=default :: ${norm.error}`);
+    } else {
+      audit('NOTIFY_ADAPTER', `adapter=${norm.adapter} source=manifest`);
+    }
+    return createNotifier({
+      adapter: norm.adapter,
+      projectDir: PROJECT_DIR,
+      offMarkers: QQ_NOTIFY_OFF_MARKERS,
+      audit,
+    });
+  } catch (e) {
+    audit('NOTIFY_ADAPTER_ERR', String((e && e.message) || e).slice(0, 140));
+    return createNotifier({ adapter: 'none', projectDir: PROJECT_DIR, offMarkers: QQ_NOTIFY_OFF_MARKERS, audit });
+  }
+})();
+
+/**
+ * 01-03 阶段内允许写入的目录（4 条引擎自引用 + docs_iterations + kb_dir + 2 条 memory）。
+ * ★ FIX-23（2026-09-20）：知识库为纯生成物（gen-knowledge-base.py 产出，非业务代码）；
+ *   phase-01 前置步骤/step-1.6 要求"过时即刷新" ⇒ 必须放行，否则与文档要求互斥。
+ *   放行口径与 06 阶段 stageExempt['06'].dirs 一致。Bash 命令仍不享本豁免（FIX-24）。
+ */
+const EXEMPT_PATHS = EXEMPT_RESOLUTION.tables.exemptPaths;
 
 /**
  * ★ E-6（2026-10-02 迭代 2026-10-01-002 · 工单 R-14）：01-03 阶段「**仅 .md**」放行目录。
@@ -245,9 +341,7 @@ const EXEMPT_PATHS = [
  *   但该目录不在 EXEMPT_PATHS ⇒ 01 阶段写 CONTEXT.md 被拦（实测 2026-09-30-002 与本次迭代各 1 次）。
  * 口径：**仅 .md**（与 05/06/NONE 的 mdDirs 一致）⇒ 同目录 .cs/.sql 等仍拦（负向对照见回归）。
  */
-const EXEMPT_PATHS_MD_ONLY = [
-  'requirements/iteration-context/',
-];
+const EXEMPT_PATHS_MD_ONLY = EXEMPT_RESOLUTION.tables.exemptPathsMdOnly;
 
 /**
  * ★ FIX-12②（2026-09-17）：05/06/07 阶段化文档豁免 —— 各阶段的「本职文档产出」放行 + 审计留痕。
@@ -267,32 +361,26 @@ const EXEMPT_PATHS_MD_ONLY = [
  * 明确仍拦（fail-closed）：00 全部、none 态的 knowledge-base 与业务区（back-end/ front-end/ sql/ …）、
  * requirements 非 .md 文件（全阶段）、07 的 project/ 其它文件、以及所有 Bash 命令。
  */
-const STAGE_EXEMPT_PATHS = {
-  // ★ GATE-7（2026-09-27）：05 增 knowledge-base（测试期知识库刷新）与 requirements/*.md
-  //   （走查/测试期的规格回写）—— 实测 05 期误拦 requirements md 22 次、KB 33+ 次。
-  '05': { dirs: ['docs/iterations/', 'docs/knowledge-base/'], mdDirs: ['requirements/'] },
-  '06': {
-    dirs: ['docs/iterations/', 'docs/knowledge-base/'],
-    mdDirs: ['requirements/', 'feasibility/'],
-    // ★ GATE-7：模式沉淀自 06 开始（实测 06 期 lessons-learned 被拦；07 原已放行）
-    files: ['skills/iteration-workflow/project/lessons-learned.md'],
-  },
-  // ★ FIX-16（2026-09-17）：07 回顾的「模式沉淀」为强制本职动作（phase-07 step-3/step-5，
-  //   AP-1/AP-4 明禁"仅报告声称"）⇒ 放行写 project/lessons-learned.md。
-  //   判定走 files 精确后缀（自动跨 IDE 前缀），不放行 project/ 下其它文件。
-  '07': { dirs: ['docs/iterations/'], files: ['skills/iteration-workflow/project/lessons-learned.md'] },
-  // ★ GATE-7（2026-09-27）：无活跃迭代期的纯文档放行 —— 立项前需求登记
-  //   （实测 requirements/待排期需求登记.md 被拦 2 次）与迭代文档预写。
-  //   业务代码 / docs 其它子目录 / knowledge-base 在 none 态仍然全拦（fail-closed）。
-  // ★ FIX-45（2026-10-11）：增 runtime 立项文件豁免 —— 死锁实证：headless 立项必须先写
-  //   runtime/ACTIVE + runtime/<迭代ID>.state.yaml，而 none 态不放行任何 runtime/ 写入
-  //   ⇒「创建迭代」被自己的门禁拦死（job c10b6fe6 卡 20+ 分钟无法立项，鸡生蛋）。
-  //   范围严格限定 runtime/ 目录下的 ACTIVE 与 *.state.yaml（业务码/其它 runtime 文件仍拦）。
-  'NONE': {
-    dirs: ['docs/iterations/'], mdDirs: ['requirements/', 'feasibility/'],
-    runtimeFiles: ['ACTIVE', '*.state.yaml'],
-  },
-};
+// ★ 2026-10-24（G01）：数据迁至 exempt-tables.mjs 的 stageExempt（保序、逐字节等价，见附录 E-3）。
+// 下面历史依据保留 —— 它解释「为什么这样放行」，与数据存放位置无关。
+// ★ GATE-7（2026-09-27）：05 增 knowledge-base（测试期知识库刷新）与 requirements/*.md
+//   （走查/测试期的规格回写）—— 实测 05 期误拦 requirements md 22 次、KB 33+ 次。
+// ★ GATE-7：模式沉淀自 06 开始（实测 06 期 lessons-learned 被拦；07 原已放行）。
+// ★ FIX-16（2026-09-17）：07 回顾的「模式沉淀」为强制本职动作（phase-07 step-3/step-5，
+//   AP-1/AP-4 明禁"仅报告声称"）⇒ 放行写 project/lessons-learned.md；
+//   判定走 files 精确后缀（自动跨 IDE 前缀），不放行 project/ 下其它文件。
+// ★ GATE-7（2026-09-27）：无活跃迭代期的纯文档放行 —— 立项前需求登记
+//   （实测 requirements/待排期需求登记.md 被拦 2 次）与迭代文档预写；
+//   业务代码 / docs 其它子目录 / knowledge-base 在 none 态仍然全拦（fail-closed）。
+// ★ FIX-45（2026-10-11）：增 runtime 立项文件豁免 —— 死锁实证：headless 立项必须先写
+//   runtime/ACTIVE + runtime/<迭代ID>.state.yaml，而 none 态不放行任何 runtime/ 写入
+//   ⇒「创建迭代」被自己的门禁拦死（job c10b6fe6 卡 20+ 分钟无法立项，鸡生蛋）；
+//   范围严格限定 runtime/ 目录下的 ACTIVE 与 *.state.yaml（业务码/其它 runtime 文件仍拦）。
+const STAGE_EXEMPT_PATHS = EXEMPT_RESOLUTION.tables.stageExempt;
+
+// ★ 2026-10-24（G01）：拦截话术里的迭代文档目录不再写字面量 —— 否则切 derive 后
+//   「判定放行 A、提示说只放行 B」，话术与规则自相矛盾（3 路评审 R-05）。
+const ITER_DOCS_DIR = ((STAGE_EXEMPT_PATHS.NONE || {}).dirs || ['docs/iterations/'])[0] || 'docs/iterations/';
 
 /**
  * 阶段化文档豁免判定：命中返回命中的模式串（供审计），未命中返回 null。
@@ -353,8 +441,27 @@ const META_WRITE_EXEMPT_RE = [
  *        ② 锁文件本身（允许删除以解除锁定）
  *  fail-open：无锁 / 已过期 / 解析失败一律视为无锁，避免残留锁把 IDE 永久锁死。 */
 const HANDOFF_LOCK_REL = '.codebuddy/temp/handoff/RUNNING.json';
+
+/**
+ * ★ 2026-10-24（G03 · 批次 1A）：headless 身份的**唯一判定入口**（原为 3 处直读环境变量）。
+ *
+ * 变量名按 `project.short_name` 派生 = `{SHORT_NAME}_HANDOFF_OWNER`；旧名
+ * `LEGACY_HANDOFF_ENV` 兼容一版（D3 决议；删除前置 = 项目侧 tools/qqbot 双投递）。
+ * 本项目 short_name = pivas ⇒ 派生名与旧名**同串** ⇒ 行为零变化（判据 #6 的等价性来源）；
+ * 新项目才拿到不含他人项目名的变量（G03 的收益点）。
+ *
+ * 解析失败（无 manifest / 无 short_name）⇒ 只认旧名 = 现状：既不静默放宽，也不静默收紧。
+ * ★ 用 function 声明（非 const 箭头）：本函数被下方多处调用，且 gateCheck 在 await 后触发。
+ */
+function handoffOwnerActive() {
+  const cfg = (EXEMPT_RESOLUTION.manifest && EXEMPT_RESOLUTION.manifest.cfg) || {};
+  const derived = handoffOwnerEnv(cfg);
+  if (derived && process.env[derived]) return true;
+  return Boolean(process.env[LEGACY_HANDOFF_ENV]);
+}
+
 function handoffLockActive() {
-  if (process.env.PIVAS_HANDOFF_OWNER) return null;
+  if (handoffOwnerActive()) return null;
   try {
     const raw = readFileSync(join(PROJECT_DIR, HANDOFF_LOCK_REL), 'utf-8');
     const j = JSON.parse(raw.replace(/^\uFEFF/, ''));
@@ -489,18 +596,13 @@ function extractPhaseConfirm(text) {
 
 function notifyPhaseGuard(reason, fromPhase, toPhase) {
   try {
-    // 测试沙箱 / 显式关闭 ⇒ 不真发 QQ（同 notifySilentReason 口径），仅 audit 留痕可断言
-    if (process.env.GATE_TEST_RUNTIME_DIR || process.env.QQ_NOTIFY === '0' || process.env.QQ_NOTIFY === 'off') {
-      audit('PHASE_GUARD_NOTIFY_SKIP', 'silent');
-      return;
-    }
-    const enqueuePath = join(PROJECT_DIR, 'tools/qqbot/notify-enqueue.js');
-    const notifyPath = join(PROJECT_DIR, 'tools/qqbot/notify.qqbot.js');
-    const notifyTarget = existsSync(enqueuePath) ? enqueuePath : notifyPath;
-    if (!existsSync(notifyTarget)) { audit('PHASE_GUARD_NOTIFY_SKIP', 'no-notify-script'); return; }
     let iterLabel = '-';
     try { const c = readIterContext(); if (c && c.id) iterLabel = c.id + '（阶段 ' + (c.phase || '?') + '）'; } catch { /* 忽略 */ }
-    const payload = {
+    // ★ 2026-10-25（G11 / 锚点 7）：静默预检（test/env/**marker**）+ 脚本存在性 + spawn
+    //   **整体下沉**到 `notify-adapter.mjs`。原实现只看 env，漏 `.qq-notify-off` 手动标记。
+    const r = NOTIFIER.send({
+      mode: 'enqueue',
+      kind: 'gate',
       rows: [
         ['事件', '阶段推进留痕告警（观测态 · 未拦截）'],
         ['推进', (fromPhase || '?') + ' → ' + (toPhase || '(current_phase 行被删除)')],
@@ -510,13 +612,9 @@ function notifyPhaseGuard(reason, fromPhase, toPhase) {
       ],
       next: '推进已放行（观测态 fail-open）。补留痕 = state.yaml 增 phase_confirm{from,to,by,at[,quote]}（by=ide 须附 quote）。强制化另行拍板（RESUME-3 批次 3 G1）。',
       prompt: '阶段推进留痕告警：' + reason,
-      kind: 'gate',
-    };
-    const child = spawn(process.execPath, [notifyTarget, '--json', JSON.stringify(payload)], {
-      detached: true, stdio: 'ignore', windowsHide: true,
     });
-    child.unref();
-    audit('PHASE_GUARD_NOTIFY', reason + ' ' + fromPhase + '->' + toPhase);
+    if (r.sent) audit('PHASE_GUARD_NOTIFY', reason + ' ' + fromPhase + '->' + toPhase);
+    else audit('PHASE_GUARD_NOTIFY_SKIP', 'skipped=' + String(r.skipped));
   } catch (e) {
     audit('PHASE_GUARD_ERR', String((e && e.message) || e).slice(0, 140));
   }
@@ -712,17 +810,14 @@ const WATCHED_TOOLS = [
  *    （实证：`Select-String -Pattern 'move'`、`git log --grep=move` 被全文词匹配判危险）。
  *    依据：SSOT §一 FIX-25 订正口径「只读命令在任何阶段都放行」，本改动即实现回归该口径。
  *  本表保留「命令/工具级」模式（重定向 / git 变更 / svn 变更 / 打包压缩）。 */
-const DANGEROUS_CMD_PATTERNS = [
-  // ── 文件写入/重定向（★ GATE-A②：判定前先剔引号内文本，见 stripQuotedText） ──
-  /[^=>-]>\s*\S/,                                                  // 输出重定向（排除 >> / -> / =>）
-  />>\s*\S/,                                                       // 追加重定向
-  // ── Git 变更类 ──
-  /\bgit\s+(?:commit|push|reset|rebase|merge|cherry-pick|stash)\b/i,
-  // ── SVN 变更类 ──
-  /\bsvn\s+(?:commit|ci|delete|rm|move|mv|copy|cp|import)\b/i,
-  // ── 打包/压缩（可能覆盖文件） ──
-  /\b(?:Compress-Archive|Expand-Archive)\b/i,
-];
+/**
+ * ★ 2026-10-25（迭代 `2026-10-25-002` · G12 / 锚点 2）：危险命令表改绑 `VCS_PROFILE.patterns.dangerous`。
+ *   元素（source + flags + **顺序**）搬运自 `vcs-profile.mjs` 的 `DANGEROUS_ELEMENTS`；
+ *   缺省档（`vcs.type` 缺键/空串/非法 ⇒ svn）与改前**逐元素等价**。
+ * ⚠️ flags 必须保真：重定向两条**无** `i` flag ⇒ 丢 flag 即静默改变大小写敏感性。
+ * ⚠️ 顺序即语义：过滤保持相对顺序 ⇒ 缺省档与改前数组逐项对齐。
+ */
+const DANGEROUS_CMD_PATTERNS = VCS_PROFILE.patterns.dangerous;
 
 /**
  * ★ GATE-A②（2026-10-01）：写/删/移动类动词 —— 仅在**命令位**判定。
@@ -813,18 +908,15 @@ function unwrapQuotedPayload(text) {
   return p;
 }
 
-/** Shell 命令：纯读类模式（直接放行，不检查门禁） */
-const SAFE_CMD_PATTERNS = [
-  /^(?:echo|cat|type|dir|ls|pwd|whoami|hostname|date|time|ver|uname|printenv|env)\b/i,
-  /^(?:where|which|find|grep|Select-String|sls)\b/i,              // 文本搜索
-  /^(?:head|tail|sort|uniq|wc)\b/i,                               // 流处理
-  /^(?:Get-Content|gc|Get-ChildItem|gci|Get-Location|gl)\b/i,    // PowerShell 只读
-  /^(?:Get-Process|gps|Get-Service|gsv)\b/i,                      // 进程/服务查看
-  /^(?:git\s+(?:status|log|diff|show|branch|remote|stash\s+list)|svn\s+(?:status|log|info|list|ls|cat|diff|update|up|checkout|co|export))\b/i,
-  /^(?:npm|yarn|pnpm|dotnet|msbuild|node|python|ruby|java)\b/i,  // 构建/运行工具
-  /^(?:code\s+--|code\s+-r\s)/i,                                   // VS Code 控制
-  /^(?:cd|chdir|pushd|popd|Set-Location|sl)\b/i,                  // 目录切换
-];
+/**
+ * Shell 命令：纯读类模式（直接放行，不检查门禁）
+ *
+ * ⚠️ 2026-10-25（迭代 `2026-10-25-002` · G12 / M-1 / C-12）：本表**零代码引用**
+ *   （全文仅声明处 1 次；`:1292` 自认「实际已由本分支统一覆盖」）⇒ 元素已**原样搬入**
+ *   `engine/gate/vcs-profile.mjs`（`patterns.safe`），**搬而不拆**：
+ *   `git+svn` 合并条目保持单条（拆分当前零收益，注释已标「拆分预留」）。
+ */
+
 
 // ── 逃生口 ────────────────────────────────────────────
 // ★ 回归测试专用（FIX-10 补）：GATE_TEST_DISABLE_BYPASS=1 时忽略逃口 —— 只会更严格，
@@ -977,7 +1069,14 @@ const GIT_BOOL_OPTS = new Set([
 const GIT_VALUE_OPTS = new Set([
   '-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--exec-path',
 ]);
-const GIT_CHANGE_VERBS = new Set(['commit', 'push', 'reset', 'rebase', 'merge', 'cherry-pick', 'stash']);
+/**
+ * ★ 2026-10-25（迭代 `2026-10-25-002` · G12 / 锚点 4 / C-3）：git 变更动词集改绑
+ *   `VCS_PROFILE.gitChangeVerbs` —— 与危险表的 git 元素**同源**
+ *   （否则日后加动词只改一处即漏拦：`:757` 危险表 vs `:1017` 动词集）。
+ *   缺省档与改前逐项相等；`vcs.type: none` ⇒ 空集 ⇒ git 变更命令不再被拦
+ *   （方向性不变式：任何取值相对现值**只会更少拦截**）。
+ */
+const GIT_CHANGE_VERBS = VCS_PROFILE.gitChangeVerbs;
 
 /** 引号感知分词：`"a b"` / 'a b' 视为单 token（含空格的选项值） */
 function tokenizeQuoteAware(s) {
@@ -1157,6 +1256,15 @@ if (!WATCHED_TOOLS.includes(toolName)) {
   process.exit(0);
 }
 
+// ★ 2026-10-24（G01 批次 1A · shadow 对账留痕）：每次**写类**工具调用落 1 行，
+//   供判据 #3「连续 3 次门禁调用 diff 恒空」取证。刻意放在 WATCHED_TOOLS 早退**之后**：
+//   只读调用与 Stop 回调不写日志（3 路评审 R-04：原方案写在模块顶层，会放大日志量）。
+if (EXEMPT_RESOLUTION.mode === 'shadow') {
+  const d = EXEMPT_RESOLUTION.diff || {};
+  const mf = EXEMPT_RESOLUTION.manifest || {};
+  audit('EXEMPT_SHADOW', `eq=${d.equal ? 1 : 0} mf=${mf.found ? 1 : 0} n=${d.count || 0}`);
+}
+
 // ── ★ FIX-47（2026-10-11 用户拍板）：headless 身份整体免门禁 ─────────────────
 //   设计决策：headless（PIVAS_HANDOFF_OWNER 环境变量，由 qqbot 注入 serve/print 进程，
 //   job 及其 hook 继承）是**用户 QQ 授权的执行者**；其纪律由接管任务书（第 12/13 条：
@@ -1166,7 +1274,7 @@ if (!WATCHED_TOOLS.includes(toolName)) {
 //   保留的防线：① 审计留痕（每次放行可对账）② IDE 侧一切照旧（env 天然区分——只有
 //   serve/print 的 job 有该变量）③ 锁对「IDE 侧」的拦截不变（防双写）④ 不可逆操作
 //   从来靠 QQ 确认门（门禁本就不懂 DDL/DML 语义）。
-if (process.env.PIVAS_HANDOFF_OWNER) {
+if (handoffOwnerActive()) {
   audit('HANDOFF_OWNER_ALLOW', `[ALL] tool=${String(toolName || '')} target=${String(filePath || '')}`.substring(0, 200));
   process.exit(0);
 }
@@ -1460,7 +1568,7 @@ async function gateCheck(fsPath, cmdCtx) {
       //   "含写/删/变更语义"的命令 ⇒ 立项被自家门禁二次拦死（鸡生蛋）。
       //   范围：仅 none 态的 Bash 命令分支豁免；仅 PIVAS_HANDOFF_OWNER 会话（serve/print 的
       //   headless job 自身，随 serve 进程注入）；01-07 阶段豁免表与阶段门均不变。
-      if (process.env.PIVAS_HANDOFF_OWNER) {
+      if (handoffOwnerActive()) {
         audit('HANDOFF_OWNER_ALLOW', `[NONE-cmd] ${fsPath}`);
         process.exit(0);
       }
@@ -1477,7 +1585,7 @@ async function gateCheck(fsPath, cmdCtx) {
       `本次尝试: ${fsPath}`,                       // ★ FIX-11：拦截留痕带目标，便于回溯
       ...alphaLines,
       '',
-      'none 态仅放行纯文档: docs/iterations/ · requirements/*.md · feasibility/*.md',
+      `none 态仅放行纯文档: ${ITER_DOCS_DIR} · requirements/*.md · feasibility/*.md`,
       '（★ FIX-45：立项写入 runtime/ACTIVE 与 runtime/*.state.yaml 亦放行）',
       '业务代码修改请先创建新迭代（开始迭代 / 进入01阶段）。'
     );
@@ -1591,7 +1699,7 @@ async function gateCheck(fsPath, cmdCtx) {
       `本次尝试: ${fsPath}`,
       '',
       '允许写入的目录:',
-      '  docs/iterations/          — 迭代文档（需求/评审/方案）',
+      `  ${ITER_DOCS_DIR.padEnd(24, ' ')}— 迭代文档（需求/评审/方案）`,
       '  {IDE}/skills/.../         — Skill 自身文件',
       '  {IDE}/memory/             — 工作记忆',
       '',
@@ -1635,13 +1743,23 @@ function isDeleteSegment(seg) {
     const low = tokens[i].toLowerCase().replace(/\.(exe|cmd|bat|ps1)$/, String());
     if (/^(?:cmd|powershell|pwsh|bash|sh|zsh|call|start|exec|sudo|env|npx)(?:\.exe)?$/.test(low)) continue;
     const sub = (tokens[i + 1] || String()).toLowerCase();
+    // ★ 2026-10-25（迭代 `2026-10-25-002` · G12 / 锚点 5 / C-13 / **M-6**）：VCS 族判定改查 `VCS_PROFILE`。
+    //   ① git 只读例外（`clean -n` / `restore --staged` / `checkout --`）必须**先于**任何查表
+    //      ⇒ `deleteSegmentSubs` **不含 git 键**（C-13）。
+    //   ② ★ M-6：族**未启用**时必须 `return false`，**不得 `continue`** ——
+    //      本循环（`i < 4`）会继续扫下一 token，而下方通用正则含 `delete` ⇒ 若 continue，
+    //      `none` 档 `svn delete X.cs` 仍在 `i=1` 命中通用正则 ⇒ V1-A「放行」不可达。
     if (low === 'git') {
+      if (!VCS_PROFILE.gitDeleteSubs) return false;              // git 族未启用 ⇒ 不参与删除段判定
       if (sub === 'clean') return !(has('-n') || has('--dry-run'));
       if (sub === 'restore') return !(has('--staged') && !has('--worktree'));
       if (sub === 'checkout') return has('--') || tokens.indexOf('.') >= 0;
-      return /^(?:rm|mv|delete|move|remove|rename|del)$/.test(sub);
+      return VCS_PROFILE.gitDeleteSubs.test(sub);
     }
-    if (low === 'svn') return /^(?:rm|mv|delete|move|remove|rename|del)$/.test(sub);
+    if (low === 'svn') {
+      const svnSubs = VCS_PROFILE.deleteSegmentSubs.get('svn');
+      return svnSubs ? svnSubs.test(sub) : false;                // svn 族未启用 ⇒ false
+    }
     return /^(?:del|erase|rm|rmdir|rd|ri|unlink|remove-item|remove-itemproperty|remove|delete|delete_files|move-item|rename-item|mi|mv|move|ren|rni|rename)$/.test(low);
   }
   return false;
@@ -2049,15 +2167,12 @@ function auditBypass(reason) {
 //   ③ 去重升级 —— 原「全局 60s」会把**不同目标**的连续拦截一并吞掉（信息缺失），
 //      改为「同指纹 10min 防刷屏」（判定已推迟到 Stop，不再需要全局 20s 连发保护）；指纹 = 原因 + 目标。
 
-/** 静默原因（null = 正常发送） */
-function notifySilentReason() {
-  if (process.env.GATE_TEST_RUNTIME_DIR || process.env.GATE_TEST_DISABLE_BYPASS) return 'test';
-  if (process.env.QQ_NOTIFY === '0' || process.env.QQ_NOTIFY === 'off') return 'env';
-  for (const rel of QQ_NOTIFY_OFF_MARKERS) {
-    if (existsSync(join(PROJECT_DIR, rel))) return 'marker';
-  }
-  return null;
-}
+/**
+ * ★ 2026-10-25（迭代 `2026-10-25-002` · G11 / C-15）：静默判定**下沉**至 `notify-adapter.mjs`。
+ *   本文件原有一份副本 ⇒ **双真源**；且阶段守卫（`notifyPhaseGuard`）只看 env，
+ *   **漏** `.qq-notify-off` 手动标记 ⇒ 新调用点忘写预检就会绕过手动静默开关。
+ *   现统一从适配器导入（`notifySilentReason({projectDir, offMarkers})`），本地副本已删除。
+ */
 
 /** 当前工具名（block 可能在 stdin 解析前被触发 ⇒ try 兜住 let 的 TDZ） */
 function blockToolLabel() {
@@ -2201,7 +2316,7 @@ function checkUnregisteredUserConfirm() {
       return;
     }
     // ⑤ 静默判定（测试态/手动开关 ⇒ 只留痕不发，评审 ERR-1）
-    const silent = notifySilentReason();
+    const silent = notifySilentReason({ projectDir: PROJECT_DIR, offMarkers: QQ_NOTIFY_OFF_MARKERS });
     if (silent) {
       audit('G1_CHECK_SKIP', 'silent=' + silent + ' :: iter=' + id + ' step=' + hit);
       return;
@@ -2216,11 +2331,13 @@ function checkUnregisteredUserConfirm() {
       return;
     }
     try { writeFileSync(join(RUNTIME_DIR, 'qq-g1-notify.json'), JSON.stringify({ fp, fpAt: now }), 'utf-8'); } catch { /* 忽略 */ }
-    // ⑦ 直发提醒（notify.qqbot.js 单向，不带 #N —— 观测期数据收集，无需回复）
+    // ⑦ 直发提醒（`mode: 'notify'` = 单向，不带 #N —— 观测期数据收集，无需回复）
+    //   ★ 2026-10-25（G11 / 锚点 7）：不再直连 `notify.qqbot.js`；去重（⑥）仍留在调用点，
+    //     因指纹窗口是**跨进程**语义，而适配器的 `Set` 只是进程内幂等保险。
     try {
-      const notifyPath = join(PROJECT_DIR, 'tools/qqbot/notify.qqbot.js');
-      if (!existsSync(notifyPath)) { audit('G1_CHECK_SKIP', 'notify.qqbot.js missing'); return; }
-      const payload = {
+      const r = NOTIFIER.send({
+        mode: 'notify',
+        kind: 'gate',
         title: 'G1 观测期：确认点疑似未登记 QQ 门',
         status: '存在 pending 的用户确认步骤，但未发现晚于 state 更新的 ask.js 登记证据',
         rows: [
@@ -2231,13 +2348,12 @@ function checkUnregisteredUserConfirm() {
         ],
         next: '处理：在 IDE 内补登记 ask.js 或确认已用其他方式送达用户；本条为单向观测期提醒，无需回复',
         prompt: 'G1 观测期提醒：确认点 ' + hit + ' 疑似未 ask.js 登记（迭代 ' + id + '）',
-        kind: 'gate',
-      };
-      const child = spawn(process.execPath, [notifyPath, '--json', JSON.stringify(payload)], {
-        detached: true, stdio: 'ignore', windowsHide: true,
       });
-      child.unref();
-      audit('G1_CHECK_NOTIFY', 'iter=' + id + ' step=' + hit + ' last_ask=' + (askMin || '-') + ' last_updated=' + luMin);
+      if (r.sent) {
+        audit('G1_CHECK_NOTIFY', 'iter=' + id + ' step=' + hit + ' last_ask=' + (askMin || '-') + ' last_updated=' + luMin);
+      } else {
+        audit('G1_CHECK_SKIP', 'notify skipped=' + String(r.skipped) + ' :: iter=' + id + ' step=' + hit);
+      }
     } catch (e) {
       audit('G1_CHECK_ERR', 'notify: ' + String((e && e.message) || e));
     }
@@ -2257,7 +2373,7 @@ async function runStopCheck() {
       return;
     }
     // ① 测试态 / ② 手动开关 ⇒ 静默（仅审计留痕）
-    const silent = notifySilentReason();
+    const silent = notifySilentReason({ projectDir: PROJECT_DIR, offMarkers: QQ_NOTIFY_OFF_MARKERS });
     if (silent) {
       audit('QQ_NOTIFY_SKIP', `reason=${silent} :: ${String(ev.reason || '').slice(0, 80)}`);
       return;
@@ -2283,8 +2399,10 @@ async function runStopCheck() {
 /** 由「阻断事件」构造并发送门禁通知（不可逆 → ask 回路；其余 → 入队带 #N） */
 function sendGateNotify(ev) {
   try {
-    const notifyPath = join(PROJECT_DIR, 'tools/qqbot/notify.qqbot.js');
-    if (!existsSync(notifyPath)) return;
+    // ★ 2026-10-25（G11 / 锚点 8 / C-10）：原「`notify.qqbot.js` 不存在即整段早退」**已删除**。
+    //   失效形态：早退位于下方 ask 分支之前 ⇒ 删脚本会让**不可逆 ask 回路整段不可达**
+    //   （用户收不到「需你本人确认」，且全程零报错）。现由适配器按 `mode` 解析脚本
+    //   （缺脚本 ⇒ `skipped='no-script'`），ask 分支只依赖自身 `ask.js` 存在性 ⇒ 方向更安全。
     const reason = ev.reason || '操作被门禁拦截';
     const target = ev.target || '';
 
@@ -2334,16 +2452,11 @@ function sendGateNotify(ev) {
         return;
       }
     }
-    // 优先送「合并服务」入队（带 #id，可在 QQ 回「确认#N」）；
-    // 服务不可用时 notify-enqueue.js 自身会回退为直接发送，原能力不受影响。
-    const enqueuePath = join(PROJECT_DIR, 'tools/qqbot/notify-enqueue.js');
-    const notifyTarget = existsSync(enqueuePath) ? enqueuePath : notifyPath;
-    // detached + unref + stdio:ignore → 父进程 exit(2) 后子进程仍独立把 QQ 发出去
-    const child = spawn(process.execPath, [notifyTarget, '--json', JSON.stringify(payload)], {
-      detached: true, stdio: 'ignore', windowsHide: true,
-    });
-    child.unref();
-    audit('QQ_NOTIFY', msg + ` | 工具=${ev.tool || '?'} 目标=${target || '-'}`);
+    // 非不可逆 ⇒ 入队带 #id（可在 QQ 回「确认#N」）；脚本解析 / 回落 / 投递全部由适配器承担
+    // （enqueue 缺失 ⇒ 回落 notify.qqbot.js；两者都缺 ⇒ `skipped='no-script'`）。
+    const r = NOTIFIER.send(Object.assign({ mode: 'enqueue' }, payload));
+    if (r.sent) audit('QQ_NOTIFY', msg + ` | 工具=${ev.tool || '?'} 目标=${target || '-'}`);
+    else audit('QQ_NOTIFY_SKIP', 'skipped=' + String(r.skipped) + ` | 工具=${ev.tool || '?'} 目标=${target || '-'}`);
   } catch (e) {
     audit('QQ_NOTIFY_ERR', String((e && e.message) || e));
   }

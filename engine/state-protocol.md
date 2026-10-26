@@ -155,7 +155,7 @@ phase_status: "in_progress" # 当前阶段状态：in_progress | completed | blo
 last_updated: "2026-06-19T19:30"
 
 # 本次对话摘要（对话结束/06归档时写入，200字以内；下次对话 Step B 恢复时注入）
-last_session_summary: "完成了 Task-1~7：新增 Entity/BLL/Web 三层文件，csproj 注册通过，编译 0 error。待完成 Task-8~9（BLL/Web 追加方法）。关键决策：SaveVitalSignsWithDevice 合并写入，不拆分事务。"
+last_session_summary: "完成了 Task-1~7：新增 Entity/BLL/Web 三层文件，构建文件注册通过，编译 0 error。待完成 Task-8~9（BLL/Web 追加方法）。关键决策：SaveXxxWithDevice 合并写入，不拆分事务。"
 
 # 仅 iteration_status == "paused" 时存在：
 pause_reason: ""
@@ -180,13 +180,13 @@ tasks_total: 12
 tasks_completed: 7
 tasks_pending:
   - id: "Task-8"
-    file: "BLL/TriageVitalSignsMgr.cs"
+    file: "BLL/XxxMgr.cs"
     op: "追加"
-    desc: "新增 SaveVitalSignsWithDevice 方法"
+    desc: "新增 SaveXxxWithDevice 方法"
   - id: "Task-9"
-    file: "Web/TriageVitalSigns.cs"
+    file: "Web/Xxx.cs"
     op: "追加"
-    desc: "新增 SaveVitalSignsWithDevice API 方法"
+    desc: "新增 SaveXxxWithDevice API 方法"
 
 # ★ 多 Story 并行（仅 04 阶段使用；单 Story 迭代可省略此字段）
 # 聚合型：top-level 的 tasks_total/tasks_completed 为各 Story 之和（向后兼容旧 reader，见 §3.3 一致性校验）
@@ -209,15 +209,15 @@ stories:
     tasks_completed: 3
     tasks_pending:
       - id: "Task-8"
-        file: "BLL/TriageVitalSignsMgr.cs"
+        file: "BLL/XxxMgr.cs"
         op: "追加"
-        desc: "新增 SaveVitalSignsWithDevice 方法"
+        desc: "新增 SaveXxxWithDevice 方法"
     blockers: []
   # 多 Story 时逐 Story 追加同构条目
 
 # 阻塞清单（空数组=无阻塞）
 blockers: []
-# 有阻塞时示例：- id: "B-1" / type: "compile_error" / desc: "BLL/TriageVitalSignsMgr.cs 第 312 行 using 缺失" / created_at: "2026-06-19T20:00"
+# 有阻塞时示例：- id: "B-1" / type: "compile_error" / desc: "BLL/XxxMgr.cs 第 NNN 行 using 缺失" / created_at: "2026-06-19T20:00"
 
 # ★ 缺陷台账（2026-09-23 DEFECT-1 新增；空数组 = 无缺陷记录）
 #   用途：缺陷的**跨阶段唯一台账** —— 与 05 报告「五、缺陷记录」节按 id 双向对账。
@@ -235,7 +235,7 @@ defects: []
 #     design_changed: false          # ★ 登记时由用户确认；true ⇒ 必须走 L2/L3 回退协议，不得走修复窗口
 #     status: "open"
 #     opened_at: "2026-09-23T10:00"
-#     # fixed_at（fixed 时写入）/ fix_files（实际改动文件，审计回溯用；可空）/ verified_by（回归验证人 user/agent）/ gate_window（用户手动开闸就地修复留痕，如 "bypass 10:00~10:40"）——fixed ⇒ fixed_at、L2/L3 ⇒ rollback_checks 见 §3.3 缺陷台账校验，其余详见 phase-04 Step F
+#     # fixed_at（fixed 时写入）/ fix_files（实际改动文件，审计回溯用；可空）/ verified_by（回归验证人 user/agent）/ gate_window（05 期就地修复的开闸窗口留痕；方案 A 起记 confirm id + 时段，如 "confirm#16 09:48~13:48"）——fixed ⇒ fixed_at、L2/L3 ⇒ rollback_checks 见 §3.3 缺陷台账校验，其余详见 phase-04 Step F
 ```
 
 ### 3.1 阶段完成历史（phase_history）
@@ -381,13 +381,18 @@ rollback_checks:
 | 字段 | 允许值 |
 |------|--------|
 | `phase_confirm.from` / `phase_confirm.to` | `"01"` ~ `"07"`（字符串，`to` = `from` + 1） |
-| `phase_confirm.by` | `qq#N`（QQ 确认门登记已消费）/ `ide`（本会话通过语）/ `handoff`（headless 继承 `PIVAS_HANDOFF_OWNER`）/ `bypass`（逃生口） |
+| `phase_confirm.by` | `qq#N`（QQ 确认门登记已消费）/ `ide`（本会话通过语）/ `handoff`（headless 继承 `{SHORT_NAME}_HANDOFF_OWNER`，旧名 `PIVAS_HANDOFF_OWNER` 兼容一版，见 G03）/ `bypass`（逃生口） |
 | `phase_confirm.at` | ISO 时间戳（`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}` 包容式匹配，同 `phase_history` 口径） |
-| `phase_confirm.quote` | 自由文本（`by: "ide"` 时**必填** = 用户通过语原文；其他取值可省） |
+| `phase_confirm.quote` | 自由文本（`by: "ide"` 时**必填** = 用户通过语**逐字原文**；其他取值可省） |
 
 - 触发时机：`current_phase` 变更的**同一次写入**必须含 `phase_confirm`（执行条款见 `gate-protocol.md` §三-B「确认留痕」）；
 - **可选字段（观测期向后兼容）**：缺失不视为校验失败（同 `review_gate` legacy 先例）；`by:"ide"` 无 `quote` 视为**无效留痕**（07 回顾审计项）；
 - 观测期 `gate-check.mjs` 对 current_phase 变更**仅通知不拦截**（fail-open）；强制化（fail-closed）另行拍板（RESUME-3 批次 3 路线 I → G1）。
+- ★ **quote 真伪（TOOL-ANSWERKIND · 2026-10-20）**：`by:"ide"` 的 quote **不得**引用无授权答复
+  （答案 `allowed=false`，如 `defer-ide`/`cancel`/`timeout`），也**不得**用「通道 + 时间戳 + 转述」冒充原话。
+  `state-apply.py phase-advance` 已机器校验三条：给了 `--quote-src` 须逐字命中；quote 含 `answer=`/`allowed=`
+  等元数据即拒；quote 点名 `ask#N` 而该答案无授权即拒。答复类型处置见 `waiting-protocol.md` §8。
+- ★ **命名边界**：答案值 `defer-ide`（= QQ 侧作废、未作答）≠ `by:"ide"`（= 本会话确认）—— 同源不同义，禁止据答案值反推 `by`。
 
 **缺陷台账校验（★ 2026-09-23 DEFECT-1 新增）**：
 - `defects` 为**可选字段**（缺失 = 无缺陷，向后兼容旧 state.yaml）；存在时每条须通过上表枚举校验，且 `id` 唯一；
@@ -472,9 +477,9 @@ phase_steps 扫描结果：
   ❌ Step 0.3 脚本执行 ← 当前步骤（强制）
   ⏳ Step 1   任务清单审查
 - 任务进度：7/12 完成
-- 待完成任务：Task-8（BLL/TriageVitalSignsMgr.cs 追加），Task-9（Web/TriageVitalSigns.cs 追加）
+- 待完成任务：Task-8（BLL/XxxMgr.cs 追加），Task-9（Web/Xxx.cs 追加）
 - 阻塞：无
-- 上次摘要：完成了 Task-1~7，编译 0 error。关键决策：SaveVitalSignsWithDevice 合并写入，不拆分事务。
+- 上次摘要：完成了 Task-1~7，编译 0 error。关键决策：SaveXxxWithDevice 合并写入，不拆分事务。
 
 继续上次进度，是否从 Step 0.3 开始？
 
@@ -559,7 +564,7 @@ phase_steps 扫描结果：
 >   （原选项甲），并把「05 就地修」**正规化 + 对账机械化**：
 >   - **04 侧窗口**：`step-fix-1-register` ~ `-5-reclose` —— **唯一免开闸**的落盘窗口；
 >   - **05 侧窗口**：`step-fix-05-1-register` ~ `-4-reclose`（SSOT = `phase-steps.md` §阶段五）——
->     仅 **L1 且不涉后端码**的小修，须**用户开闸**，且 `defects[].gate_window` 与 `fix_files` **成对**留痕
+>     仅 **L1 且不涉后端码**的小修，须处于 **05 期预授权窗口**（方案 A：进 05 一次确认，见 `gate-protocol.md`「05 期阶段级预授权」），且 `defects[].gate_window` 与 `fix_files` **成对**留痕
 >     （机器校验 = §3.3「开闸对账校验」/ `validate-state.py [R8]`）；涉后端码 / 需 `/t:Rebuild` ⇒ 必须回 04。
 
 - **窗口步骤（SSOT = [phase-steps.md](phase-steps.md)）**：
@@ -802,6 +807,26 @@ function gate_check(state):
 
 详细协议见 [startup-protocol-step-e.md](startup-protocol-step-e.md)。
 
+### 8.7 确认来源扩展（`ALLOWED_CONFIRM_BY` · A11 · 2026-10-25）
+
+`phase_confirm.by` 的合法值由 `scripts/state-apply.py` 的 `ALLOWED_CONFIRM_BY` **单一决定**：
+
+| 取值 | 语义 | 备注 |
+|:--|:--|:--|
+| `qq#N` | 经 QQ 确认卡第 N 号答复 | 须有 `ask.js` 登记号可回溯 |
+| `ide` | 用户在本会话**直接发言**确认 | `quote` **必填** = 用户原话逐字 |
+| `handoff` | headless 接管会话代为确认 | 接管链留痕 |
+| `bypass` | 逃生口窗口内推进 | 用户手动开闸 |
+
+新增一种确认来源（例如接入新的 IM 通道）必须**同批**改三处 —— 缺任一处即「留痕合法但无人认」或「真确认被拒」：
+
+1. `scripts/state-apply.py` 的 `ALLOWED_CONFIRM_BY` 元组；
+2. 状态机回归（`run-state-tests` 等）里 `by` 值域断言的合法集 —— 否则新增值**零测试覆盖**；
+3. 本小节的值域表（协议 SSOT）。
+
+> 安全边界：**不因便利删除既有取值**。`by: "ide"` = 用户在本会话直接发言，是最主要的合法路径
+> （移除会逼出 `bypass` 滥用）；收紧方向须走独立评审，不得夹带在其它迭代里。
+
 ---
 
 ## 九、并发控制协议（★ 2026-07-22 新增，2026-07-22 v2 修复）
@@ -824,7 +849,7 @@ function gate_check(state):
 > · 其余运行产物（`gate-audit.log` / `write-claims.jsonl` / `metrics` / qq 通知状态）**只落本侧**，
 >   不参与跨侧一致性判定（R2；qq 通知不镜像 —— 复核 R40：指纹含宿主特定绝对路径，镜像亦必然重复推送）。
 > · 另一侧目录**仍可写**（`EXEMPT_PATHS` 双侧豁免，兼容保留），但不再是 canonical；**镜像面白名单
->   直写他侧 = block**（R8/甲，门禁 `otherSideMirrorFace()`）—— 确需跨侧对齐请跑 `sync-runtime.py`。
+>   直写他侧 = block**（R8/甲，门禁的镜像面判定）—— 确需跨侧对齐请跑 `sync-runtime.py`。
 > · ★ **跨宿主并发同一迭代 = 禁止**（锁与乐观锁均只覆盖本侧；并发将致末位覆盖），须 QQ 确认后串行。
 >   锁为**单侧**（`rt(SIDE)/<id>.lock`，`state-apply.py`）—— 已登记为已知限制。
 > · ★ 宿主共享点清单（v2.2 · 复核 R42/P0-4）——"各读本侧"之外的显式定性：

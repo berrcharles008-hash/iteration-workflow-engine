@@ -1,5 +1,8 @@
-<!-- NUCLEUS-BEGIN v1.16 -->
-<!-- cold-start-gate-nucleus v1.16 · SSOT: engine/gate-protocol.md · 钩子失效时的 Prompt 层兜底
+<!-- NUCLEUS-BEGIN v1.17 -->
+<!-- cold-start-gate-nucleus v1.17 · SSOT: engine/gate-protocol.md · 钩子失效时的 Prompt 层兜底
+     v1.17（2026-10-19 · FIX-ALLOW-1 方案 A）：05 例外从「须用户逐缺陷开闸」改为「阶段级一次预授权」
+       （进 05 发一张确认卡，窗口内逐缺陷自主修；ttl 240/480；收口 revoke + 对照）。**不新增写放行面**
+       ——确认与执行仍由用户/qqbot 服务完成，Agent 不得自建标记（GAP-4 不变）。
      v1.16（2026-10-11）：补 headless 口径——FIX-47（`PIVAS_HANDOFF_OWNER` 身份整体免门禁，由接管
        任务书纪律 + QQ 确认门约束）与 FIX-48（CLI 隔离区 `{IDE}/worktrees/` 内由 shim 反推主仓库
        实现加载；隔离区内容为**陈旧 git 快照** ⇒ 读写一律用主仓库绝对路径）。**不新增写放行面**。
@@ -14,10 +17,12 @@
 **仅 04 全放行**（删除/移动类另需命中 `delete_allow`，写成 `- path: "<相对路径>"`；★ Move/Copy 同时核**目标**路径）；**01-03** 只许迭代目录 + `{{IDE_DIR}}/skills/iteration-workflow/`（Skill 自身）+ `docs/knowledge-base/`（FIX-23）+ `{{IDE_DIR}}/memory/` + `requirements/iteration-context/`（**仅 .md**，R-14）；
 **05/06/07** 只许本职文档（05/07 = `docs/iterations/`；06 = `docs/iterations/` · `docs/knowledge-base/` ·
 `requirements|feasibility` 的 `.md`；07 另加 `project/lessons-learned.md`）；其余一律拦（含所有 Bash 命令）。
-★ **05 例外（开闸就地修）**：仅 **L1 且不涉后端码**的小修（`step-fix-05-*`，须用户开闸），`defects[].gate_window`
-与 `fix_files` **必须成对**（校验 = `validate-state.py` **[R8]**）；涉后端码须回 04。
+★ **05 例外（阶段级预授权 · 方案 A 2026-10-19）**：仅 **L1 且不涉后端码**的小修（`step-fix-05-*`）；
+进 05 发**一次**预授权卡（ttl 240/480）⇒ 窗口内逐缺陷自主修；`defects[].gate_window` 与 `fix_files` **必须成对**
+（校验 = `validate-state.py` **[R8]**）；涉后端码回 04；元层仍单独确认。
 豁免：`runtime/` · `{{IDE_DIR}}/memory/` + 外置项目记忆 `~/{{IDE_DIR}}/projects/*/memory/`（**与迭代状态无关**）· 05/06/07 本职文档（上）·
-**headless 身份**（`PIVAS_HANDOFF_OWNER` 存在 ⇒ 实现层整体放行；FIX-47——其纪律由接管任务书 + QQ 确认门约束）。
+**headless 身份**（`{SHORT_NAME}_HANDOFF_OWNER` 存在 ⇒ 实现层整体放行；FIX-47——其纪律由接管任务书 + QQ 确认门约束。
+变量名按 `project.short_name` 派生（G03，2026-10-24）；旧名 `PIVAS_HANDOFF_OWNER` 兼容一版）。
 ★ 若你在 CLI 隔离区（`{{IDE_DIR}}/worktrees/`，内容为陈旧 git 快照）：读写/state/ask 一律用**主仓库绝对路径**（FIX-48）。
 逃生口：`GATE_BYPASS=1` 或 `{{IDE_DIR}}/hooks/.gate-bypass`（**用完即删** + `gate-audit.log` 留痕；
 标记内可写 `ttlMinutes=N` / `expire=ISO` 自动失效，空标记=永久）；**收尾必检：标记已删**。

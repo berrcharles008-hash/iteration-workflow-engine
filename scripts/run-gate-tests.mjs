@@ -10,11 +10,13 @@
  */
 
 import { execFileSync } from 'child_process';
-import { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, rmdirSync, rmSync, copyFileSync } from 'fs';
-import { join, dirname } from 'path';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, rmdirSync, rmSync, copyFileSync, readdirSync } from 'fs';
+import { join, dirname, basename } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { createHash } from 'crypto';
 import { tmpdir } from 'os';
+// ★ G10（2026-10-24）：夹具与门禁共用同一个 manifest 读取器 —— 单源，避免双份配置面
+import { loadProjectConfig } from '../engine/gate/project-config.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILL_ROOT = join(__dirname, '..');
@@ -24,6 +26,9 @@ const SKILL_ROOT = join(__dirname, '..');
 // --runtime-dir  <path>  指定 ACTIVE/state.yaml 读写目录
 // --ide <name>           claude-code | codebuddy（默认自动）
 // --quick                install 脚本会传入，接受（仅精简明细输出）
+// --json <path>          ★ 2026-10-24（G10/A10 迭代 T0-0）：把逐条结果落 JSON，
+//                        供「shadow 前后 63 例判定逐条一致」（判据 #8）机械对账；
+//                        纯输出追加，不参与任何断言、不改退出码。
 const argv = process.argv.slice(2);
 const argOf = (flag) => {
   const i = argv.indexOf(flag);
@@ -31,6 +36,7 @@ const argOf = (flag) => {
 };
 const QUICK = argv.includes('--quick');
 const IDE_ARG = argOf('--ide');
+const JSON_OUT = argOf('--json');
 
 // ── 项目根 ────────────────────────────────────────────
 // 注意：hook 以 PROJECT_DIR 判定 GATE_BYPASS_PATHS 与相对路径，
@@ -62,12 +68,22 @@ function resolveHook() {
     const p = join(projReal, d, 'hooks', 'gate-check.mjs');
     if (existsSync(p)) return p;
   }
+  // ★ T4-4（G10 · 2026-10-24）：引擎仓库直跑（无 `<proj>/.codebuddy/hooks`）时末位兜底探测实现目录。
+  //   仅作**末位**：项目布局下必须命中 shim —— 否则 SHIM 组会把实现当 shim 用，
+  //   SHIM-2/3（期望 fail-closed=2）会变成假红（3 路评审 R-15）。
+  const inEngine = join(SKILL_ROOT, 'engine', 'gate', 'gate-check.mjs');
+  if (existsSync(inEngine)) return inEngine;
+
   console.error('❌ 未找到 gate-check.mjs，已尝试:');
   console.error('   ' + local);
   for (const d of ordered) console.error('   ' + join(projReal, d, 'hooks', 'gate-check.mjs'));
   process.exit(3);
 }
 const HOOK = resolveHook();
+// ★ T4-4（2026-10-24）：布局判定 —— SHIM/HOST 两组都假设 HOOK 位于 `<proj>/.{ide}/hooks/`
+//   并据此 `dirname×3` 反推 implProj。HOOK 落在 engine/gate/（引擎仓库直跑）时该假设不成立，
+//   必须整组 SKIP（否则假红，见 3 路评审 R-15）；项目布局下行为与改前逐字节一致。
+const IS_PROJECT_LAYOUT = basename(dirname(HOOK)) === 'hooks';
 
 // ── 运行时目录 ────────────────────────────────────────
 // 始终隔离（可用 --runtime-dir 或 GATE_TEST_RUNTIME_DIR 覆盖），
@@ -88,6 +104,30 @@ const TEST_ITERATION_ID = 'selftest-gate-regression';
 //   ALWAYS_ALLOW 的段字面量 `/skills/iteration-workflow/runtime/` 正是按该形态匹配**绝对路径**的。
 const PROJ_ABS = PROJECT_DIR.replace(/\\/g, '/');
 const RT_ABS = `${PROJ_ABS}/.codebuddy/skills/iteration-workflow/runtime`;
+
+// ── 夹具同源（★ G10 · 2026-10-24 · 迭代 2026-10-24-001）────────────
+// 原先 40 处项目 token 写死在用例里 ⇒ 换项目必假红（06T 组 8 例尤甚）。
+// 现在统一由 `project.manifest.yaml` 派生（与门禁用**同一个**读取器 project-config.mjs）。
+// 缺键/空串 ⇒ 回落改前字面量：保证引擎仓库自测（无项目 manifest）仍可跑。
+const MANIFEST_CFG = (() => {
+  try {
+    const base = REAL_PROJECT_DIR || process.env.CODEBUDDY_PROJECT_DIR
+      || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+    return loadProjectConfig(base).cfg || {};
+  } catch {
+    return {};
+  }
+})();
+const cfgPath = (key, fallback) => {
+  const v = String(MANIFEST_CFG[key] || '').trim();
+  return (v || fallback).replace(/\\/g, '/').replace(/\/+$/, '');
+};
+const F = {
+  iterDir: cfgPath('paths.docs_iterations', 'docs/iterations'),
+  biz: cfgPath('paths.frontend_src', '') || cfgPath('paths.frontend_root', 'front-end/my-app-upgrade'),
+  bizCs: cfgPath('paths.backend_root', 'back-end') + '/a.cs',
+};
+F.bizVue = `${F.biz}/test.vue`;
 /** 构造 Bash 用例的 stdin（固定 tool_name=Bash + command） */
 const bashCase = (id, name, phase, command, expectExit) => ({
   id, name, phase, active: true,
@@ -100,35 +140,35 @@ const TESTS = [
   {
     id: 'S0', name: '04阶段写业务代码 → 放行',
     phase: '04', active: true,
-    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/test.js',
+    tool: 'write_to_file', file: `${F.biz}/test.js`,
     expectExit: 0, expectBlock: false
   },
   // S1: 无活跃迭代 → 阻止
   {
     id: 'S1', name: '无活跃迭代写业务代码 → 阻止',
     phase: '', active: false,
-    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/test.js',
+    tool: 'write_to_file', file: `${F.biz}/test.js`,
     expectExit: 2, expectBlock: true
   },
   // S2: 01阶段 + 写业务代码 → 阻止
   {
     id: 'S2', name: '01阶段写业务代码 → 阻止',
     phase: '01', active: true,
-    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/test.js',
+    tool: 'write_to_file', file: `${F.biz}/test.js`,
     expectExit: 2, expectBlock: true
   },
   // S2b: 01阶段 + 写豁免目录 → 放行
   {
     id: 'S2b', name: '01阶段写豁免目录 → 放行',
     phase: '01', active: true,
-    tool: 'write_to_file', file: 'docs/iterations/test.md',
+    tool: 'write_to_file', file: `${F.iterDir}/test.md`,
     expectExit: 0, expectBlock: false
   },
   // S3: 05阶段 + 写业务代码 → 阻止
   {
     id: 'S3', name: '05阶段写业务代码 → 阻止',
     phase: '05', active: true,
-    tool: 'replace_in_file', file: 'front-end/my-app-upgrade/src/test.vue',
+    tool: 'replace_in_file', file: `${F.bizVue}`,
     expectExit: 2, expectBlock: true
   },
   // S4: 空 stdin → fail-closed 阻止（hook 已完成 fail-closed 修复）
@@ -149,7 +189,7 @@ const TESTS = [
   {
     id: 'S6', name: 'GATE_BYPASS=1 → 放行',
     phase: '', active: false, gateBypass: true,
-    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/test.js',
+    tool: 'write_to_file', file: `${F.biz}/test.js`,
     expectExit: 0, expectBlock: false
   },
   // S7: 写 runtime/ → 常放行
@@ -173,7 +213,7 @@ const TESTS = [
     id: 'E1', name: '.claude .gate-bypass → 放行',
     phase: '', active: false,
     gateBypassFile: '.claude/hooks/.gate-bypass',
-    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/test.js',
+    tool: 'write_to_file', file: `${F.biz}/test.js`,
     expectExit: 0, expectBlock: false
   },
   // E2: .cursor/hooks/.gate-bypass → 放行（验证 cursor 路径）
@@ -181,7 +221,7 @@ const TESTS = [
     id: 'E2', name: '.cursor .gate-bypass → 放行',
     phase: '', active: false,
     gateBypassFile: '.cursor/hooks/.gate-bypass',
-    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/test.js',
+    tool: 'write_to_file', file: `${F.biz}/test.js`,
     expectExit: 0, expectBlock: false
   },
   // E3: 01阶段写 .cursor/skills/... → 放行（验证 EXEMPT_PATHS 含 cursor）
@@ -203,7 +243,7 @@ const TESTS = [
     id: 'E5', name: '.codex .gate-bypass → 放行',
     phase: '', active: false,
     gateBypassFile: '.codex/hooks/.gate-bypass',
-    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/test.js',
+    tool: 'write_to_file', file: `${F.biz}/test.js`,
     expectExit: 0, expectBlock: false
   },
 
@@ -214,35 +254,35 @@ const TESTS = [
   {
     id: 'CONC-1', name: '会话A首次写 → 放行（登记声明）',
     phase: '04', active: true, sid: 'sidAAAAAAAAAAAAAAAA',
-    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/conc-test.js',
+    tool: 'write_to_file', file: `${F.biz}/conc-test.js`,
     expectExit: 0, expectBlock: false
   },
   // CONC-2 同会话再写同文件 → 放行（不拦自己）
   {
     id: 'CONC-2', name: '同会话再写同文件 → 放行（不拦自己）',
     phase: '04', active: true, sid: 'sidAAAAAAAAAAAAAAAA',
-    tool: 'replace_in_file', file: 'front-end/my-app-upgrade/src/conc-test.js',
+    tool: 'replace_in_file', file: `${F.biz}/conc-test.js`,
     expectExit: 0, expectBlock: false
   },
   // CONC-3 他会话写同文件 → 阻止（拦一次）
   {
     id: 'CONC-3', name: '他会话写同文件 → 阻止（拦一次）',
     phase: '04', active: true, sid: 'sidBBBBBBBBBBBBBBBB',
-    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/conc-test.js',
+    tool: 'write_to_file', file: `${F.biz}/conc-test.js`,
     expectExit: 2, expectBlock: true
   },
   // CONC-4 他会话重试同文件 → 放行（「拦一次」语义，防对方崩溃后死锁）
   {
     id: 'CONC-4', name: '他会话重试同文件 → 放行（拦一次语义）',
     phase: '04', active: true, sid: 'sidBBBBBBBBBBBBBBBB',
-    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/conc-test.js',
+    tool: 'write_to_file', file: `${F.biz}/conc-test.js`,
     expectExit: 0, expectBlock: false
   },
   // CONC-5 第三方会话 + CONC_LOCK=0 → 关闭保护，放行
   {
     id: 'CONC-5', name: 'CONC_LOCK=0 → 关闭保护放行',
     phase: '04', active: true, sid: 'sidCCCCCCCCCCCCCCCC', env: { CONC_LOCK: '0' },
-    tool: 'write_to_file', file: 'front-end/my-app-upgrade/src/conc-test.js',
+    tool: 'write_to_file', file: `${F.biz}/conc-test.js`,
     expectExit: 0, expectBlock: false
   },
 
@@ -313,17 +353,17 @@ const TESTS = [
   bashCase('F26-A', '01阶段 Rename-Item 裸名(源+目标均在 runtime/) → 放行',
     '01', `Rename-Item -LiteralPath '${RT_ABS}/2026-09-18-001-x.state.yaml' -NewName '2026-09-18-001-x.state.archived.yaml'`, 0),
   bashCase('F26-B', '01阶段 Rename-Item 裸名(源在业务目录) → 阻止',
-    '01', `Rename-Item -LiteralPath '${PROJ_ABS}/back-end/a.cs' -NewName 'a.archived.cs'`, 2),
+    '01', `Rename-Item -LiteralPath '${PROJ_ABS}/${F.bizCs}' -NewName 'a.archived.cs'`, 2),
   bashCase('F26-C', '01阶段 Rename-Item -NewName 带路径(../业务) → 阻止（不代解析）',
-    '01', `Rename-Item -LiteralPath '${RT_ABS}/x.state.yaml' -NewName '../back-end/a.cs'`, 2),
+    '01', `Rename-Item -LiteralPath '${RT_ABS}/x.state.yaml' -NewName '../${F.bizCs}'`, 2),
   bashCase('F26-D', '01阶段 命令目标含上跳段 runtime/../hooks → 阻止（.. 守卫）',
     '01', `Remove-Item '${RT_ABS}/../hooks/x.mjs'`, 2),
   bashCase('F26-E', '01阶段 删业务文件 → 阻止（命令通道未放宽）',
-    '01', `Remove-Item '${PROJ_ABS}/back-end/a.cs'`, 2),
+    '01', `Remove-Item '${PROJ_ABS}/${F.bizCs}'`, 2),
   bashCase('F26-F', '01阶段 Move-Item 两端均在 runtime/ → 放行（通道对齐）',
     '01', `Move-Item -LiteralPath '${RT_ABS}/x.state.yaml' -Destination '${RT_ABS}/x.state.archived.yaml'`, 0),
   bashCase('F26-G', '01阶段 混合目标(runtime/ + 业务) → 阻止（全目标判定）',
-    '01', `Remove-Item '${RT_ABS}/x.tmp' '${PROJ_ABS}/back-end/a.cs'`, 2),
+    '01', `Remove-Item '${RT_ABS}/x.tmp' '${PROJ_ABS}/${F.bizCs}'`, 2),
   bashCase('F26-H', '04阶段 runtime/ 归档 → 放行（与旧行为一致）',
     '04', `Rename-Item -LiteralPath '${RT_ABS}/y.state.yaml' -NewName 'y.state.archived.yaml'`, 0),
 ];
@@ -370,38 +410,38 @@ const TESTS = [
 //   ⇒ 存在无需开闸、无 `gate_window` 留痕的写业务码通道。本组为「只收紧」改动的双向回归。
 //   ★ 用例必须用 `toolInput.filePath` 覆盖 —— `file` 会经 `path.join` 归一化而**丢失** `..` 形态。
 {
-  const jump = (sub) => `${PROJ_ABS}/docs/iterations/../../${sub}`;
+  const jump = (sub) => `${PROJ_ABS}/${F.iterDir}/../../${sub}`;
   TESTS.push(
     { // A：01-03 主路径，穿越写业务码 ⇒ 拦（本组核心）
       id: '06T-A', name: '03阶段 穿越 docs/iterations/../../back-end/… → 拦截',
       phase: '03', active: true,
-      tool: 'write_to_file', file: 'docs/iterations/t.md',
-      toolInput: { filePath: jump('back-end/my-app-upgrade/src/t.js') },
+      tool: 'write_to_file', file: `${F.iterDir}/t.md`,
+      toolInput: { filePath: jump(`${F.biz}/t.js`) },
       expectExit: 2, expectBlock: true
     },
     { // B：防误伤 —— 合法迭代文档仍放行
       id: '06T-B', name: '03阶段 合法 docs/iterations/t.md → 放行（防误伤）',
       phase: '03', active: true,
-      tool: 'write_to_file', file: 'docs/iterations/t.md',
+      tool: 'write_to_file', file: `${F.iterDir}/t.md`,
       expectExit: 0, expectBlock: false
     },
     { // C：05 阶段同款穿越 ⇒ 拦
       id: '06T-C', name: '05阶段 穿越 docs/iterations/../../back-end/… → 拦截',
       phase: '05', active: true,
-      tool: 'write_to_file', file: 'docs/iterations/t.md',
-      toolInput: { filePath: jump('back-end/my-app-upgrade/src/t.js') },
+      tool: 'write_to_file', file: `${F.iterDir}/t.md`,
+      toolInput: { filePath: jump(`${F.biz}/t.js`) },
       expectExit: 2, expectBlock: true
     },
     { // D：防误伤 —— 05 本职文档仍放行
       id: '06T-D', name: '05阶段 合法 docs/iterations/t.md → 放行（防误伤）',
       phase: '05', active: true,
-      tool: 'write_to_file', file: 'docs/iterations/t.md',
+      tool: 'write_to_file', file: `${F.iterDir}/t.md`,
       expectExit: 0, expectBlock: false
     },
     { // E：memory 前缀跳板 ⇒ 拦
       id: '06T-E', name: 'memory 跳板 .codebuddy/memory/../../temp/t.md → 拦截',
       phase: '03', active: true,
-      tool: 'write_to_file', file: 'docs/iterations/t.md',
+      tool: 'write_to_file', file: `${F.iterDir}/t.md`,
       toolInput: { filePath: `${PROJ_ABS}/.codebuddy/memory/../../temp/t.md` },
       expectExit: 2, expectBlock: true
     },
@@ -414,13 +454,13 @@ const TESTS = [
     { // G：误伤负向 —— `..` 非完整段不得误判
       id: '06T-G', name: '误伤负向 docs/iterations/a..b/t.md → 放行',
       phase: '03', active: true,
-      tool: 'write_to_file', file: 'docs/iterations/a..b/t.md',
+      tool: 'write_to_file', file: `${F.iterDir}/a..b/t.md`,
       expectExit: 0, expectBlock: false
     },
     { // H：误伤负向 —— `v1.2..3` 含 `..` 但非段
       id: '06T-H', name: '误伤负向 docs/iterations/v1.2..3/t.md → 放行',
       phase: '03', active: true,
-      tool: 'write_to_file', file: 'docs/iterations/v1.2..3/t.md',
+      tool: 'write_to_file', file: `${F.iterDir}/v1.2..3/t.md`,
       expectExit: 0, expectBlock: false
     }
   );
@@ -430,7 +470,8 @@ const TESTS = [
 //   背景：CLI bg worktree 隔离区缺 engine/** ⇒ 原 5 候选全空 ⇒ fail-closed 拦死 headless job；
 //   修复 = shim 从 `<根>/.git`（`gitdir: <主仓库>/.git/worktrees/<id>`）反推主仓库实现。
 //   ★ 用例直调「sandbox 内 shim 副本」+ 显式 projectDirOverride —— 否则本地候选会命中真实项目实现，测不到边界。
-{
+if (!IS_PROJECT_LAYOUT) console.log('  [SHIM] ⏭ 非项目布局（HOOK 不在 hooks/）⇒ 整组 SKIP（不计入分母）');
+if (IS_PROJECT_LAYOUT) {
   const implRel = join('.codebuddy', 'skills', 'iteration-workflow', 'engine', 'gate', 'gate-check.mjs');
   const implProj = dirname(dirname(dirname(HOOK)));   // 项目布局：<proj>/.codebuddy/hooks/x → <proj>
   const mkShimSb = (n) => {
@@ -443,7 +484,7 @@ const TESTS = [
   const sbBad = mkShimSb('shim-bad');                 // ③ .git 内容损坏 → 反推失败回落
   writeFileSync(join(sbBad, '.git'), 'not-a-gitdir-line\n', 'utf-8');
   const shimOf = (sb) => join(sb, '.codebuddy', 'hooks', 'gate-check.mjs');
-  const passInput = JSON.stringify({ tool_name: 'write_to_file', tool_input: { filePath: 'front-end/x/y.js' } });
+  const passInput = JSON.stringify({ tool_name: 'write_to_file', tool_input: { filePath: `${F.biz}/y.js` } });
   const cases = [
     { // ② 候选全空 → fail-closed（负向对照）
       id: 'SHIM-2', name: 'shim 无实现(无.git) → fail-closed(2)',
@@ -482,14 +523,15 @@ const TESTS = [
 //     ⇒ **exit code 即可判定"读的是哪一侧"**（0=读本侧 / 2=读另一侧）。
 //   组内统一**白名单式清 4 变量**：GATE_TEST_RUNTIME_DIR（第一优先级短路）/ GATE_HOST_IDE /
 //     CODEBUDDY_PROJECT_DIR / CLAUDE_PROJECT_DIR（身份源）—— 随后各用例按需显式设置（hostEnv）。
-{
+if (!IS_PROJECT_LAYOUT) console.log('  [HOST] ⏭ 非项目布局（HOOK 不在 hooks/）⇒ 整组 SKIP（不计入分母）');
+if (IS_PROJECT_LAYOUT) {
   const HOST_SB = join(SANDBOX, 'host');
   const RUNTIME_REL = join('skills', 'iteration-workflow', 'runtime');
   const IMPL_IN_SIDE = join('skills', 'iteration-workflow', 'engine', 'gate', 'gate-check.mjs');
   const IMPL_SRC = join(dirname(dirname(dirname(HOOK))), '.codebuddy', IMPL_IN_SIDE);  // 项目实现（真源）
   const HAS_IMPL = existsSync(IMPL_SRC);
   const SENTINEL_ID = 'SENTINEL-ITER';
-  const BIZ = JSON.stringify({ tool_name: 'write_to_file', tool_input: { filePath: 'front-end/x/y.js' } });
+  const BIZ = JSON.stringify({ tool_name: 'write_to_file', tool_input: { filePath: `${F.biz}/y.js` } });
 
   /** 建 HOST 隔离小根；spec = { '.codebuddy': {phase, seed, rt}, '.claude': {...} } */
   const mkHost = (name, spec) => {
@@ -511,20 +553,26 @@ const TESTS = [
   const auditPath = (sb, dot) => join(sb, dot, RUNTIME_REL, 'gate-audit.log');
   const auditText = (sb, dot) => (existsSync(auditPath(sb, dot)) ? readFileSync(auditPath(sb, dot), 'utf-8') : '');
   const auditCount = (sb, dot) => auditText(sb, dot).split('\n').filter(Boolean).length;
+  /**
+   * ★ T4-6（2026-10-24）：把实现**及其同目录全部 .mjs**复制到沙箱。
+   * 背景：G01 迭代后 `gate-check.mjs` 静态 import `./exempt-tables.mjs`（→ `./project-config.mjs`），
+   *   而原实现只 copyFileSync 单文件 ⇒ 沙箱内缺兄弟模块 ⇒ node 以 exit=1 崩，
+   *   H3/H4/H6/H7/H11 五例由「通过」变「崩溃」（实测 2026-10-24：58/63）。
+   *   install.ps1 Step 2 是**整目录复制 engine/**，故沙箱必须镜像同一布局才不失真。
+   */
+  const copyImplSet = (dstFile) => {
+    const srcDir = dirname(IMPL_SRC);
+    const dstDir = dirname(dstFile);
+    mkdirSync(dstDir, { recursive: true });
+    for (const fn of readdirSync(srcDir)) {
+      if (fn.endsWith('.mjs')) copyFileSync(join(srcDir, fn), join(dstDir, fn));
+    }
+    return dstFile;
+  };
   /** 把实现副本装到指定侧（用于「实现自身位置」层：5 级上溯 = `.codebuddy`/`.claude`） */
-  const mkImplIn = (sb, dot) => {
-    const dst = join(sb, dot, IMPL_IN_SIDE);
-    mkdirSync(dirname(dst), { recursive: true });
-    copyFileSync(IMPL_SRC, dst);
-    return dst;
-  };
+  const mkImplIn = (sb, dot) => copyImplSet(join(sb, dot, IMPL_IN_SIDE));
   /** 把实现副本装到**不可识别**目录（`_impl` ⇒ 身份层③ 失效；用于测 ①② 层与 H11） */
-  const mkImplForeign = (sb) => {
-    const dst = join(sb, '_impl', IMPL_IN_SIDE);
-    mkdirSync(dirname(dst), { recursive: true });
-    copyFileSync(IMPL_SRC, dst);
-    return dst;
-  };
+  const mkImplForeign = (sb) => copyImplSet(join(sb, '_impl', IMPL_IN_SIDE));
   const md5 = (p) => createHash('md5').update(readFileSync(p)).digest('hex');
 
   const cases = [];
@@ -788,6 +836,10 @@ function runHook(testCase) {
   //   实现层 FIX-47 豁免会把一切放行 ⇒ 全绿假象（评审片3 风险项 R13）。
   //   需测 headless 语义时用 testCase.env 显式注入（Object.assign 在其后）。
   delete env.PIVAS_HANDOFF_OWNER;
+  // ★ T4-3（2026-10-24）：夹具自清 —— 父 shell 若设过模式/夹具路径，会让 N1-C（shadow 用例）
+  //   与 63 例基线整批跑错模式（3 路评审 R-16）；用例需要时再由 testCase.env 显式注入。
+  delete env.GATE_EXEMPT_MODE;
+  delete env.GATE_MANIFEST_PATH;
   // ★CONC-1：会话标识须可判定 —— 指定 sid 时同步设 env（双源一致）；
   //   未指定时**清空继承值**，避免真实会话 id 泄漏进沙箱用例（保证可复现）。
   if (testCase.sid) env.CODEBUDDY_SESSION_ID = testCase.sid;
@@ -844,6 +896,147 @@ function runHook(testCase) {
     // 非零退出码
     return { exitCode: err.status || 1, stderr: err.stderr || '' };
   }
+}
+
+// ── V1 / AD：VCS 判定档与通知适配器（★ 迭代 2026-10-25-002 · G12/G11）──────────
+//   夹具通道：`GATE_MANIFEST_PATH`（须与 `GATE_TEST_RUNTIME_DIR` 同现；runHook 恒设后者）。
+//   ★ **不新增** `GATE_VCS_TYPE` 之类环境变量 —— 那会变成「改 env 即改放行面」的隐式开关。
+//   ★ 行为鉴别力（04 期实测修正方案口径）：04 阶段**全放行**、删除类又先走 `deleteGate`
+//     ⇒ `svn delete` / `Remove-Item` 在 04 阶段恒 exit 0，**无法**观察 VCS 档差异。
+//     故改在 **01 阶段**用「危险表命中」观察：`svn commit` 不是删除段，不受 deleteGate 干扰。
+{
+  const V1_SB = join(SANDBOX, 'v1');
+  mkdirSync(V1_SB, { recursive: true });
+  const mf = (name, lines) => {
+    const p = join(V1_SB, name);
+    writeFileSync(p, lines.concat(['']).join('\n'), 'utf-8');
+    return p;
+  };
+  const MF_NONE = mf('vcs-none.yaml', ['vcs:', '  type: "none"']);
+  const MF_GIT = mf('vcs-git.yaml', ['vcs:', '  type: "git"']);
+  const MF_EMPTY = mf('vcs-empty.yaml', ['vcs:', '  type: ""']);
+  const MF_INVALID = mf('vcs-invalid.yaml', ['vcs:', '  type: "hg"']);
+  const MF_SPACED = mf('vcs-spaced.yaml', ['vcs:', '  type: " SVN "']);
+  const MF_NOVCS = mf('vcs-missing.yaml', ['project:', '  short_name: "v1"']);
+  const MF_AD_NONE = mf('ad-none.yaml', ['notifications:', '  adapter: "none"']);
+  const MF_AD_MISSING = mf('ad-missing.yaml', ['project:', '  short_name: "v1"']);
+
+  const auditHas = (needle) => {
+    try {
+      const p = join(RUNTIME_DIR, 'gate-audit.log');
+      return existsSync(p) && readFileSync(p, 'utf-8').includes(needle);
+    } catch { return false; }
+  };
+  const withAudit = (needle) => () => ({
+    ok: auditHas(needle),
+    detail: 'audit[' + needle + ']=' + auditHas(needle),
+  });
+
+  const v1 = (id, name, phase, manifest, command, expectExit, auditNeed) => ({
+    id, name, phase, active: true,
+    env: { GATE_MANIFEST_PATH: manifest },
+    stdin: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }),
+    expectExit, expectBlock: expectExit === 2,
+    assert: auditNeed ? withAudit(auditNeed) : undefined,
+  });
+
+  TESTS.push(
+    // 行为组：none 关 svn/git 族，通用 base 不受牵连
+    v1('V1-A', 'vcs=none：svn commit → 放行(0)（svn 族关闭）', '01', MF_NONE,
+      'svn commit -m probe', 0, 'VCS_PROFILE type=none source=manifest'),
+    v1('V1-B', 'vcs=none：git rm → 放行(0)（git 族关闭，且不算删除段）', '01', MF_NONE,
+      'git rm probe.txt', 0),
+    v1('V1-C', 'vcs=none：echo > out（通用 base 危险模式）→ 仍拦(2)', '01', MF_NONE,
+      'echo hi > probe-out.txt', 2),
+    v1('V1-D1', 'vcs=git：svn commit → 放行(0)（只关对侧）', '01', MF_GIT,
+      'svn commit -m probe', 0, 'VCS_PROFILE type=git source=manifest'),
+    v1('V1-D2', 'vcs=git：git commit → 仍拦(2)（git 族在位）', '01', MF_GIT,
+      'git commit -m probe', 2),
+    // 归一化组：缺键 / 空串 / 非法值 / 大小写与空格 ⇒ 一律回落 svn 档（= 现值）
+    v1('V1-E', '缺 vcs 段：svn commit → 拦(2) + source=default', '01', MF_NOVCS,
+      'svn commit -m probe', 2, 'VCS_PROFILE type=svn source=default'),
+    v1('V1-F', 'vcs.type=""（空串等同缺键）→ 拦(2)', '01', MF_EMPTY,
+      'svn commit -m probe', 2, 'VCS_TYPE_EMPTY'),
+    v1('V1-G', 'vcs.type="hg"（非法）→ 拦(2) + 记 invalid', '01', MF_INVALID,
+      'svn commit -m probe', 2, 'VCS_TYPE_INVALID'),
+    v1('V1-H', 'vcs.type=" SVN "（空格+大写）→ 归一 svn，拦(2)', '01', MF_SPACED,
+      'svn commit -m probe', 2, 'VCS_PROFILE type=svn source=manifest'),
+  );
+
+  // AD 组：通知适配器（adapter:none / 缺段）—— 只证「出站不误拦 + 不静默通过」
+  const adCase = (id, name, manifest, expectExit, auditNeed) => ({
+    id, name, phase: '01', active: true,
+    env: { GATE_MANIFEST_PATH: manifest },
+    tool: 'write_to_file',
+    // file 仅用于构造默认 filePath（join 结果会被 toolInput.filePath 覆盖）
+    file: 'state.yaml',
+    toolInput: {
+      filePath: `${RT_ABS}/${TEST_ITERATION_ID}.state.yaml`,
+      content: 'iteration_status: "active"\ncurrent_phase: "05"\n',   // 无 phase_confirm ⇒ 触发阶段守卫告警
+    },
+    expectExit, expectBlock: expectExit === 2,
+    assert: withAudit(auditNeed),
+  });
+
+  TESTS.push(
+    adCase('AD-A', 'adapter=none：阶段守卫告警出站 → 放行(0) 且记 NOOP', MF_AD_NONE, 0,
+      'NOTIFY_NOOP'),
+    {
+      id: 'AD-B', name: 'adapter=none：Remove-Item → 仍拦(2)（通知开关不影响放行面）',
+      phase: '01', active: true,
+      env: { GATE_MANIFEST_PATH: MF_AD_NONE },
+      stdin: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'Remove-Item probe.txt' } }),
+      expectExit: 2, expectBlock: true,
+    },
+    adCase('AD-C', '缺 notifications 段：回落 none 且留痕（不静默通过）', MF_AD_MISSING, 0,
+      'NOTIFY_ADAPTER adapter=none source=default'),
+  );
+}
+
+// ── N1：自定义 manifest 夹具（★ T4-3 · G01/G03 · 2026-10-24 · 迭代 2026-10-24-001）──
+//   目的：证明「换项目只改 manifest 即生效」在 **derive** 下成立，且缺省 **shadow** 与现值行为一致
+//   （放行面零放宽）。6 例对应 03 附录 G-2。
+//   ★ 必须走 GATE_MANIFEST_PATH（且与 GATE_TEST_RUNTIME_DIR 同现才被实现层接受）：
+//     否则实现层只会读到 skill 自带的真实 manifest ⇒ N1 看似通过、实则没测到目标（R-01/R-14）。
+{
+  const N1_SB = join(SANDBOX, 'n1');
+  const N1_MF = join(N1_SB, 'custom.manifest.yaml');
+  mkdirSync(N1_SB, { recursive: true });
+  writeFileSync(N1_MF, [
+    'project:',
+    '  short_name: "acme"',
+    'paths:',
+    // ★ 用 `iter-archive` 而非 `iterations`：豁免命中语义含 `p.includes('/'+pat)`
+    //   （见 gate-check `hit()`），若自定义值与旧字面量同尾（`/iterations/`），
+    //   N1-B 会被 includes 分支放行 —— 那是既有语义、不是配置没生效，不能当夹具。
+    '  docs_iterations: "iter-archive"',
+    '  specs_dir: "reqs"',
+    '  kb_dir: "kb"',
+    '',
+  ].join('\n'), 'utf-8');
+  const N1_ABS = N1_SB.replace(/\\/g, '/');
+  console.log(`  [N1] 自定义 manifest = ${N1_MF}（short_name=acme）—— 自证：读的是该夹具而非真实 manifest`);
+  const n1 = (id, name, relPath, mode, expectExit, extraEnv) => ({
+    id, name, phase: '01', active: true,
+    projectDirOverride: N1_SB,
+    env: Object.assign({ GATE_MANIFEST_PATH: N1_MF, GATE_EXEMPT_MODE: mode }, extraEnv || {}),
+    tool: 'write_to_file',
+    // ★ file 必填：runHook 会先 join(PROJECT_DIR, file) 构造默认 filePath（缺则抛 TypeError）；
+    //   真正生效的是下面的 toolInput.filePath（Object.assign 后写入者胜）。
+    file: relPath,
+    toolInput: { filePath: `${N1_ABS}/${relPath}` },
+    expectExit, expectBlock: expectExit === 2,
+  });
+  TESTS.push(
+    n1('N1-A', 'derive 自定义 iterDir 写 md → 放行', 'iter-archive/x.md', 'derive', 0),
+    n1('N1-B', 'derive 写旧字面量 docs/iterations/x.md → 拦截', 'docs/iterations/x.md', 'derive', 2),
+    n1('N1-C', 'shadow（缺省）自定义 iterDir 写 md → 拦截（现值等价）', 'iter-archive/x.md', 'shadow', 2),
+    n1('N1-D', 'derive specs_dir 派生的 md-only 目录 → 放行', 'reqs/iteration-context/x.md', 'derive', 0),
+    n1('N1-E', 'derive 仅旧名（headless）→ 01 写业务码放行', 'front-end/x.js', 'derive', 0,
+      { PIVAS_HANDOFF_OWNER: '1' }),
+    n1('N1-F', 'derive 仅派生名 ACME_HANDOFF_OWNER → 01 写业务码放行', 'front-end/x.js', 'derive', 0,
+      { ACME_HANDOFF_OWNER: '1' }),
+  );
 }
 
 // ── 主流程 ────────────────────────────────────────────
@@ -935,6 +1128,20 @@ if (knownFails > 0 && !QUICK) {
   results.filter(r => r.isKnownIssue).forEach(r => {
     console.log(`  🟡 [${r.id}] exit=${r.exitCode} expect=${r.expectExit}`);
   });
+}
+
+// ★ T0-0（2026-10-24）：逐条结果落盘 —— 判据 #8「shadow 前后判定逐条一致」的对账输入。
+//   字段固定 {id, exitCode, expectExit, isPass}；不写 stderr（避免含沙箱临时路径导致 diff 噪声）。
+if (JSON_OUT) {
+  try {
+    writeFileSync(JSON_OUT, JSON.stringify(results.map((r) => ({
+      id: r.id, exitCode: r.exitCode, expectExit: r.expectExit, isPass: r.isPass,
+    })), null, 0), 'utf-8');
+    console.log(`  [--json] 结果已写入 ${JSON_OUT}（${results.length} 条）`);
+  } catch (e) {
+    console.error(`  [--json] 写入失败：${e && e.message ? e.message : e}`);
+    failed += 1;
+  }
 }
 
 process.exit(failed > 0 ? 1 : 0);
