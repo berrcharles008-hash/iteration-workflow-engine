@@ -137,6 +137,34 @@ sj-iteration-workflow-engine/
 > pwsh scripts/init-checklist.ps1 -ProjectPath "你的项目路径"
 > ```
 
+#### 可选组件（默认不装）
+
+可选组件与核心引擎分开分发：默认**不安装**，需要时显式开启。安装期由安装器（或代为执行安装的 Agent）先问一句「是否需要 QQ 通知通道」，同意才装、拒绝则不装。
+
+| 组件 | 作用 | 开关 |
+|---|---|---|
+| `qqbot` | QQ 通知 + 双向确认：任务完成推送、待确认 `#N` 回执、工位外驱动会话继续、成员卡死告警 | `install.ps1 -WithQqbot` |
+
+```powershell
+# 安装期一并装（Windows）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithQqbot
+
+# 已装过 skill，之后才想加（轻量：不备份 IDE 目录、不重装引擎）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithQqbot -ComponentsOnly
+
+# 只查组件状态
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -ComponentsOnly
+```
+
+边界（刻意如此，勿当成缺失）：
+
+- 安装器**只拷贝** tools 目录下的 qqbot 工具包 → `<项目根>\tools\qqbot`，并幂等追加 .gitignore 规则（凭据文件 qqbot.creds.json 含 secret，禁止入库）；
+- 它**不会**注册自启、创建计划任务、启动服务、改 `notifications.adapter` —— 这几项都是单机单实例（快捷方式名 / 计划任务名 / 端口 18765 全局唯一，第二个项目装一遍会静默顶掉第一个），必须由你在自己项目里执行 tools\qqbot\install-all.ps1；
+- 组件的启用、运维与卸载见 tools/qqbot/README.md；
+- **状态三态**：未分发 / 已分发**未启用** / 已启用 —— 查询用 `install.ps1 -ComponentsOnly`（只读，不改任何文件）。判据唯一来源是 manifest 的 `notifications.adapter`，「目录在」不等于「已生效」；
+- **分发源 = 引擎仓库顶层的 tools 目录，不常驻项目**（不在 skill 目录里留副本：副本无更新责任人，且容易被误当活实例跑）；
+- 该组件仅支持 Windows；install.sh 接受同名参数但只提示、不拷贝（装一份跑不起来的工具包比不装更糟）。
+
 ### 项目级覆盖
 
 项目可在 `{IDE}/skills/iteration-workflow/project/` 下创建以下文件覆盖引擎默认行为：
@@ -272,6 +300,34 @@ Project-level configuration lives in `project/`. Edit these files to match your 
 > ```powershell
 > pwsh scripts/init-checklist.ps1 -ProjectPath "your-project-path"
 > ```
+
+#### Optional Component (off by default)
+
+Optional components ship separately from the core engine: **nothing is installed by default**; opt in explicitly. At install time the installer (or the agent driving it) should first ask "do you want the QQ notification channel?" — install only on a yes.
+
+| Component | What it does | Switch |
+|---|---|---|
+| `qqbot` | QQ notifications + two-way confirmation: completion push, pending `#N` replies, driving a session while away from the desk, stalled-teammate alerts | `install.ps1 -WithQqbot` |
+
+```powershell
+# Install together with the skill (Windows)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithQqbot
+
+# Skill already installed, add it later (light: no IDE backup, no engine re-copy)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithQqbot -ComponentsOnly
+
+# Status only
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -ComponentsOnly
+```
+
+Boundaries (by design, not omissions):
+
+- The installer **only copies** the qqbot toolkit under tools → `<project root>\tools\qqbot`, and idempotently appends .gitignore rules (the credentials file qqbot.creds.json holds a secret — never commit it);
+- It does **not** register autostart, create the scheduled task, start the service, or flip `notifications.adapter` — those are per-host singletons (shortcut name / task name / port 18765 are globally unique; a second project silently takes over the first), so you must run tools\qqbot\install-all.ps1 in your own project;
+- Enable / operate / uninstall: see tools/qqbot/README.md;
+- **Three states**: not distributed / distributed but **not enabled** / enabled — query with `install.ps1 -ComponentsOnly` (read-only). The single source of truth is `notifications.adapter` in the manifest; "the directory exists" is not "it is active";
+- **Distribution source = the top-level tools directory of the engine repo; it does not live in the project** (no copy inside the skill dir: a copy has no update owner and is easily mistaken for the live instance);
+- Windows only. install.sh accepts the same flags but only prints a note (shipping a toolkit that cannot run is worse than not shipping it).
 
 ### Project-Level Overrides
 

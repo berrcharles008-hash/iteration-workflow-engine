@@ -20,6 +20,12 @@
 #             （否则全新 clone 必然注入失败 exit 1）；新增 -SpecsDir 覆盖入口
 #          F2 Step 8 改跑「已装副本」的 run-gate-tests（跑源副本会因 hooks 布局误判而误红）
 #          F3 Step 4 源缺 hooks 硬失败（原静默打 ✅）、Step 7/7b 统一以安装根为项目根
+# v2.6.0 — ★ TOOL-QQBOT-DIST（2026-10-28）：新增**可选组件**分发 -WithQqbot / -ComponentsOnly
+#          · 默认不装（多数项目不需要 QQ 通道），只在显式开关下拷贝引擎顶层 tools/qqbot；
+#          · 只拷贝：委托 `install-all.ps1 -CopyOnly`（排除清单单一来源），**不**代跑
+#            自启注册/计划任务/启动服务 —— 那三项是单机单实例（快捷方式名 / 计划任务名 /
+#            端口 18765 全局唯一，第二个项目会静默顶掉第一个）。
+#          · Step 2b 承载拷贝（沿用既有 7b 的「b 步不进分母」约定）⇒ 8 步文案零改动。
 # ============================================================
 
 param(
@@ -27,7 +33,11 @@ param(
     [switch]$DryRun = $false,
     [switch]$NoBackup = $false,
     [switch]$Force = $false,
-    [string]$SpecsDir = $null
+    [string]$SpecsDir = $null,
+    # 可选组件：QQ 通知通道（tools/qqbot）。默认不装，必须显式开关。
+    [switch]$WithQqbot = $false,
+    # 轻量后装模式：只做可选组件，跳过后 8 步（不备份 IDE 目录、不重装 engine/scripts）。
+    [switch]$ComponentsOnly = $false
 )
 
 # ── Step 1: 检测 IDE 环境（与 install.sh 统一优先级 · ★ FIX-49 R24 修订）────
@@ -62,6 +72,104 @@ $DetectedIde = Detect-IDE
 
 # ── 引擎源目录（基于 $PSScriptRoot，无论从哪个目录运行都能找到源文件）──
 $EngineDir = (Get-Item (Split-Path $PSScriptRoot -Parent)).FullName
+
+# ── 可选组件：QQ 通知通道（tools/qqbot）────────────────────────────────
+# 动因（2026-10-28）：本脚本原本全文不含 tools/ ⇒ 新项目装完 skill **永远**拿不到
+#   tools/qqbot，而缺失是**静默**的：engine/gate/notify-adapter.mjs 用 existsSync 探测
+#   通知脚本、缺席即 `NOTIFY_SKIP no-script`；manifest 的 notifications.adapter 默认
+#   也归一为 `none`。用户以为通知通道装好了，实际全静默且零报错。
+#
+# 三条硬约束（实现不得偏离）：
+#   ① **默认不装**：只有显式 -WithQqbot 才拷贝；本函数不碰 manifest 的 notifications 段
+#      （翻 adapter 是 install-all 第 7 步，属用户显式动作）。
+#   ② **只拷贝，不代跑**：不注册自启、不建计划任务、不启动服务。快捷方式名
+#      `CodeBuddyQQWatcher.lnk` / 计划任务 `CodeBuddyQQWatchdog` / 端口 18765 都是单机
+#      唯一的，第二个项目跑一遍会静默顶掉第一个 —— 必须由用户在自己项目里显式执行。
+#   ③ **排除清单单一来源**：委托 `install-all.ps1 -CopyOnly`，本文件不写第二份排除表。
+#      历史上同一份清单已有三处（install-all / sync-skills.ps1 / 引擎 .gitignore），
+#      再加第四份必然漂移，而漂移的后果是把含 secret 的 qqbot.creds.json 拷进新项目。
+function Install-QqbotComponent {
+    param([string]$Root)
+
+    $srcEntry = Join-Path $EngineDir 'tools\qqbot\install-all.ps1'
+    if (-not (Test-Path $srcEntry)) {
+        # 与 Step 4 的 F3 同款：源不合法必须硬失败，否则「装完没有组件」被当成成功。
+        Write-Host "  ❌ optional component source missing: $srcEntry"
+        Write-Host "     The install source must be the engine repo (it carries the top-level tools/qqbot)."
+        Write-Host "     An already-installed skill copy does NOT carry tools/ (by design)."
+        exit 1
+    }
+
+    $dst = Join-Path $Root 'tools\qqbot'
+    if (Test-Path (Join-Path $dst 'install-all.ps1')) {
+        Write-Host "  ✅ qqbot already present: $dst（merge 拷贝，实例文件 daemon.config.json / qqbot.creds.json 不受影响）"
+    }
+
+    $argv = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $srcEntry,
+              '-ProjectRoot', $Root, '-CopyOnly')
+    if ($DryRun) { $argv += '-DryRun' }
+    & powershell.exe @argv
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  ❌ optional component copy failed (install-all.ps1 -CopyOnly exit $LASTEXITCODE)"
+        exit 1
+    }
+    if ($DryRun) { return }
+
+    if (-not (Test-Path (Join-Path $dst 'install-all.ps1'))) {
+        Write-Host "  ❌ optional component missing after copy: $(Join-Path $dst 'install-all.ps1')"
+        exit 1
+    }
+    Add-QqbotGitignore -Root $Root
+}
+
+# 凭证泄漏面加固：项目侧 .gitignore 通常没有 qqbot 规则，而 install-all 第 3 步会生成
+#   qqbot.creds.json（含 secret）⇒ 一次 `git add .` 就把密钥提交了。幂等追加；写失败只告警
+#   （不因为 .gitignore 不可写就让整次安装失败）。
+function Add-QqbotGitignore {
+    param([string]$Root)
+
+    $gi = Join-Path $Root '.gitignore'
+    $marker = '# tools/qqbot (credentials / instance config / runtime) -- managed by install.ps1 -WithQqbot'
+    $existing = ''
+    if (Test-Path $gi) { $existing = Get-Content $gi -Raw -Encoding UTF8 }
+    if ($existing -and $existing.Contains($marker)) {
+        Write-Host "  ✅ .gitignore already carries qqbot rules"
+        return
+    }
+    $block = @(
+        $marker,
+        'tools/qqbot/daemon.config.json',
+        'tools/qqbot/qqbot.creds.json',
+        'tools/qqbot/*.jsonl',
+        'tools/qqbot/*.log',
+        'tools/qqbot/runtime/'
+    ) -join "`r`n"
+    $prefix = if ($existing -and $existing.Trim().Length -gt 0) { "`r`n`r`n" } else { '' }
+    try {
+        [IO.File]::AppendAllText($gi, $prefix + $block + "`r`n", (New-Object System.Text.UTF8Encoding($false)))
+        Write-Host "  ✅ .gitignore: qqbot 实例文件规则已追加（qqbot.creds.json 不会入库）"
+    } catch {
+        Write-Host "  ⚠  .gitignore 追加失败：$($_.Exception.Message)"
+        Write-Host "     Manual: 加入 tools/qqbot/qqbot.creds.json（含 secret，禁止提交）"
+    }
+}
+
+# 组件状态探针（**三态**）：missing = 未分发 / staged = 已分发未启用 / enabled = 已启用
+#
+# 为什么必须是三态（2026-10-28）：此前只报「已安装 / 未安装」，无法回答最常见的中间态
+#   「文件拷进来了，但 notifications.adapter 仍是 none」—— 而「目录在 = 已生效」正是本次
+#   改造要根治的静默故障形状（notify-adapter 探测脚本存在才发，adapter 不翻则全程静默）。
+#   生态侧的对应做法是把「可见/启用」与「文件是否就位」拆成两件事（声明式开关），这里同口径。
+function Get-QqbotComponentState {
+    if (-not (Test-Path 'tools\qqbot\install-all.ps1')) { return 'missing' }
+    $mp = "$SkillTarget\project\project.manifest.yaml"
+    if (Test-Path $mp) {
+        $raw = Get-Content $mp -Raw -Encoding UTF8
+        # 判据与 install-all 第 7 步**同款**（同一事实只认一个正则形状，避免两套判定漂移）
+        if ($raw -match '(?m)^notifications:\s*\r?\n\s+adapter:\s*"?qqbot"?\s*$') { return 'enabled' }
+    }
+    return 'staged'
+}
 
 # ── Step 1: 确定 SKILL_TARGET 和 HOOK_TARGET ──
 switch ($DetectedIde) {
@@ -103,6 +211,21 @@ if ($DryRun) {
     Write-Host "    + scripts\            → $SkillTarget\scripts\"
     Write-Host "    + SKILL.template.md   → $SkillTarget\"
     Write-Host "    + README.md LICENSE   → $SkillTarget\"
+    Write-Host ""
+    Write-Host "  Step 2b (可选组件 —— 默认不装):"
+    if ($WithQqbot) {
+        Write-Host "    + tools\qqbot\        → <安装根>\tools\qqbot\   (委托 install-all.ps1 -CopyOnly)"
+        Write-Host "      * 只拷贝：排除 daemon.config.json / qqbot.creds.json / *.log / *.jsonl / runtime/"
+        Write-Host "      * 不做：自启注册 / 计划任务 / 启动服务 / 改 notifications.adapter（单机单实例，须你显式执行）"
+        Write-Host "      * 追加 .gitignore 规则（qqbot.creds.json 含 secret，防入库）"
+        Write-Host "      > 装后下一步: powershell -NoProfile -ExecutionPolicy Bypass -File tools\qqbot\install-all.ps1"
+    } else {
+        switch (Get-QqbotComponentState) {
+            'enabled' { Write-Host "    状态: 已启用（tools\qqbot + notifications.adapter=qqbot）—— 未加 -WithQqbot，本次不动" }
+            'staged'  { Write-Host "    状态: 已分发**未启用**（tools\qqbot 在，adapter 不是 qqbot）—— 启用见 tools\qqbot\install-all.ps1" }
+            default   { Write-Host "    状态: 未分发 —— 需要 QQ 通知时加 -WithQqbot（后装: -WithQqbot -ComponentsOnly）" }
+        }
+    }
     Write-Host ""
     Write-Host "  Step 3 (IDE adapter — 简化模式：仅差异文件):"
     switch ($DetectedIde) {
@@ -148,6 +271,37 @@ if ($DryRun) {
     Write-Host "╔══════════════════════════════════════════════════╗"
     Write-Host "║  DRY RUN 完成。使用无 -DryRun 参数执行实际安装。    ║"
     Write-Host "╚══════════════════════════════════════════════════╝"
+    exit 0
+}
+
+# ── 轻量组件模式（-ComponentsOnly）────────────────────────────────
+# 场景：skill 早已装好，之后才想加 QQ 通知通道。若走全量安装，会先 robocopy 整个 IDE 目录
+#   做备份（下方 Backup 段）再整目录替换 engine/scripts —— 代价与风险都不匹配「只加一个组件」。
+# 故在此**早退**：只跑组件拷贝，不备份、不查依赖、不动 engine/scripts/manifest/hooks。
+if ($ComponentsOnly) {
+    if (-not $WithQqbot) {
+        # 无参调用 = 组件状态探针（可随时随地查；输出三态，避免"目录在 = 已生效"的误读）
+        switch (Get-QqbotComponentState) {
+            'enabled' {
+                Write-Host "  ✅ qqbot 已启用：tools\qqbot + notifications.adapter=qqbot"
+                Write-Host "     健康/待确认: curl http://127.0.0.1:18765/health"
+            }
+            'staged' {
+                Write-Host "  ◐  qqbot 已分发但**未启用**：tools\qqbot 在，notifications.adapter 不是 qqbot"
+                Write-Host "     启用（在项目根执行）: powershell -NoProfile -ExecutionPolicy Bypass -File tools\qqbot\install-all.ps1"
+                Write-Host "     （不带凭据时会返回 exit 2 + TODO 清单；openid 必须人工）"
+            }
+            default {
+                Write-Host "  ○  qqbot 未分发。安装: scripts\install.ps1 -WithQqbot -ComponentsOnly"
+                Write-Host "     （安装期一并装: 加 -WithQqbot 即可；默认不装）"
+            }
+        }
+        exit 0
+    }
+    Write-Host "[components] Installing optional component: qqbot ..."
+    Install-QqbotComponent -Root (Get-Location).Path
+    Write-Host "  ℹ   下一步（需你在本项目执行）:"
+    Write-Host "      powershell -NoProfile -ExecutionPolicy Bypass -File tools\qqbot\install-all.ps1"
     exit 0
 }
 
@@ -283,6 +437,23 @@ Copy-Item -Force "$EngineDir\SKILL.template.md" "$SkillTarget\"
 @("README.md","LICENSE","CONTRIBUTING.md") | ForEach-Object {
     $src = Join-Path $EngineDir $_
     if (Test-Path $src) { Copy-Item -Force $src "$SkillTarget\" }
+}
+
+# ── Step 2b: 可选组件（默认不装）────
+# 不进分母：沿用既有 `7b` 的「b 步」约定，8 处 `[Step N/8]` 文案无需联动。
+# 装到**安装根** `<cwd>\tools\qqbot`（非 skill 目录内）：notify-adapter / gate 与
+# install-all 的身份判定都以「项目根/tools/qqbot」为基准；放进 skill 目录 = 死副本。
+if ($WithQqbot) {
+    Write-Host "[Step 2b/8] Optional component: qqbot..."
+    Install-QqbotComponent -Root (Get-Location).Path
+    Write-Host "  ℹ   本步只拷贝。需要真正启用（ws 依赖 / 凭据 / Stop hook / notifications.adapter /"
+    Write-Host "      自启 / 看门狗 / health）请在本项目执行："
+    Write-Host "      powershell -NoProfile -ExecutionPolicy Bypass -File tools\qqbot\install-all.ps1"
+} else {
+    switch (Get-QqbotComponentState) {
+        'enabled' { Write-Host "[Step 2b/8] Optional component qqbot present and enabled (not updated without -WithQqbot)" }
+        'staged'  { Write-Host "[Step 2b/8] Optional component qqbot staged but NOT enabled (run tools\qqbot\install-all.ps1 to enable)" }
+    }
 }
 
 # ── Step 3: IDE 专属 adapter（简化：仅差异文件）────
@@ -594,8 +765,17 @@ Write-Host "[Step 8/8] Gate self-test..."
 #   跑源副本（$EngineDir\scripts\...）时：resolveHook() 首选项 SKILL_ROOT/hooks/ 会命中
 #   源仓库根的 hooks/，而 IS_PROJECT_LAYOUT 旧判据只看「父目录是否叫 hooks」⇒ 误判为项目布局
 #   ⇒ dirname×3 反推出错的项目根 ⇒ SHIM/HOST 组整组跳过或全误红（实测 66/60/6、68/23/45），
-#   用户看到「装好了但 45 个红」。实测对照：在安装根跑已装副本 = 81/81。
+#   用户看到「装好了但 45 个红」。实测对照：在安装根跑已装副本 = 87/87
+#   （2026-10-28 实测；81 是 GATE-PARSE-3 之前的旧基线，勿再引用）。
 #   同时去掉 --quick（它只精简「已知漏洞」明细，不改分母），并先断言 hook 真的落盘。
+#
+# ★ Step 8 自检第三处（TOOL-QQBOT-DIST）：-WithQqbot 却装不出 tools\qqbot = 静默半装。
+#   必须在这里暴露，否则用户拿到的结论是「安装成功 + 没有 QQ 通知」且无任何提示。
+if ($WithQqbot -and -not (Test-Path 'tools\qqbot\install-all.ps1')) {
+    Write-Host "  ❌ -WithQqbot was requested but tools\qqbot\install-all.ps1 is missing."
+    Write-Host "     Refusing to report success (silent half-install)."
+    exit 1
+}
 $gateTestScript = "$SkillTarget\scripts\run-gate-tests.mjs"
 $installedHook = if ($HookTarget) { Join-Path $HookTarget 'gate-check.mjs' } else { $null }
 if (-not (Test-Path $gateTestScript)) {
@@ -618,5 +798,12 @@ if ($DetectedIde -eq "generic") {
     Write-Host "   2. ⚠️  Your IDE (generic) uses prompt-level gate protection."
 } else {
     Write-Host "   2. 🔒 Hook-level gate protection active ($DetectedIde)."
+}
+# 这一行是「可选组件」唯一的常驻提示：组件默认不装，而缺席是静默的（fail-open），
+# 不打印就等于用户永远不会知道有这条通道。
+if (Test-Path 'tools\qqbot\install-all.ps1') {
+    Write-Host "   3. 📱 Optional QQ channel: copied → powershell -NoProfile -ExecutionPolicy Bypass -File tools\qqbot\install-all.ps1"
+} else {
+    Write-Host "   3. 📱 Optional QQ channel (not installed): add -WithQqbot, or run scripts\install.ps1 -WithQqbot -ComponentsOnly later."
 }
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

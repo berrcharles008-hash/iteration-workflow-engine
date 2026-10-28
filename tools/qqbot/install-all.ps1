@@ -34,6 +34,14 @@ param(
   [switch]$NoManifest,  # skip project.manifest.yaml notifications.adapter flip
   [switch]$NoStart,     # register autostart entries but do not launch anything
 
+  # Distribution-only mode: copy the toolkit into <ProjectRoot>\tools\qqbot, then stop.
+  # Entry point for the skill installer (scripts/install.ps1 -WithQqbot), which must never
+  # trigger host-level steps. Everything after the copy is per-HOST and single-instance
+  # (Startup shortcut name, scheduled task CodeBuddyQQWatchdog, port 18765) -- a second
+  # project installing silently takes over the first one, so the user must run the full
+  # sequence explicitly in their own project.
+  [switch]$CopyOnly,
+
   [switch]$DryRun
 )
 
@@ -114,6 +122,36 @@ function Copy-Toolkit([string]$src, [string]$dst, [bool]$dry) {
     $copied++
   }
   return @{ copied = $copied; skipped = $skipped }
+}
+
+# -- copy-only mode (skill installer entry point, 2026-10-28) --------
+# scripts/install.ps1 -WithQqbot delegates the copy here so that the exclusion list
+# (instance config / creds / logs / runtime) has exactly ONE owner. A second copy of that
+# list in the skill installer would drift, and the failure mode is silent: qqbot.creds.json
+# (contains the secret) would be copied into the new project and could be committed.
+# Everything below this block is host-level (shortcut / scheduled task / port 18765) and
+# must stay out of an unattended skill install.
+if ($CopyOnly) {
+  Step '0/9 copy toolkit into the target project (copy-only mode)'
+  if ($bootstrap) {
+    $r = Copy-Toolkit $selfDir $targetQq $DryRun.IsPresent
+    $verb = if ($DryRun) { 'would copy' } else { 'copied' }
+    Say ("  $verb {0} file(s); {1} instance/runtime file(s) excluded (config/creds/logs/runtime)" -f $r.copied, $r.skipped)
+    if (-not $DryRun) {
+      $entry = Join-Path $targetQq 'install-all.ps1'
+      if (-not (Test-Path -LiteralPath $entry)) {
+        Say "FATAL: copy incomplete -- $entry missing" 'Red'
+        exit 1
+      }
+      $script:OkCount++
+    }
+  } else {
+    Skip 'source == target, nothing to copy'
+  }
+  Say ''
+  Say '  copy-only: skipped conflict check / ws / creds / config / hook / manifest / autostart / health' 'Yellow'
+  Say "  next    : powershell -NoProfile -ExecutionPolicy Bypass -File `"$targetQq\install-all.ps1`"  (run it in your project)" 'Yellow'
+  exit 0
 }
 
 if ($bootstrap) {

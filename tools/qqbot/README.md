@@ -20,8 +20,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\qqbot\install-all.ps1
 
 # 方式 B：从别的项目或引擎仓库直接装 —— bootstrap 模式，先复制再就地重跑
 powershell -NoProfile -ExecutionPolicy Bypass -File <源路径>\tools\qqbot\install-all.ps1 -ProjectRoot <新项目根>
+
+# 方式 C：装 skill 时一并带进来（本目录尚未存在时用这条）
+#   安装期：加 -WithQqbot；补装：加 -WithQqbot -ComponentsOnly（轻量，不备份/不重装引擎）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithQqbot
 ```
 `install-all.ps1` 按 9 步执行且**幂等**（可反复跑）：复制工具包 → 单机冲突检测 → `ws` 依赖 → 凭据 → 实例配置 → Stop hook → manifest `notifications.adapter` → 自启（服务 + 看门狗）→ `/health` 验证。
+
+> ★ `-CopyOnly`（2026-10-28 新增）：**只做第 1 步拷贝**然后退出，不碰冲突检测/依赖/凭据/hook/manifest/自启/health。
+> 它是 skill 安装器（`scripts/install.ps1 -WithQqbot`）的委托入口 —— 目的是让「哪些文件不随包分发」（凭据 / 实例配置 / 日志 / runtime）只有**一份**排除清单，
+> 避免第二份清单漂移后把 `qqbot.creds.json` 拷进新项目。手工调试时也可用：
+> `install-all.ps1 -ProjectRoot <新项目根> -CopyOnly [-DryRun]`（`-DryRun` 只报 `would copy N`）。
+> 装了 ≠ 启用：`-CopyOnly` 之后仍必须在目标项目里跑一次完整 `install-all.ps1`（凭据 / 自启 / 通知开关都在那一步）。
 
 常用参数：`-AppId/-Secret/-OpenId`（或 `-CredsSource <别处 qqbot.creds.json>`）写凭据；`-Port` 覆盖 `listenPort`；`-ResetConfig` 从模板重置实例配置（**与 `-Force` 分开**，避免为了越过冲突而误清 `handoffPrompt`）；`-NoService/-NoWatchdog/-NoHook/-NoManifest/-NoStart/-NoDeps` 跳过对应步骤；`-DryRun` 只打印计划；`-Force` 越过单机冲突（代价：原项目停止工作）。
 

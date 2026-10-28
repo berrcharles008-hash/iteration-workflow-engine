@@ -77,6 +77,38 @@ pwsh scripts/init-checklist.ps1 -ProjectPath "你的项目路径"
 向导会引导你完成：`project.manifest.yaml` 项目配置、编码规范、审查规则、门禁微核注入等。
 也可手动编辑 `project/` 下的配置文件（见下节文件地图）。
 
+### 可选组件：QQ 通知通道（默认不装）
+
+安装 skill 时**先问一句**（人或 Agent 执行安装都适用）：
+
+> 需要额外的「QQ 通知通道」吗？它把任务完成/待确认事项推到手机 QQ，并在你离开工位时驱动会话继续。
+> 默认**不装**；要就加 `-WithQqbot`，不要就跳过（之后随时可补装）。
+
+```powershell
+# 装：安装期一并带
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithQqbot
+
+# 补装（skill 早已装好，之后才想要）：轻量，不备份、不重装引擎
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithQqbot -ComponentsOnly
+
+# 查状态
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -ComponentsOnly
+```
+
+装完只是「文件到位」：真正启用要你自己在项目根执行一次
+`powershell -File tools\qqbot\install-all.ps1`（凭据 / 自启 / 看门狗 / 通知开关都在那一步）。
+细节见 `tools/qqbot/README.md`。仅 Windows。
+
+状态有三态，别把「目录在」当成「已生效」：
+
+| 状态 | 判据 | 下一步 |
+|---|---|---|
+| 未分发 | `<项目根>\tools\qqbot` 不存在 | `-WithQqbot -ComponentsOnly` |
+| 已分发未启用 | 目录在，但 manifest 的 `notifications.adapter` 不是 `qqbot` | 跑一次 `tools\qqbot\install-all.ps1` |
+| 已启用 | 目录在 **且** adapter = `qqbot` | `curl http://127.0.0.1:18765/health` |
+
+查询：`scripts\install.ps1 -ComponentsOnly`（只读）。组件的通用规范（位置与主从、唯一入口、三态、生命周期）见引擎仓库 design/optional-component-distribution.md。
+
 ### 典型对话
 
 ```

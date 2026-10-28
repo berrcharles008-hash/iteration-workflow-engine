@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 # ============================================================
 # install.sh — iteration-workflow 引擎安装脚本 (Bash)
 # ============================================================
@@ -25,6 +25,12 @@ IDE=""
 FORCE=false
 # ★ F1（2026-10-26）：覆盖 bootstrap-manifest.py 的推导默认值（空 ⇒ 按 IDE 推导）
 SPECS_DIR=""
+# ★ TOOL-QQBOT-DIST（2026-10-28）：可选组件开关。qqbot 是 Windows-only
+#   （启动文件夹快捷方式 / schtasks 计划任务 / shutdown.exe / GBK 解码），POSIX 侧
+#   故意**不实现拷贝**：装一份跑不起来的工具包比不装更糟（用户会以为已启用）。
+#   这里只做「接受参数 + 明示」，避免 `--with-qqbot` 被判 Unknown option 直接退出。
+WITH_QQBOT=false
+COMPONENTS_ONLY=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         --dry-run|-n)
@@ -35,6 +41,10 @@ while [[ $# -gt 0 ]]; do
             FORCE=true; shift ;;
         --specs-dir)
             SPECS_DIR="$2"; shift 2 ;;
+        --with-qqbot)
+            WITH_QQBOT=true; shift ;;
+        --components-only)
+            COMPONENTS_ONLY=true; shift ;;
         *)
             echo "Unknown option: $1"; exit 1 ;;
     esac
@@ -114,6 +124,13 @@ if $DRY_RUN; then
     echo "    + SKILL.template.md   → $SKILL_TARGET/"
     echo "    + README.md LICENSE   → $SKILL_TARGET/"
     echo ""
+    echo "  Step 2b (可选组件 — 默认不装):"
+    if $WITH_QQBOT; then
+        echo "    ⏭  qqbot 仅支持 Windows —— 本脚本不拷贝（请用 scripts/install.ps1 -WithQqbot）"
+    else
+        echo "    状态: 不安装（需要时在 Windows 上执行 install.ps1 -WithQqbot）"
+    fi
+    echo ""
     echo "  Step 3 (IDE adapter — 简化模式：仅差异文件):"
     case $DETECTED_IDE in
         cursor)
@@ -158,6 +175,18 @@ if $DRY_RUN; then
     echo "╔══════════════════════════════════════════════════╗"
     echo "║  DRY RUN 完成。使用无 --dry-run 参数执行实际安装。  ║"
     echo "╚══════════════════════════════════════════════════╝"
+    exit 0
+fi
+
+# ── 轻量组件模式（--components-only）──────────────────────────────
+# 对称 install.ps1 的同名开关，但本平台无组件可装 ⇒ 只报状态并退出（不进入后 8 步，
+# 因为「只查/只装组件」不应触发备份与 engine/scripts 整替）。
+if $COMPONENTS_ONLY; then
+    if [ -f "tools/qqbot/install-all.ps1" ]; then
+        echo "  ✅ qqbot 已安装: tools/qqbot"
+    else
+        echo "  ○  qqbot 未安装（Windows-only 组件；请在 Windows 上执行 scripts/install.ps1 -WithQqbot -ComponentsOnly）"
+    fi
     exit 0
 fi
 
