@@ -238,7 +238,7 @@ function judgeAsk(sid, myConv, state, ledgerFile) {
   const all = [state.sessions[sid]].concat(Object.keys(state.sessions).map((k) => state.sessions[k]));
   const dispatched = all.filter(Boolean)
     .reduce((acc, r) => acc.concat(Array.isArray(r.dispatched) ? r.dispatched : []), [])
-    .filter((d) => d && Number(d.ts || 0) > pickTs);
+    .filter((d) => d && Number(d.ts || 0) >= pickTs);
   if (dispatched.length) return null;
 
   // 每个 id 只拦一次（不因新登记重置 ⇒ 防「拦→重跑 ask→再拦」livelock）
@@ -479,7 +479,7 @@ function selftest() {
     return handleStop(stopIn(), file).code === 0;
   });
   T('⑱ 登记之后派了 waiter ⇒ 不按 ask 判据拦（模式 D）', () => {
-    reset(); writeLedger([regEv(45)]);
+    reset(); writeLedger([regEv(45, { t: Date.now() - 5000 })]);   // ★ 回拨 5s：登记与派发同毫秒时也应算「登记之后派过 waiter」
     handleDispatch(dispatchIn('waiter-q'), file);
     const r = handleStop(stopIn(), file);
     return r.stderr.indexOf('#45') < 0;

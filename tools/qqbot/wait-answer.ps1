@@ -28,7 +28,13 @@ param(
 $ErrorActionPreference = 'Continue'
 $scriptDir = $PSScriptRoot
 $proj = Split-Path (Split-Path $scriptDir -Parent) -Parent
-$file = Join-Path $proj ('.codebuddy\temp\qq-answers\' + $Id + '.json')
+# ★ TOOL-QQWAIT-2（2026-10-28）：答案目录支持 `QQ_ANSWER_DIR` 覆盖 —— 与 ask.js / poll-answer.js 同口径。
+#   动因：原来本脚本写死生产目录 `.codebuddy/temp/qq-answers`，**无法隔离测试** ——
+#   回归用例只能往生产目录写文件（污染 + 同号撞号风险）。口径统一后即可用临时目录跑隔离回归。
+#   仅测试用；生产不要传。
+$answerDir = $env:QQ_ANSWER_DIR
+if (-not $answerDir) { $answerDir = Join-Path $proj '.codebuddy\temp\qq-answers' }
+$file = Join-Path $answerDir ($Id.ToString() + '.json')
 $sinceUtc = $null
 if ($SinceIso) {
   try {
@@ -54,7 +60,8 @@ while ((Get-Date) -lt $deadline) {
       #   It only proves "a process read this answer file"; it does NOT mean the IDE session can be woken.
       #   Never used as a freshness criterion (do not write consumedAt, do not touch mtime).
       try {
-        $donePath = Join-Path $proj ('.codebuddy\temp\qq-answers\' + $Id + '.done')
+        $donePath = Join-Path $answerDir ($Id.ToString() + '.done')
+        if (-not (Test-Path -LiteralPath $answerDir)) { New-Item -ItemType Directory -Path $answerDir -Force | Out-Null }
         $doneJson = '{"id":' + $Id + ',"by":"wait-answer","ts":"' + (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ') + '"}'
         [System.IO.File]::WriteAllText($donePath, $doneJson, (New-Object System.Text.UTF8Encoding($false)))
       } catch { }
