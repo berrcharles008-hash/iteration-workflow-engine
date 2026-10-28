@@ -313,6 +313,9 @@ if ($CredsSource) {
   if (-not $OpenId) {
     Warn 'AppId/Secret given but OpenId is empty -> creds left untouched (need all three)'
     Manual 'pass -OpenId too, or reuse -CredsSource'
+    # Must count as "no credentials": otherwise step 8 would register autostart and every
+    # logon would die with [FATAL] (service exits when appId/secret/openId are incomplete).
+    if (-not $haveCreds) { $credMissing = $true }
   } elseif ($DryRun) {
     Say "  [dry] would write $credsPath (appId=$AppId, openId=$OpenId)"
   } else {
