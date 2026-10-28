@@ -103,6 +103,9 @@ Step 7.5: ★ 等待用户确认的方式（**细则唯一来源 = `engine/waiti
           （进入等待态 / `completed` / **`error`（429 额度耗尽实测）**），后两者停 inbox polling 且仅用户消息
           可恢复；触发条件未定 ⇒ 成员等待**不得依赖该通道**：派发后采用**回合内等待**
           （细则 = `phase-04.md` Step 2 成员等待协议）；
+        · ★ **2026-10-27：该缺口已补平台级硬门禁**（`engine/gate/team-wait-guard.mjs`，Stop hook exit 2 拒绝
+          结束回合 + stderr 回灌核对指令；pre-tool 记异步派发台账）。**别再把它当纯 prompt 约束**——模型
+          "口头等待后照常结束回合"会被平台直接打回；仍失败时排查 hook 是否被 IDE 触发（`{IDE}/temp/team-wait-guard.log`）；
         · ★ **Claude Code**：`-p` 不生成队友 ⇒ 该宿主下退化为**主 Agent 直跑**（见 §六-b）；
         · ★ **等待中不做其它写操作**（避免与接管撞车；与 Step 1.6 的"禁绑回复即起新会话"互补）。
 Step 8: ★ 若出现「extension host terminated unexpectedly」提示 → 立即转 §八 宿主中断恢复；
@@ -177,6 +180,12 @@ Agent 命名规则：`{文件/层级简写}`，例如：
 - `bll-mapping`（BLL 映射管理）
 - `domain-config`（Domain 配置层）
 - `explore-domain`（只读探索 Domain 文件）
+
+> ★ **同批必派 `auto-resume` waiter（2026-10-27 · TOOL-AUTORESUME）**：成员触顶暂停（`isMax*Limit: true`）
+> 只能由**同队 `send_message` 注入**复活，窗口仅 1~4 分钟（人工往返必超窗）⇒ 建队 / 派首批成员时**同批**
+> 派一名常驻 waiter（`subagent_name=iteration-workflow`、`mode=bypassPermissions`、`max_turns`≤8），
+> 循环 = 每 75s `node tools/qqbot/auto-resume-waiter.mjs --once` 并照 JSON 执行（`INJECT` ⇒ 注入，
+> 其余只回报）；派发模板与红线见 `phase-04.md` Step 2 ⑦。
 
 ---
 

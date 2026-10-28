@@ -65,6 +65,15 @@
  *              分发零改动：install.ps1 Step 2 以 Copy-Item -Recurse 整目录复制 engine/；
  *                          install.sh Step 4 复制单文件 shim；sync-back 以 -Recurse 回流。
  *              回归：run-gate-tests.mjs 40/40 通过（2026-10-01）。
+ *           ｜ GATE-PARSE-3（2026-10-28）解析面收敛（★ 判定面零变化，仅可观测性与审计分类）：
+ *              ① stdin 加 stdinEnded/stdinTimedOut 两标志 + HOOK_PARSE_FAIL 诊断 ⇒ 「超时截断」
+ *                 与「JSON 畸形」可区分（此前共用一句话术，导致 10-27 一次截断被误报成 BOM 缺陷）；
+ *              ② BYPASS-MENTION 分档：路径形态 ⇒ AUDIT_SUSPECT(form=path) / 正文提及 ⇒
+ *                 AUDIT_MENTION(form=text)；**记录不删**（「脚本代写」形态的唯一边迹即此条）；
+ *              ③ 删除目标提取先剔「枚举型动作值」（-ErrorAction SilentlyContinue 等），
+ *                 消除 14/72 条 DELETE_TARGETS 污染；★ -Include/-Filter/-Exclude/-Depth 不动
+ *                 （剔它们会把目标集定义式抹掉 ⇒ delete_allow 目录前缀误放行，已实测反例）；
+ *              ④ 删除拦截话术与 isDeleteExempt 实现对齐（原「豁免: runtime/ · temp/ · memory/」三条不符）。
  */
 
 import { readFileSync, existsSync, appendFileSync, writeFileSync, statSync, mkdirSync, unlinkSync, openSync, readSync, closeSync } from 'fs';
@@ -1186,6 +1195,38 @@ const BYPASS_CREATE_PATTERNS = [
  */
 const BYPASS_INTERP_RE = /\b(?:python|python3|py|node|nodejs|ruby|perl|php)\b/i;
 const BYPASS_WRITE_HINT_RE = /(?:writeFileSync|appendFileSync|writeFile|\.write\s*\(|open\s*\([^)]*[\x27\x22]w|openSync|createWriteStream|WriteAllText|WriteAllBytes|copyFileSync|shutil\.|os\.remove|unlink|>{1,2}[^\n]*\.gate-bypass)/i;
+/**
+ * ★ GATE-PARSE-3（2026-10-28）：mention **分档** —— 「提及」不等于「可疑」。
+ *
+ * 背景（实测 2026-09-18~10-28，14 条 AUDIT 记录）：拦截侧（BYPASS_CREATE_PATTERNS / 写迹象窗口）
+ *   覆盖不到「提及」形态，故 FIX-14 给提及也留了 AUDIT_SUSPECT；实测 14 条**全为噪声**
+ *   （通知正文 3 / 只读 `Test-Path` 复合命令 6 / 维护命令正文 2 / 其它 3），真阳性 0。
+ *   但反方评审证实：`node s.js --what "$(cat .gate-bypass)"` 这类「脚本代写」的唯一痕迹就是本审计
+ *   ⇒ **不能删记录**。取舍 = 保留记录、只把「正文提及」从 SUSPECT 降为 MENTION（新 kind）。
+ *
+ * 口径：`.gate-bypass` 以**路径形态 token** 出现（前边界含 `/ \ 空白 引号 = : ( ) , ; { } [ ]`）⇒ AUDIT_SUSPECT；
+ *       只出现在**消息型参数的值**里、或非路径形态 ⇒ AUDIT_MENTION。
+ * ★ 硬约束：本函数只决定**审计 kind**，`isBypassCreateCommand` 的返回（拦/放）完全不受影响。
+ */
+const MSG_VALUE_OPTS = 'what|text|prompt|message|msg|title|body|reason|desc|summary|note';
+const MSG_VALUE_RE = new RegExp(
+  '(?:^|\\s)--?(?:' + MSG_VALUE_OPTS + ')'
+  + '(?:\\s*[=:]\\s*(?:"[^"]*"|\'[^\']*\'|[^\\s]+)|\\s+("[^"]*"|\'[^\']*\'))',
+  'gi');
+/** 剔除消息型参数的值（`=`/`:` 连结允许裸值；空格连结只剔引号值 —— 裸值可能就是真实路径参数） */
+function stripMessageOptionValues(s) {
+  return String(s || '').replace(MSG_VALUE_RE, ' ');
+}
+const MENTION_PREV_RE = /[\s"'`=:/(),;{}\[\]\\]/;
+const MENTION_NEXT_RE = /[\s"'`/),;{}\[\]\\]|$/;
+/** 命中位置是否构成「路径形态 token」（★ 前边界必含反斜杠，否则 `…\.gate-bypass` 会被判正文） */
+function isMentionPathForm(str, j) {
+  const s = String(str || '');
+  if (j < 0 || j >= s.length) return false;
+  const prev = j === 0 ? ' ' : s[j - 1];
+  const next = s.slice(j + '.gate-bypass'.length, j + '.gate-bypass'.length + 1);
+  return MENTION_PREV_RE.test(prev) && (next === '' || MENTION_NEXT_RE.test(next));
+}
 function isBypassCreateCommand(cmd) {
   const s = String(cmd || '');
   if (!s) return false;
@@ -1194,7 +1235,14 @@ function isBypassCreateCommand(cmd) {
   if (i >= 0 && BYPASS_INTERP_RE.test(s)) {
     const near = s.slice(Math.max(0, i - 140), i + 80);      // 邻近窗口（允许跨段）
     if (BYPASS_WRITE_HINT_RE.test(near)) return true;
-    audit('AUDIT_SUSPECT', '[BYPASS-MENTION] ' + s.slice(0, 160));
+    // ★ GATE-PARSE-3：分档留痕（存在性用宽松 indexOf，边界只用于 path/text 分档）
+    const mention = stripMessageOptionValues(s);
+    const mj = mention.indexOf('.gate-bypass');
+    if (mj >= 0 && isMentionPathForm(mention, mj)) {
+      audit('AUDIT_SUSPECT', '[BYPASS-MENTION form=path] ' + s.slice(0, 160));
+    } else {
+      audit('AUDIT_MENTION', '[BYPASS-MENTION form=text] ' + s.slice(0, 160));
+    }
   }
   return false;
 }
@@ -1202,14 +1250,19 @@ function isBypassCreateCommand(cmd) {
 // ★ FIX-21：写类工具「最终放行」也记一条 allow —— 用于判定「拦截后是否又成功写入」
 //   （= 已开闸 / 换路径成功 ⇒ 会话并未被阻断）。非写类工具（读文件等）不记，避免误判为已放行。
 let stdinIsTTY = false;
+// ★ GATE-PARSE-3（2026-10-28）：留两个标志，用于把「输入没送完（超时截断）」与「JSON 真畸形」区分开 ——
+//   此前两者共用同一句「无法识别的输入」，导致 2026-10-27 把一次超时截断误报成「BOM 缺陷」。
+//   仅新增可观测性，判定逻辑（fail-closed）与 3s 窗口均不变。
+let stdinEnded = false;
+let stdinTimedOut = false;
 const input = await new Promise((resolve) => {
   let data = '';
-  const timeout = setTimeout(() => resolve(data), 3000);
+  const timeout = setTimeout(() => { stdinTimedOut = true; resolve(data); }, 3000);
   process.stdin.setEncoding('utf-8');
   // ★ FIX-14①（2026-09-17）：宿主可能带 UTF-8 BOM（\uFEFF）送入 stdin ⇒ 逐块剥离，
   //   否则 JSON.parse 抛错 → fail-closed 误拦正常工具调用（用户侧表现为无意义的「解析失败」弹窗）。
   process.stdin.on('data', (chunk) => { data += String(chunk).replace(/^\uFEFF/, ''); });
-  process.stdin.on('end', () => { clearTimeout(timeout); resolve(data); });
+  process.stdin.on('end', () => { stdinEnded = true; clearTimeout(timeout); resolve(data); });
   if (process.stdin.isTTY) {
     stdinIsTTY = true;
     clearTimeout(timeout);
@@ -1245,8 +1298,13 @@ try {
   // JSON 解析失败 → fail-closed：阻止而非放行（拦截行为不变）
   // ★ FIX-14①：完整原始输入留痕，便于区分「真异常」与「BOM / 编码类误拦」
   audit('HOOK_RAW_INPUT', input);
+  // ★ GATE-PARSE-3（2026-10-28）：失败原因可判 —— 截断（超时）与畸形 JSON 分开留痕。
+  //   判据：ended=true 且仍解析失败 ⇒ 真畸形；ended=false ⇒ 输入没送完（**不是** BOM/编码问题）。
+  audit('HOOK_PARSE_FAIL', 'ended=' + stdinEnded + ' timedOut=' + stdinTimedOut
+    + ' bytes=' + String(input || '').length);
   block(
     '门禁收到无法识别的输入，已安全拦截。',
+    ...(stdinEnded ? [] : ['★ stdin 在 3 秒内未结束：输入可能被截断（不是 BOM/编码问题）。']),
     '如果你正在执行正常操作却看到此提示，属误拦；请查看 .codebuddy/hooks/gate-audit.log 中的 HOOK_RAW_INPUT 原始内容核查。'
   );
 }
@@ -1968,6 +2026,14 @@ function extractPathsFromCommand(seg, cmd) {
   let s = String(seg || '').replace(/["']/g, ' ');
   const vars = collectShellAssignments(cmd || seg);
   if (Object.keys(vars).length) s = expandShellVars(s, vars);
+  // ★ GATE-PARSE-3（2026-10-28）：先剔「值型动作参的**枚举值**」。
+  //   原实现只剥旗标不剥值（`/\s-[a-zA-Z][\w-]*/`）⇒ `SilentlyContinue` 残留成「删除目标」，
+  //   实测 14/72 条 DELETE_TARGETS 记录被污染（含 2026-10-23T08:54:49Z 的实拦记录）。
+  //   ★ 只认 PowerShell 的 7 个 $*Preference 合法值 + Default：
+  //     `-Include` / `-Filter` / `-Exclude` / `-Depth` 的值**不是枚举**，一律不动 ——
+  //     剔它们会把「-Include *.cs」这类**目标集定义式**抹掉，使 delete_allow 的目录前缀误放行
+  //     （反例：`Remove-Item -Path back-end -Include *.cs` + `delete_allow: back-end/`，改前 BLOCK 改后 ALLOW）。
+  s = s.replace(/(?:^|\s)-(?:Error|Warning|Information|Progress)Action\s*:?\s*(?:SilentlyContinue|Stop|Continue|Ignore|Inquire|Suspend|Break|Default)\b/gi, ' ');
   s = s.replace(/\s-[a-zA-Z][\w-]*/g, ' ');                 // -Recurse / -Force / -LiteralPath
   s = s.replace(/(?:^|\s)\/[a-zA-Z]{1,3}(?=\s|$)/g, ' ');   // cmd 开关 /q /s /f /y
   // ★ FIX-15（2026-09-18）：命令名 / shell 前缀词**只从段首剥离**（原为全文 `\b…\b` 删除，
@@ -2074,14 +2140,19 @@ async function deleteGate(paths, label) {
     const unresolved = /\$\{?\w+\}?/.test(String(raw));
     const hints = [
       '登记方式: 任务清单增补 DELETED 项 → 用户确认 → 写入 state.yaml 的 delete_allow。',
-      '豁免: runtime/ · temp/ · memory/ · node_modules/ · dist/ · obj/ · bin/ · *.bak*',
+      // ★ GATE-PARSE-3（2026-10-28）：与 isDeleteExempt / DELETE_EXEMPT_PATTERNS 的实现真值对齐 ——
+      //   原文「豁免: runtime/ · temp/ · memory/ …」三条与实现不符（实测：裸 `runtime/x` 被拦、
+      //   裸 `temp` 被拦、OS 临时目录属"项目外路径"被拦），导致 Agent 照话术改写后仍反复被拦。
+      '豁免: ' + RUNTIME_TAG + '/ · .codebuddy/temp/ · .codebuddy/memory/ · node_modules/ · dist/ · obj/ · bin/ · .vs/',
+      '      · *.bak* / *.tmp|log|orig|rej|swp|old',
+      '注: 项目外绝对路径（含 OS 临时目录）一律不豁免；裸 runtime/x 相对路径亦不豁免，须写全路径。',
       '★ 目标含未展开的 shell 变量：门禁只能做字面判定、无法求值 ⇒ 请把变量写成字面路径后重试。',
     ];
     block(
       '删除/移动类操作未在任务清单登记。',
       `目标: ${rel === null ? raw + '（项目外路径）' : rel}`,
       `迭代: ${activeId}`,
-      ...(unresolved ? hints : hints.slice(0, 2))
+      ...(unresolved ? hints : hints.slice(0, 4))
     );
   }
 
@@ -2446,9 +2517,11 @@ function sendGateNotify(ev) {
         ].join('\n');
         // ★ 2026-10-26：`ask.js` 改「默认等待」⇒ 本回路必须显式 `--no-wait`：
         //   本 spawn 是 detached + hook 15s 超时后不等子进程 ⇒ 若默认等待会白挂 300s 成孤儿。
+        // ★ 同日第 5 例空转后加固：`--no-wait` 已被 `QQ_ASK_AUTOMATION=1` 门控（fail-closed），
+        //   本回路是**唯一合法调用方** ⇒ 必须在此注入，否则拦截事件会静默登记不上（比拦截失败更隐蔽）。
         const askChild = spawn(process.execPath,
           [askPath, '--prompt', askPrompt, '--kind', 'irreversible', '--timeoutSec', '7200', '--no-wait'],
-          { detached: true, stdio: 'ignore', windowsHide: true });
+          { detached: true, stdio: 'ignore', windowsHide: true, env: Object.assign({}, process.env, { QQ_ASK_AUTOMATION: '1' }) });
         askChild.unref();
         audit('QQ_ASK_IRREVERSIBLE', msg + ` | 工具=${ev.tool || '?'} 目标=${target || '-'}`);
         return;

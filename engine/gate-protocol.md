@@ -208,6 +208,11 @@ dispatch_whitelist:
 
 **路径判定增强（GATE-6 · 2026-09-24，现行 hook 行为）**：命令的路径提取环节对**同一条命令内**做 shell 变量赋值收集与字面替换（支持变量套变量，最多 3 轮）；解析不出的变量**原样保留 ⇒ 仍 fail-closed**（**不扩大放行面**，只消除「能解析却被误拦」的假阳性）；拦截话术追加「门禁只能字面判定，请改写字面路径」。沿革与回归详见 `runtime/gate-protocol-CHANGELOG.md` 及 `runtime/TOOLING-TODO.md` GATE-6 工单。
 
+**★ GATE-PARSE-3 补充（2026-10-28）—— 值型动作参的枚举值不计入删除目标**：
+`-ErrorAction SilentlyContinue` 之类（`-{Error,Warning,Information,Progress}Action` + `$*Preference` 的 7 个合法值 `SilentlyContinue/Stop/Continue/Ignore/Inquire/Suspend/Break` + `Default`）在目标提取前剔除 —— 否则值本身会变成「删除目标」（实测 100 天内 14/72 条 `DELETE_TARGETS` 记录被污染，含 1 条实际拦截）。
+★ **`-Include` / `-Filter` / `-Exclude` / `-Depth` 的值一律不剔除**：它们是「目标集定义式」，剔掉会让 `delete_allow` 的目录前缀误放行（构造性反例：`Remove-Item -Path back-end -Include *.cs -Recurse` 配 `delete_allow: back-end/`，改前 BLOCK、剔后 ALLOW）。
+★ **未解析变量仍 fail-closed**（本条口径不变）：降级为审计会打开「两步绕过」—— `$x="<业务路径>"`（命令 1，无危险段）+ `Remove-Item $x`（命令 2，目标不可静态判定），`delete_allow` 登记制度即形同废止。
+
 **★ FIX-26（2026-10-01 · 用户批准 · 开闸实施）state 归档命令误拦收口**（三处，均为「消除假阳性/收紧」，非放宽）：
 - **① 同目录改名解析**：`Rename-Item -LiteralPath '<path>' -NewName '<裸名>'` 中，`-NewName` 只接受**名称**（PowerShell 语义，给路径会报错）⇒ 其目录 ≡ `-Path` 的父目录，可静态确定；
   同目录改名解析：`-NewName` 为裸名且同段**恰好一个**带目录分量的目标作锚点时，将该裸名展开为 `{锚点父目录}/{裸名}` 后再交删除类校验判定，留痕 `RENAME_SAMEDIR`。
@@ -219,6 +224,24 @@ dispatch_whitelist:
 - **③ 上跳段守卫（`isAlwaysAllow`）**：路径含 `..` 段一律不认定豁免（原实现只看前缀，`<runtime>/../../hooks/x` 会被判「在 runtime 内」被判豁免）。只收紧、不放宽，为 ② 的放行面兜住路径穿越。
 
 **回归**：`scripts/run-gate-tests.mjs` 新增 F26-A…F26-H（1 组放行 + 5 组负向对照 + 04 期对照），全套 40/40 PASS（2026-10-01 实测）；同时新增 3 处 `..` 守卫相关对照。
+
+---
+
+### stdin 解析面（★ GATE-PARSE-3 · 2026-10-28 · SSOT 补齐）
+
+> 本节补齐此前**未进本文档**的解析层口径。2026-10-27 工单①（「双 BOM 拦合法 Write」）即因「文档无此条 + 检索到过期备份副本」而误报 —— 现行实现对 BOM 前缀处理正确。
+
+**BOM（FIX-14① · 2026-09-17 已实现）**：stdin **逐块**剥块首 `\uFEFF`，并在解析前再剥前缀 `\uFEFF+` 后 `trim()`（双保险）。
+实测六种形态（单/双/三 BOM、BOM+空格、BOM+换行、前置换行+BOM）**全部正常解析**。
+JSON token **之间**出现 U+FEFF 属语法非法（JSON 规范不容许该处为空白的 U+FEFF）⇒ 仍 fail-closed。
+依据：ES2015 起 WhiteSpace 含 `<ZWNBSP>`(=U+FEFF) ⇒ `String.prototype.trim()` 亦可剥除前缀 BOM。
+
+**空输入**：TTY ⇒ 放行（留痕 `HOOK_NO_STDIN`）；pipe 空 / 仅空白 ⇒ fail-closed。
+
+**超时边界（已知，不视为缺陷）**：stdin 读取窗口 3000ms，超时后以**当前缓冲**判定；截断的 JSON 必然解析失败 ⇒ fail-closed。
+为便于定性，解析失败时额外留痕 `HOOK_PARSE_FAIL ended=<bool> timedOut=<bool> bytes=<n>`：
+`ended=false` ⇒ 输入没送完（截断，**不是** BOM/编码问题）；`ended=true` ⇒ 真畸形。
+★ **禁止**任何「截断/修补后再解析」的实现 —— `filePath` 缺失会落入「无文件路径 ⇒ 放行」分支，属静默放行。
 
 ---
 
@@ -238,11 +261,20 @@ dispatch_whitelist:
 命中即写 `gate-audit.log` 的 `BLOCK [BYPASS-CREATE] …` 并输出阻断框。
 与 `DANGEROUS_CMD_PATTERNS` 的区别：后者仅「触发门禁」、放行与否交阶段判定；本判定**直接 block**。
 
+**提及（mention）的审计分档（★ GATE-PARSE-3 · 2026-10-28）**：命中解释器且邻近**无写迹象**时**不拦**，但按形态留痕 ——
+`.gate-bypass` 以**路径形态 token** 出现（前边界含 `/` `\` 空白 引号 `=` `:` `(` `)` `,` `;` `{` `}` `[` `]`）⇒ `AUDIT_SUSPECT [BYPASS-MENTION form=path]`；
+仅出现在**消息型参数值**（`--what/--text/--prompt/--message/--msg/--title/--body/--reason/--desc/--summary/--note`）或非路径形态 ⇒ `AUDIT_MENTION [BYPASS-MENTION form=text]`。
+**记录不删**：「脚本代写」形态（如 `node s.js --what ".codebuddy\hooks\.gate-bypass"`）的唯一痕迹就是这条。
+★ 本分档**只决定审计 kind**，不影响拦截判定（模式表与写迹象窗口仍按命令**原文**计算）。
+实测依据：2026-09-18~10-28 共 13 条历史命中全为噪声（通知正文 3 / 只读 `Test-Path` 复合命令 6 / 维护命令正文 2 / 其它 2）。
+
 > ★ **FIX-25（2026-09-20 · 用户拍板「档 2」）· 危险段假阳性收窄**：`DANGEROUS_CMD_PATTERNS` 的「输出重定向」模式现行值为 `/[^=>-]>\s*\S/`（`->` 文本箭头 / `=>` JS 箭头 / `>=` 比较符**不是重定向运算符**，不再误拦；实证误拦例与回归对照详见 `runtime/TOOLING-TODO.md` FIX-25 条目）。
 > ★ **同日订正一处对外口径**：`execute_command` **不是阶段禁行** —— 只读命令（跑脚本 / `dir` / `Get-Content` / `git status` 等）在**任何阶段**都放行；只有「危险段」才回落阶段门禁。
 > **残留（登记待裁决）**：`A >= B` 形态仍被判危险（比较符非重定向；工单 = `runtime/TOOLING-TODO.md` FIX-25 条目）。
 > **回归基线**：GATE-A / GATE-A2 后 **157/157**（BASE 0 失败 · FIX 127/127 · GATE-A 组 30/30；沿革 93 → 97 → 127 → 157）。
 > ★ **FIX-50（2026-10-14）后**：**176/176**（BASE 0 失败 · FIX 146/146 · GATE-A 组 30/30；沿革追加 → 176）。
+> ★ **GATE-PARSE-3（2026-10-28）后**：`scripts/run-gate-tests.mjs` **87/87**（本仓库布局实测；改动前 81/81 ⇒ 新增 6 例，既有 81 条逐条 `exitCode` 零翻转）。
+> ★ **分母不可互换**：上两行的 157/176 是 **legacy 驱动**（`gate-regression-test.py` 的 FIX 146 + GATEA 30）的分母；`run-gate-tests.mjs` 的分母随布局变化（项目布局含 SHIM/HOST 组，引擎仓库布局整组 SKIP）。
 >
 > ★ **GATE-A（2026-10-01 · 用户拍板「方案 A」）· 只读命令误拦收口** —— 本口径的落地实现：
 > **起因**：改动前实测（探针 `runtime/probe-readonly-gate.mjs`，26 条纯只读样本）**误拦 10 条**：

@@ -211,6 +211,35 @@ Start-Process powershell -WindowStyle Hidden -ArgumentList @(
 >      收口时统一读 inbox（`engine/waiting-protocol.md` §4）；
 >   ⑤ 宿主差异：非 CodeBuddy 宿主（无 team 能力）不适用本协议（退化为 `-p` 直跑，见
 >      `engine/team-agent-strategy.md` §六-b）。
+>   ⑥ ★ **平台级硬门禁（2026-10-27 上线，唯一不依赖模型自觉的一层）**：`engine/gate/team-wait-guard.mjs`
+>      挂两条 hook —— PreToolUse `--dispatch`（识别 `task` 且 `tool_input.name` 非空的**异步成员派发**，
+>      记 `{IDE}/temp/team-wait-guard.json`）、Stop `--stop-guard`（本会话有**未核对派发** ⇒ **exit 2
+>      拒绝结束回合** + stderr 回灌核对指令：读成员回传 / 查 `TEAM-OUT-COMPLETE` / 用 `svn diff`；
+>      若成员仍在跑则必须改用**命令分片轮询**而非文字"等它回报"）。防死循环：`stop_hook_active===true`
+>      恒放行 + 每批派发只拦一次（`guarded`）+ 派发超 90 分钟视为陈旧放行；脚本自身异常一律 **fail-open**。
+>      依据：Stop hook `exit 2` = 阻断结束 + stderr 回灌，2026-10-27 探针实测成立（`{IDE}/temp/stop-probe/`）。
+>      **意义**：①~⑤ 全是 prompt 软约束（模型一次不照做即失效，事故反复复发的根因），本层把
+>      "结束回合前必须核对收口"变成平台强制；同步派发（`task` 不带 `name`）天然阻塞，不入台账。
+>      ★ **只对 lead 生效**：hook 是项目级全局，**team 成员会话同样触发 Stop** ⇒ 按
+>      `{IDE}/teams/<leadConv>/<team>/config.json` 的 `members[].sessionId`（≠ `mainConversationId`）
+>      识别成员会话并放行。否则成员被拦后会被平台以「继续未完成任务」续跑（空转 + 白耗其 max_turns，
+>      2026-10-27 实测发生过一次）。排查时看 `{IDE}/temp/team-wait-guard.log` 的 `STOP_ENTER/STOP_SKIP` 行。
+>   ⑦ ★ **上限暂停自动续跑 waiter（2026-10-27 上线 · TOOL-AUTORESUME）**：成员触顶（`isMax*Limit: true`）
+>      即「执行已暂停」，平台无对外机制点「继续」，**同队 `send_message` 注入「请继续执行未完成的任务。」
+>      可秒级复活**（实测 0.5~0.7s），但**恢复窗口仅 1~4 分钟**（超窗即 `cleanupSession`，注入失效）
+>      ⇒ **建队 / 派首批成员时同批派一名常驻 waiter**（同 team、`subagent_name=iteration-workflow`、
+>      `mode=bypassPermissions`、`max_turns`≤8），其循环 = 每 75s 跑
+>      `node tools/qqbot/auto-resume-waiter.mjs --once`，照返回 JSON 办事：
+>      `status=INJECT` ⇒ 立即 `send_message(recipient=<recipient>)` 注入 `text`（判据/护栏全在脚本内，waiter
+>      **零判断自由度**）；`RESUME`/`NO-RESUME`/`GUARD`/`SKIP` ⇒ 只回报**不重试**（失败由该脚本的心跳
+>      `temp/auto-resume-waiter.json` 交给 stall-watcher 补发 QQ 卡；waiter 在场时该卡自动抑制 ⇒ 无
+>      双通道）。红线：目标会话已 `cleanupSession`/`Agent destroyed` 不注入；窗内出现 IDE 恢复锚
+>      （`userInput=请继续执行未完成的任务。`）不注入；每暂停事件只注入一次；只注入本队成员。
+>      ★ **观察窗必须按「读到时刻」算，不能按锚点时间戳算**（2026-10-27 真实验收逼出）：IDE 日志有写缓冲，
+>      锚点时间戳可能比它在文件里**可见**的时刻早 25~110s ⇒ 注入后 4 次 tick 全在 120s 窗内却读不到锚点、
+>      误判 `NO-RESUME`（还会把 `failed` 粘滞住 ⇒ 下一轮真暂停被跳过去直接发卡）。故脚本保留 **600s 迟到锚
+>      纠正窗**（命中即改判 `RESUME` 并清 `failedAt`），并把每 tick 写进 `temp/auto-resume-waiter.log`
+>      （含 `lagSec`）以便量化滞后；**禁止**按锚点时间戳直接判负。
 >   ★ **否决记录（2026-10-16）**：不采用"派发后结束回合 + 依赖平台唤醒下一步"（同日两例停摆丢回传）；
 >     不采用"waiter 成员代等"（成员消息对已停 poller 的 lead 无效，10-03 + 10-16 双证）；
 >     "同步子代理天然阻塞"为**未验证假设**，不写入本条。

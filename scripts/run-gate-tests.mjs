@@ -79,7 +79,21 @@ function resolveHook() {
   for (const d of ordered) console.error('   ' + join(projReal, d, 'hooks', 'gate-check.mjs'));
   process.exit(3);
 }
-const HOOK = resolveHook();
+// ★ GATE-PARSE-3（2026-10-28）：`--hook <path>` 全局覆盖 = **影子先验**通道。
+//   P-106 记载的 GATE_HOOK_PATH 已不被任何实现读取（照 SOP 操作会「验了真 hook 以为在验候选」= 假绿）；
+//   本参数取代它：候选实现须与实现**同目录**（engine/gate/，文件名 gate-check.candidate.mjs）——
+//   ★ 不能放 runtime/：该文件 import './exempt-tables.mjs' 等相对依赖，放别处会 ERR_MODULE_NOT_FOUND（实测 exit 1）。
+//   （刻意不对候选文件名加反引号：该文件验证后即删，反引号引用会触发 audit-engine 的 A4 悬空 WARN。）
+//   仅决定「用哪个实现跑用例」，不改任何夹具或判定；省略时行为与改前逐字节一致。
+const HOOK_ARG = argOf('--hook');
+const HOOK = (() => {
+  if (!HOOK_ARG) return resolveHook();
+  if (!existsSync(HOOK_ARG)) {
+    console.error('❌ --hook 指向的文件不存在: ' + HOOK_ARG);
+    process.exit(3);
+  }
+  return HOOK_ARG;
+})();
 // ★ T4-4（2026-10-24）：布局判定 —— SHIM/HOST 两组都假设 HOOK 位于 `<proj>/.{ide}/hooks/`
 //   并据此 `dirname×3` 反推 implProj。HOOK 落在 engine/gate/（引擎仓库直跑）时该假设不成立，
 //   必须整组 SKIP（否则假红，见 3 路评审 R-15）；项目布局下行为与改前逐字节一致。
@@ -1054,6 +1068,74 @@ function runHook(testCase) {
   );
 }
 
+// ── P3：门禁解析面（★ GATE-PARSE-3 · 2026-10-28 · 元层工单）────────────
+//   覆盖三类：① stdin BOM（双驱动此前均无用例）；② BYPASS-MENTION 分档；③ 删除目标提取。
+//   ★ 断言口径：审计日志按**本用例新增区段**判定（`ctx.auditSince`），避免跨用例串扰。
+const auditText = (from) => {
+  try {
+    const p = join(RUNTIME_DIR, 'gate-audit.log');
+    if (!existsSync(p)) return '';
+    const all = readFileSync(p, 'utf-8');
+    return from === undefined ? all : all.slice(from);
+  } catch { return ''; }
+};
+const auditNote = (needle) => (r, ctx) => ({
+  ok: String((ctx && ctx.auditSince) || '').includes(needle),
+  detail: `audit has[${needle}]`,
+});
+const auditAbsent = (needle) => (r, ctx) => ({
+  ok: !String((ctx && ctx.auditSince) || '').includes(needle),
+  detail: `audit has-not[${needle}]`,
+});
+const allOf = (...fns) => (r, ctx) => {
+  for (const f of fns) { const a = f(r, ctx) || { ok: true }; if (!a.ok) return a; }
+  return { ok: true, detail: 'all-assertions-ok' };
+};
+{
+  const cmdCase = (id, name, command, expectExit, assertFn) => ({
+    id, name, phase: '04', active: true,
+    tool: 'execute_command',
+    stdin: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }),
+    expectExit, expectBlock: expectExit === 2,
+    assert: assertFn,
+  });
+  const bomFile = `${F.biz}/p3-bom.js`;
+  TESTS.push(
+    // ① BOM：双 BOM 必须正常解析（现行实现由 FIX-14① 保证；本用例防回退）
+    {
+      id: 'P3-BOM-1', name: '双 BOM + 合法 Write → 放行(0)',
+      phase: '04', active: true,
+      stdin: '\uFEFF\uFEFF' + JSON.stringify({
+        tool_name: 'write_to_file',
+        tool_input: { filePath: join(PROJECT_DIR, bomFile).replace(/\\/g, '/'), content: 'x' },
+      }),
+      expectExit: 0, expectBlock: false,
+    },
+    // ② 正文提及 ⇒ AUDIT_MENTION（不再标 SUSPECT），且放行
+    cmdCase('P3-MENTION-1', '--what 正文提标记 → 放行且记 form=text',
+      'node tools/qqbot/notify.qqbot.js --kind done --what "清理遗留逃生口：.gate-bypass 已删"', 0,
+      allOf(auditNote('AUDIT_MENTION [BYPASS-MENTION form=text]'),
+        auditAbsent('AUDIT_SUSPECT [BYPASS-MENTION'))),
+    // ② 路径形态提及 ⇒ 仍记 AUDIT_SUSPECT(form=path)
+    cmdCase('P3-MENTION-2', '--out 路径形态提及 → 记 form=path',
+      'node tools/x.js --out .codebuddy/hooks/.gate-bypass', 0,
+      auditNote('AUDIT_SUSPECT [BYPASS-MENTION form=path]')),
+    // ② 负向：真·创建仍硬拦（分档不得削弱硬拦）
+    cmdCase('P3-MENTION-3', 'python 内联创建标记 → 硬拦(2)',
+      'python -c "open(\'.codebuddy/hooks/.gate-bypass\',\'w\')"', 2,
+      auditNote('[BYPASS-CREATE]')),
+    // ③ 枚举型动作值不计入删除目标（$log 仍为目标 ⇒ 仍拦）
+    cmdCase('P3-DEL-1', '$log + -ErrorAction → 目标仅 $log',
+      'Remove-Item $log -ErrorAction SilentlyContinue', 2,
+      allOf(auditNote('DELETE_TARGETS Remove-Item $log -ErrorAction SilentlyContinue -> [$log]'),
+        auditAbsent('SilentlyContinue]'))),
+    // ③ 负向对照：-Include 的值**必须**仍被当目标（剔除它会误放行 delete_allow 目录前缀）
+    cmdCase('P3-DEL-2', '-Include *.cs 的值仍作目标 → 拦截(2)',
+      'Remove-Item -Path back-end -Include *.cs -Recurse', 2,
+      auditNote('*.cs')),
+  );
+}
+
 // ── 主流程 ────────────────────────────────────────────
 
 console.log('╔══════════════════════════════════════════════════╗');
@@ -1073,6 +1155,8 @@ for (const tc of TESTS) {
   process.stdout.write(`  [${tc.id}] ${tc.name.padEnd(40, ' ')} `);
   
   try {
+    // ★ GATE-PARSE-3：审计断言按「本用例新增区段」判定（防跨用例串扰）
+    const auditFrom = auditText().length;
     setupState(tc);
     // ★ FIX-49 HOST 组：支持自定义 runner（H8 为静态分发完整性检查，无 hook 调用）
     const result = tc.customRun ? tc.customRun() : runHook(tc);
@@ -1082,7 +1166,7 @@ for (const tc of TESTS) {
     let isPass = tc.expectExit === undefined || result.exitCode === tc.expectExit;
     let assertDetail = '';
     if (isPass && typeof tc.assert === 'function') {
-      const a = tc.assert(result) || { ok: true };
+      const a = tc.assert(result, { auditSince: auditText(auditFrom) }) || { ok: true };
       isPass = !!a.ok;
       assertDetail = a.detail || '';
     }

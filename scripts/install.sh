@@ -153,7 +153,7 @@ if $DRY_RUN; then
             ;;
     esac
     echo "  Step 8 (门禁自检):"
-    echo "    $ node scripts/run-gate-tests.mjs   # 已装副本；分母应为 81（--quick 只精简明细，勿用于验收）"
+    echo "    $ node scripts/run-gate-tests.mjs   # 已装副本；分母应为 87（--quick 只精简明细，勿用于验收）"
     echo ""
     echo "╔══════════════════════════════════════════════════╗"
     echo "║  DRY RUN 完成。使用无 --dry-run 参数执行实际安装。  ║"

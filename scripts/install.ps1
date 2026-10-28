@@ -143,7 +143,7 @@ if ($DryRun) {
         Write-Host ""
     }
     Write-Host "  Step 8 (门禁自检):"
-    Write-Host "    > node scripts\run-gate-tests.mjs   # 已装副本；分母应为 81（--quick 只精简明细，勿用于验收）"
+    Write-Host "    > node scripts\run-gate-tests.mjs   # 已装副本；分母应为 87（--quick 只精简明细，勿用于验收）"
     Write-Host ""
     Write-Host "╔══════════════════════════════════════════════════╗"
     Write-Host "║  DRY RUN 完成。使用无 -DryRun 参数执行实际安装。    ║"
@@ -386,6 +386,69 @@ if ($DetectedIde -eq "codebuddy" -and $HookTarget) {
     }
 } elseif ($HookTarget) {
     Write-Host "  ⏭  Hook registration skipped（$DetectedIde uses a different registration mechanism）"
+}
+
+# ── Step 4b-2: team-wait-guard 注册（2026-10-27 新增，幂等）────
+# 团队等待硬门禁：PreToolUse 记录异步成员派发（task 且带 name）+ Stop 阻断"未核对收口"的
+# 结束请求（exit 2 + stderr 回灌模型）。依据：Stop hook exit 2 语义 2026-10-27 实测成立。
+# 与 Step 4b 分开：原段"已注册即整体跳过"，无法追加新条目；本段按命令串逐条补注册。
+if ($DetectedIde -eq "codebuddy" -and $HookTarget -and (Test-Path $settingsPath)) {
+    $wgRel  = ($SkillTarget -replace '\\', '/') + "/engine/gate/team-wait-guard.mjs"
+    $wgPre  = "node $wgRel --dispatch"
+    $wgStop = "node $wgRel --stop-guard"
+    try {
+        $raw = Get-Content $settingsPath -Raw -Encoding UTF8
+        $json = $raw | ConvertFrom-Json
+        $changed = $false
+        if ($null -eq $json.hooks) {
+            $json | Add-Member -NotePropertyName hooks -NotePropertyValue ([PSCustomObject]@{}) -Force
+        }
+        if ($null -eq $json.hooks.PreToolUse) {
+            $json.hooks | Add-Member -NotePropertyName PreToolUse -NotePropertyValue @() -Force
+        }
+        if ($null -eq $json.hooks.Stop) {
+            $json.hooks | Add-Member -NotePropertyName Stop -NotePropertyValue @() -Force
+        }
+        if ($raw -notmatch [regex]::Escape('team-wait-guard.mjs --dispatch')) {
+            $preEntry = [PSCustomObject]@{
+                matcher = ".*"
+                hooks   = @([PSCustomObject]@{ type = "command"; command = $wgPre; timeout = 10 })
+            }
+            $json.hooks.PreToolUse = @($json.hooks.PreToolUse) + $preEntry
+            $changed = $true
+            Write-Host "  ✅ team-wait-guard registered (PreToolUse --dispatch)"
+        } else {
+            Write-Host "  ✅ team-wait-guard already registered (PreToolUse)"
+        }
+        if ($raw -notmatch [regex]::Escape('team-wait-guard.mjs --stop-guard')) {
+            $stopEntry = [PSCustomObject]@{ type = "command"; command = $wgStop; timeout = 10 }
+            $stopArr = @($json.hooks.Stop)
+            if ($stopArr.Count -eq 0) {
+                $json.hooks.Stop = @([PSCustomObject]@{ hooks = @($stopEntry) })
+            } else {
+                $stopArr[0].hooks = @($stopEntry) + @($stopArr[0].hooks)
+                $json.hooks.Stop = $stopArr
+            }
+            $changed = $true
+            Write-Host "  ✅ team-wait-guard registered (Stop --stop-guard)"
+        } else {
+            Write-Host "  ✅ team-wait-guard already registered (Stop)"
+        }
+        if ($changed) {
+            $backup = "$settingsPath.bak-$(Get-Date -Format yyyyMMdd-HHmmss)"
+            Copy-Item $settingsPath $backup -Force
+            [IO.File]::WriteAllText([IO.Path]::GetFullPath($settingsPath), ($json | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false)))
+            Write-Host "     (backup: $backup)"
+            # 写回后自校验：单元素数组塌陷会让 IDE 读不到 hook ⇒ 静默失效，必须当场暴露
+            $chk = Get-Content $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if (@($chk.hooks.PreToolUse).Count -lt 1 -or @($chk.hooks.Stop).Count -lt 1) {
+                Write-Host "  ❌ settings.json 写回后结构异常（PreToolUse/Stop 为空）——请手工恢复备份"
+            }
+        }
+    } catch {
+        Write-Host "  ❌ Failed to register team-wait-guard: $_"
+        Write-Host "     Manual fix: hooks.PreToolUse += $wgPre ; hooks.Stop += $wgStop"
+    }
 }
 
 # ── Step 5: ACTIVE 状态初始化 ─────────────────

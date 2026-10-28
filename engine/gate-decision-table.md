@@ -2,7 +2,7 @@
 
 > **用途**：修改门禁规则（`gate-protocol.md` §一~§三 或 `gate-check.mjs`）后，对照本表逐条验证行为未退化。
 > **核心理念**：主表（S0~S7）机械可验证，附录 A 人工验证。
-> **最后更新**：2026-10-02（★ 迭代 `2026-10-01-002` 方案 α：新增 S9~S11 场景 + 验证流程第 6 条）
+> **最后更新**：2026-10-28（★ GATE-PARSE-3：S0 按实现真值拆分 S0a~S0d〔原文「stdin 空 / JSON 解析失败 ⇒ ALLOW」与 S4/S5 实测矛盾，已消除〕+ 新增 S12~S14）
 
 ---
 
@@ -12,7 +12,11 @@
 
 | # | 场景 | 活跃迭代 | 阶段 | 写入路径 | 预期 | 备注 |
 |:--:|------|:--:|:--:|------|:---:|------|
-| **S0** | 无工具上下文的防御放行 | 任意 | 任意 | — | **ALLOW** | stdin 空 / JSON 解析失败 / 非写入工具（`read_file`等）/ 无 filePath。exit 0 |
+| **S0** | 非写入工具 / 无 filePath 的防御放行 | 任意 | 任意 | — | **ALLOW** | 非写入工具（`read_file` 等）/ 无 filePath ⇒ exit 0。★ **2026-10-28 订正**：原文把「stdin 空 / JSON 解析失败」也写作 ALLOW，与 S4/S5 实测（**BLOCK** exit 2）矛盾，现按实现真值拆分（见 S0a/S0b） |
+| **S0a** | stdin 空 / 仅空白（pipe 模式） | 任意 | 任意 | — | **BLOCK** | fail-closed（`HOOK_NO_STDIN isTTY=false`）；TTY 无管道输入 ⇒ ALLOW。用例 `run-gate-tests.mjs` S4 |
+| **S0b** | stdin 带 BOM（单/双/三、可含前置空白） | 任意 | 任意 | 以 payload 为准 | **ALLOW**（正常解析） | FIX-14① 双重剥离（逐块 + 解析前）；用例 `P3-BOM-1`。★ JSON token **之间**含 U+FEFF 属语法非法 ⇒ 仍 BLOCK |
+| **S0c** | 畸形 JSON（`ended=true` 仍解析失败） | 任意 | 任意 | — | **BLOCK** | fail-closed + 留痕 `HOOK_PARSE_FAIL ended=true timedOut=<bool> bytes=<n>`。用例 S5 |
+| **S0d** | stdin 超时截断（`ended=false`） | 任意 | 任意 | — | **BLOCK**（已知边界） | 留痕 `ended=false` 即可判定"输入没送完"，**不是** BOM/编码问题；禁止"截断修补后再解析"（会静默放行） |
 | **S1** | 正常开发窗口 | ✅ in_progress | 04 | `front-end/src/pages/foo.vue` | **ALLOW** | 04 阶段=合法写码窗口，hook 无条件放行全部写入 |
 | **S2** | 无活跃迭代 | ❌ none | — | `back-end/.../SomeBLL.cs` | **BLOCK** | ACTIVE=none → "当前无活跃迭代" |
 | **S3** | 设计阶段写豁免目录 | ✅ in_progress | 01/02/03 | `docs/iterations/2026-07-23-020/需求分析.md` | **ALLOW** | EXEMPT_PATHS 匹配：`docs/iterations/`、`{IDE}/skills/`、`{IDE}/memory/` |
@@ -25,6 +29,9 @@
 | **S9** | 01-03 写 `requirements/iteration-context/` 下的 `.md`（R-14） | ✅ in_progress | 01/02/03 | `requirements/iteration-context/2026-10-01-002-context.md` | **ALLOW**（留痕 `EXEMPT_ALLOW … md-only`） | ★ E-6（2026-10-02）：**仅 .md**；同目录 `.cs/.sql` 仍 **BLOCK**（负向用例在案） |
 | **S10** | 04 派发白名单条目 + `.tmp`（原子写） | ✅ in_progress | 04 | `<白名单条目>.tmp` | **ALLOW** | ★ E-7（2026-10-02）：仅「**同条目** + `.tmp`」；非白名单 `*.tmp` 仍 **BLOCK**（负向用例在案） |
 | **S11** | 05 期就地修（方案 A：阶段级预授权）的留痕对账 | ✅ in_progress | 05 | `{ID}.state.yaml`（`defects[]` 含 `gate_window`） | **脚本校验（非 hook）** | ★ α（2026-10-02）：**不新增放行面**；对账由 `validate-state.py [R8]` 判定（有 `gate_window` ⇒ `fix_files` 必填；`fixed`+窗口 ⇒ `verified_by` 必填） |
+| **S12** | 命令**正文**提及逃生口标记（无写迹象） | 任意 | 任意 | — | **ALLOW + AUDIT_MENTION** | ★ GATE-PARSE-3（2026-10-28）：如 `notify.qqbot.js --what "… .gate-bypass …"` ⇒ 记 `AUDIT_MENTION [BYPASS-MENTION form=text]`（**不再**标 SUSPECT）。用例 `P3-MENTION-1` |
+| **S13** | 命令**路径参数**提及逃生口标记（无写迹象） | 任意 | 任意 | — | **ALLOW + AUDIT_SUSPECT** | ★ GATE-PARSE-3：如 `node x.js --out .codebuddy/hooks/.gate-bypass` ⇒ `form=path`。用例 `P3-MENTION-2`；真·创建仍由 `BYPASS-CREATE` 硬拦（用例 `P3-MENTION-3`） |
+| **S14** | 删除目标含值型动作参（`-ErrorAction SilentlyContinue`） | ✅ in_progress | 04 | 视登记而定 | **按字面目标判定** | ★ GATE-PARSE-3：枚举值不计入目标（`$log` 仍为目标 ⇒ 无登记即 BLOCK，用例 `P3-DEL-1`）；★ `-Include/-Filter` 的值**仍是目标**（用例 `P3-DEL-2`，防目录前缀误放行） |
 
 ### 主表验证命令模板
 
