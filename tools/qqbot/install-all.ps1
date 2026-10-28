@@ -91,7 +91,9 @@ if ($bootstrap) { Say '  MODE   : BOOTSTRAP (copy first, then re-run in place)' 
 # -- toolkit copy (shared by bootstrap and -DryRun reporting) -------
 function Copy-Toolkit([string]$src, [string]$dst, [bool]$dry) {
   $exDirs = @('node_modules', 'runtime')
-  $exFiles = @('daemon.config.json', 'qqbot.creds.json', 'DECOUPLING-PLAN.md')
+  # Instance files + the 0010 gate negative-probe residue (test artifact, also excluded by
+  # sync-skills.ps1 $ExcludeRelExact and the engine repo .gitignore -- keep the three in sync).
+  $exFiles = @('daemon.config.json', 'qqbot.creds.json', 'DECOUPLING-PLAN.md', '.gate-negative-probe.txt')
   $exExt = @('.log', '.jsonl')
   $copied = 0
   $skipped = 0
