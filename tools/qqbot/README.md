@@ -20,18 +20,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\qqbot\install-all.ps1
 
 # 方式 B：从别的项目或引擎仓库直接装 —— bootstrap 模式，先复制再就地重跑
 powershell -NoProfile -ExecutionPolicy Bypass -File <源路径>\tools\qqbot\install-all.ps1 -ProjectRoot <新项目根>
-
-# 方式 C：装 skill 时一并带进来（本目录尚未存在时用这条）
-#   安装期：加 -WithQqbot；补装：加 -WithQqbot -ComponentsOnly（轻量，不备份/不重装引擎）
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithQqbot
 ```
 `install-all.ps1` 按 9 步执行且**幂等**（可反复跑）：复制工具包 → 单机冲突检测 → `ws` 依赖 → 凭据 → 实例配置 → Stop hook → manifest `notifications.adapter` → 自启（服务 + 看门狗）→ `/health` 验证。
-
-> ★ `-CopyOnly`（2026-10-28 新增）：**只做第 1 步拷贝**然后退出，不碰冲突检测/依赖/凭据/hook/manifest/自启/health。
-> 它是 skill 安装器（`scripts/install.ps1 -WithQqbot`）的委托入口 —— 目的是让「哪些文件不随包分发」（凭据 / 实例配置 / 日志 / runtime）只有**一份**排除清单，
-> 避免第二份清单漂移后把 `qqbot.creds.json` 拷进新项目。手工调试时也可用：
-> `install-all.ps1 -ProjectRoot <新项目根> -CopyOnly [-DryRun]`（`-DryRun` 只报 `would copy N`）。
-> 装了 ≠ 启用：`-CopyOnly` 之后仍必须在目标项目里跑一次完整 `install-all.ps1`（凭据 / 自启 / 通知开关都在那一步）。
 
 常用参数：`-AppId/-Secret/-OpenId`（或 `-CredsSource <别处 qqbot.creds.json>`）写凭据；`-Port` 覆盖 `listenPort`；`-ResetConfig` 从模板重置实例配置（**与 `-Force` 分开**，避免为了越过冲突而误清 `handoffPrompt`）；`-NoService/-NoWatchdog/-NoHook/-NoManifest/-NoStart/-NoDeps` 跳过对应步骤；`-DryRun` 只打印计划；`-Force` 越过单机冲突（代价：原项目停止工作）。
 
@@ -316,15 +306,15 @@ curl http://127.0.0.1:18765/health                   # 读数：.stall.{file,con
   ```powershell
   node tools\qqbot\ask.js --prompt "…"                 # 默认等待 300s（1 片）
   node tools\qqbot\ask.js --prompt "…" --wait 600      # 指定秒数
-  # ★ 关闭等待（仅自动化 / 门禁回路）：必须注入环境变量，裸 --no-wait 会被拒（exit 1）
-  $env:QQ_ASK_AUTOMATION='1'; node tools\qqbot\ask.js --prompt "…" --no-wait
+  # ★ 没有「只登记不等待」的写法：--no-wait 已删除（恒 exit 1 且不登记）
   ```
 
   ★ **默认等待**（2026-10-26 翻转，原 opt-in 缺省关闭）：第 4 例空转实证（QQ `#1` 答复 9 秒到达仍无人消费）表明「漏带参数」是主要失效面 ⇒ 漏带参数的失效方向改为「多等 5 分钟」（可观测、可续等）。
-  ★★ **`--no-wait` 现为环境变量门控**（2026-10-26 第 5 例空转后加固）：必须 `QQ_ASK_AUTOMATION=1`，否则 `exit 1` 且**不登记**。动因 = 默认等待是 opt-out，某 IDE 会话曾以 `--json --no-wait` 登记 #3 后直接结束回合，用户 7 秒后回 A 无人消费 ⇒ 逃生口不能再由命令行单独触发。
-  合法调用方只有 `engine/gate/gate-check.mjs` 不可逆分支（detached spawn，已同批注入该变量）；**Agent 在 IDE 内登记一律不得关闭等待**（豁免路径也不存在）。
-  另：`--json` 不再吞掉「无等待者」告警 —— stdout 保持纯 JSON，告警走 stderr。
-  测试隔离可用 `QQ_ANSWER_DIR=<临时目录>` 覆盖答案目录（生产不要传）。
+  ★★ **`--no-wait` 已删除**（2026-10-28 · 第 6 例）：`$env:QQ_ASK_AUTOMATION="1"; ask.js … --no-wait` —— 环境变量门控只能约束"没读过文档"的调用方，而**声明豁免的正是被约束的同一个模型**。现口径：`--no-wait` 恒 `exit 1` 且**不登记**（HTTP 之前返回），代码里**不存在**只登记的分支。
+  三条合法出路：① 默认等待（300s/片，可重入）② 登记后立刻派 waiter 成员 ③ `--handoff` 交模式 B。
+  ★ **不可逆动作的知会不走本脚本**：门禁改为直发单向通知（`notify.qqbot.js --kind gate`，无 `#N`、无待确认项、无答案文件 —— 因此没有"答复无人消费"的问题）。
+  另：`--json` 现在只是输出格式（不再吞告警，因为没有告警分支了）；仍然**会等待**。
+  测试隔离可用 `QQ_ANSWER_DIR=<临时目录>` 覆盖答案目录、`QQ_ASK_LEDGER=<临时文件>` 覆盖 ask 台账（生产不要传）。
   等价退化 = 登记后手动跑 `wait-answer.ps1`（分片 ≤5 分钟/次，**总时限与 D 同为 30 分钟**（≤6 片）；**模式 D** 单片 900s、一轮 2 片 = 30 分钟 —— 细则唯一来源：`.codebuddy/skills/iteration-workflow/engine/waiting-protocol.md`；另见文末「方案 D」）：
 
   ```powershell
@@ -333,9 +323,10 @@ curl http://127.0.0.1:18765/health                   # 读数：.stall.{file,con
   # exit 2 + {"id":3,"answer":"wait-timeout"}      ← 本片未拿到，再调一次继续等
   ```
 
-- ★ **登记 ≠ 等待**（`waiting-protocol.md` §2 铁律）：只登记不等待 = 本次登记无效。三种合法等待形态**只取其一、不得都省**：① `ask.js` 默认等待（或显式 `--wait`）／登记后立即挂 `wait-answer.ps1`（模式 A）② 登记后立即派 waiter 成员（模式 D）③ 登记时带 `--handoff`（模式 B）。**只登记然后结束回合 ⇒ 答复必然无人消费**（IDE 会话唯一唤醒通道 = team 成员 `send_message`；2026-09-29 / 10-01 / 10-19 / **10-26** 四次实证）。
+- ★ **登记 ≠ 等待**（`waiting-protocol.md` §2 铁律）：只登记不等待 = 本次登记无效。三种合法等待形态**只取其一、不得都省**：① `ask.js` 默认等待（或显式 `--wait`）／登记后立即挂 `wait-answer.ps1`（模式 A）② 登记后立即派 waiter 成员（模式 D）③ 登记时带 `--handoff`（模式 B）。**只登记然后结束回合 ⇒ 答复必然无人消费**（IDE 会话唯一唤醒通道 = team 成员 `send_message`；2026-09-29 / 10-01 / 10-19 / 10-26 / **10-28** 五次实证）。
 - ★ **不存在「模式 E：用户在 IDE 聊天窗口直接回」**（2026-10-26）：IDE 内发言能唤醒会话、**QQ 答复不能**；非 `--handoff` 卡在服务端只落盘、不唤醒。⇒「反正他在 IDE，会直接回我」不构成等待方式。
 - **invariant**：`--wait` 命中后**不得**同回合再跑 `poll-answer.js --consume`（`--wait` 不写 `consumedAt`，会重复读到同一答复）；三套新鲜度判据 = `--wait` 判 JSON `ts` / `wait-answer.ps1` 判 mtime / `poll-answer.js` 判 `consumedAt`。
+- ★ **台账与消费证据**（2026-10-28 · `TOOL-QQWAIT-2`）：`ask.js` 把 `register / consumed / wait-end / giveup` 四类事件写入 `.codebuddy/temp/qq-ask-ledger.json`（测试用 `QQ_ASK_LEDGER` 指到临时文件，**必传**），Stop 侧守卫据此判「登记后有没有消费者」；读到答复时另写 `<answerDir>/<id>.done`（审计标记：只写不读、不写消费字段、不参与上面三套判据）。★ 同号 `<id>.done` 会在登记时被清理（两处：`ask.js` 与服务登记口），否则守卫判「已有消费者」恒真 ⇒ 静默失效。
 
 - **答案取值**：`confirm` / `choice` / `text` / `cancel` / `defer-ide` / `timeout` / `superseded`（超时由服务写入；`ask.js --timeoutSec` 可覆盖 `requestTimeoutMs`）。
 - ★ **答复类型 ≠ 是否授权**（TOOL-ANSWERKIND · 2026-10-20）：答案文件同时写 `answerKind` / `allowed` / `hint`（必要时 `visibleKey` / `visibleLabel`），消费端**先判 `allowed` 再决定动作**：
@@ -557,7 +548,7 @@ New-Item .codebuddy\hooks\.qq-notify-off -ItemType File  # 全局静默（含其
 node tools/qqbot/notify.qqbot.js --kind done "M4 贴签核对改造完成（13/13）"
 node tools/qqbot/notify.qqbot.js --kind fail "msbuild 失败：CS0246 ×3"
 node tools/qqbot/notify.qqbot.js --kind decision --id 12 "已登记 #12：是否按方案 A 落盘？"   # 缺 --id ⇒ exit 1
-node tools/qqbot/ask.js --prompt "是否执行 DDL？" --kind irreversible                        # 不可逆动作（hook 已强制）
+node tools/qqbot/notify.qqbot.js --kind gate "【不可逆操作 · 已被门禁拦截】svn commit …"      # 单向知会（无 #N）
 ```
 
 **配置**（`daemon.config.json` → `notify`）：
@@ -573,7 +564,8 @@ node tools/qqbot/ask.js --prompt "是否执行 DDL？" --kind irreversible      
 
 **统一静默开关**（与门禁共用，**本出口此前不认**）：`QQ_NOTIFY=0` 或建 `.codebuddy/hooks/.qq-notify-off`；客户端 + 服务 `/notify` 双侧检查。
 
-**不可逆动作强制决策**（`gate-check.mjs`）：拦截原因命中 `svn commit / git push / run_ddl / drop|truncate table / 部署|发布 / 删除文件` ⇒ 不再发普通拦截通知，而是 **spawn `ask.js --kind irreversible --timeoutSec 7200`** 登记成必答项（此前只靠 `handoffPrompt` 文字约定）。
+**不可逆动作强制决策**（`gate-check.mjs`）：拦截原因命中 `svn commit / git push / run_ddl / drop|truncate table / 部署|发布 / 删除文件` ⇒ 不再发普通拦截通知，而是**立即发一条单向知会**（`notify.qqbot.js --kind gate`，detached spawn）。
+★ 2026-10-28（`TOOL-QQWAIT-2`）改口径：原实现 **spawn `ask.js --kind irreversible --timeoutSec 7200`** 登记成"必答项"，但该登记**无 `command`** ⇒ 用户「确认#N」后什么都不执行、回执却说"开始执行"；答复文件也无任何消费者，2h 后还落一条 `timeout` ⇒ 每条不可逆卡都制造一份「未消费答复」脏数据。现改为**不产生待确认项**的单向通知：无 `#N`、不落答案文件 ⇒ 结构上不存在「无人消费」；用户在 IDE 内确认（QQ 侧回复不再被消费，知会文案已写明）。
 
 ### FIX-21：门禁通知去误报 —— 只有「会话结束仍被阻断」才推（2026-09-18）
 

@@ -42,6 +42,14 @@ const IDE_ROOT = join(GATE_DIR, '..', '..', '..', '..');
 const TMP_DIR = join(IDE_ROOT, 'temp');
 const STATE_FILE = join(TMP_DIR, 'team-wait-guard.json');
 const LOG_FILE = join(TMP_DIR, 'team-wait-guard.log');
+// ★ TOOL-QQWAIT-2（2026-10-28）：ask 台账（由 `tools/qqbot/ask.js` 写入，本守卫**只读**）。
+//   为什么读台账而不是解析命令行：PreToolUse 阶段拿不到 `#id`（id 由服务端分配、只出现在工具返回）；
+//   按 `/ask\.js/` 匹配文本又会把 `Get-Content …ask.js` 之类全记成登记（误拦概率≈1）。
+//   ★ 变量名刻意用小驼峰：engine/gate/ 新增**顶层 UPPER_SNAKE** 会撞 audit-engine.py 的 A10-f
+//     常量计数基线（17），超基线是 **ERR 不是 warn** —— 同款踩坑见本文件 IDE_ROOT 处注释。
+//   ★ 用 let（非 const）：`--selftest` 会把它改指向隔离文件，**绝不能让自测读到生产台账**
+//     （否则真实存在的未消费登记会让「① 无派发 ⇒ 放行」等既有用例红，且红得莫名其妙）。
+let askLedger = join(TMP_DIR, 'qq-ask-ledger.json');
 
 const WAIT_WINDOW_MIN = 90;              // 派发记录有效期（分钟）
 const WAIT_WINDOW_MS = WAIT_WINDOW_MIN * 60 * 1000;
@@ -167,6 +175,80 @@ function isTeamMemberSessionIn(teamsDir, sid) {
   return false;
 }
 
+/**
+ * ★ TOOL-QQWAIT-2（2026-10-28）：读 ask 台账。纯文本 JSON，零外部依赖、零 HTTP
+ *（Stop hook 只有 10s 上限，且服务可能停 ⇒ 不能查 `/pending`）。
+ * 损坏/半写一律返回空台账 ⇒ 判据不触发（fail-open，与本脚本总体安全设计一致）。
+ */
+function loadAskLedger(file) {
+  try {
+    if (!existsSync(file)) return { events: [] };
+    const j = JSON.parse(readFileSync(file, 'utf-8').replace(/^\uFEFF/, ''));
+    if (j && Array.isArray(j.events)) return j;
+  } catch (e) { log('ASK_LEDGER_ERR', String((e && e.message) || e)); }
+  return { events: [] };
+}
+
+/**
+ * 判「本会话登记过 ask，但没有任何消费者证据」。
+ * 纯函数（state / ledger 路径可注入）⇒ 供 --selftest 直接调用。
+ *
+ * 判据 = 以下四条同时成立（缺一即放行）：
+ *   ① 台账里有 register 事件，且 id 未 consumed、未 giveup，且未超窗（沿用 90min 常量）；
+ *   ② 该登记不是 `--handoff`（模式 B：服务端确认后会起 headless 消费）；
+ *   ③ 该登记之后本会话没有派发过 waiter 成员（模式 D：成员 send_message 就是消费者）；
+ *   ④ 同一 conv 的同一 `#N` 尚未被拦过（每 id 只拦一次，防死循环）。
+ *
+ * ★ 为什么需要 ① 的 consumed/giveup 两个白名单（不加就会误拦正常流程）：
+ *   · consumed：ask.js 默认等待命中后继续干活，本回合内**不会再有命令行记录** ⇒ 只有台账能证明有人读过；
+ *   · giveup：waiting-protocol §3 规定「≤6 片，片满停止等待」⇒ 用尽后结束回合是**协议要求的**行为。
+ * ★ 为什么 ② 不算"自声明豁免"：`--handoff` 不是"关掉等待"，它把消费责任移交给服务端
+ *   （用户答复会 runHeadless 起新会话）⇒ 消费者从"本进程"换成"headless"，不是没有消费者。
+ * ★ conv 匹配：台账的 conv 取自子进程环境变量（CODEBUDDY_SESSION_ID / CLAUDE_SESSION_ID），
+ *   与 Stop 的 session_id 同形但不保证同源 ⇒ 精确未命中时退化为「最新一条未消费登记」，
+ *   并记 `ASK_MATCH=none-global` 留痕（宁可多拦一次也不静默失效）。
+ */
+function judgeAsk(sid, myConv, state, ledgerFile) {
+  const ev = loadAskLedger(ledgerFile).events.filter((e) => e && e.id != null);
+  if (!ev.length) return null;
+  const now = Date.now();
+  const regs = new Map(); const consumed = new Set(); const giveup = new Set();
+  for (const e of ev) {
+    const id = String(e.id);
+    if (e.event === 'register') regs.set(id, e);           // 同 id 多次登记 ⇒ 取最后一条
+    else if (e.event === 'consumed') consumed.add(id);
+    else if (e.event === 'giveup') giveup.add(id);
+  }
+  const cands = [];
+  for (const [id, r] of regs) {
+    const t = Number(r.t || 0);
+    if (!t || now - t > WAIT_WINDOW_MS) continue;
+    if (consumed.has(id) || giveup.has(id)) continue;
+    if (r.handoff) continue;
+    cands.push(r);
+  }
+  if (!cands.length) return null;
+
+  const mine = cands.filter((r) => r.conv && (r.conv === myConv || r.conv === sid));
+  const pick = mine.length ? mine[mine.length - 1] : cands[cands.length - 1];
+  const how = mine.length ? 'conv' : 'none-global';
+  const pickTs = Number(pick.t || 0);
+
+  // 模式 D：登记之后派过 waiter 成员 ⇒ 有消费者
+  const all = [state.sessions[sid]].concat(Object.keys(state.sessions).map((k) => state.sessions[k]));
+  const dispatched = all.filter(Boolean)
+    .reduce((acc, r) => acc.concat(Array.isArray(r.dispatched) ? r.dispatched : []), [])
+    .filter((d) => d && Number(d.ts || 0) > pickTs);
+  if (dispatched.length) return null;
+
+  // 每个 id 只拦一次（不因新登记重置 ⇒ 防「拦→重跑 ask→再拦」livelock）
+  const key = myConv || sid;
+  const guardedFor = (state.askGuarded && state.askGuarded[key]) || '';
+  if (guardedFor === String(pick.id)) return null;
+
+  return { id: String(pick.id), kind: String(pick.kind || ''), ts: pickTs, how, key };
+}
+
 /** 返回 { code, stderr } —— 纯函数，供 --selftest 直接调用 */
 function handleDispatch(inp, file) {
   const d = extractDispatch(inp);
@@ -190,7 +272,8 @@ function handleDispatch(inp, file) {
   return { code: 0, stderr: '' };
 }
 
-function handleStop(inp, file) {
+function handleStop(inp, file, ledger) {
+  const askFile = ledger || askLedger;
   if (inp.__parseError) {
     log('STOP_SKIP', 'stdin 不可解析（fail-open）: ' + inp.__parseError);
     return { code: 0, stderr: '' };
@@ -220,6 +303,32 @@ function handleStop(inp, file) {
   const state = loadState(file);
   let rec = state.sessions[sid];
   const myConv = extractConvId(inp);
+
+  // ★ TOOL-QQWAIT-2（2026-10-28）：**先判 ask，再判派发**。
+  //   顺序不可调换：第 6 例空转的形状正是「没派过任何成员」⇒ 旧代码在下面 `!matchedBy` 处
+  //   直接 `STOP_SKIP 无本会话派发台账 ⇒ 放行`，ask 判据永远没有机会执行。
+  try {
+    const hit = judgeAsk(sid, myConv, state, askFile);
+    if (hit) {
+      const t = new Date(hit.ts);
+      const hhmm = isNaN(t) ? '?' : `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+      const msg = [
+        `[team-wait-guard] 本会话登记过 QQ 确认项 #${hit.id}（${hhmm}${hit.kind ? '，kind=' + hit.kind : ''}），但**没有任何消费者证据** —— 拒绝结束本回合。`,
+        '判据（四条同时成立才拦）：台账里该 #N 未 consumed（没有进程读到答复）、未 giveup（6 片未用尽）、非 --handoff、登记后也没派过 waiter。',
+        '结束前必须三选一：',
+        '  (A) 不要结束回合 —— 登记本身就是等待（默认 300s/片，本项尚未等到答复）；',
+        '  (B) 立刻派 waiter 成员（模式 D）—— 用户 QQ 回复后经 send_message 唤醒本会话；',
+        '  (C) 登记时带 --handoff（模式 B），交 headless 接管。',
+        '说明：不得只写「等它回报」；同一个 #N 只拦一次，不会死循环。',
+      ].join('\n');
+      state.askGuarded = state.askGuarded || {};
+      state.askGuarded[hit.key] = hit.id;
+      saveState(state, file);
+      log('ASK_BLOCK', `${sid.slice(0, 8)} conv=${(myConv || '-').slice(0, 8)} id=${hit.id} match=${hit.how}`);
+      return { code: 2, stderr: msg };
+    }
+  } catch (e) { log('ASK_JUDGE_ERR', String((e && e.message) || e)); }
+
   let matchedBy = (rec && Array.isArray(rec.dispatched) && rec.dispatched.length) ? 'session' : '';
 
   // ② convId 精确匹配（session_id 不同源时的正解，2026-10-27 实测：两者都带 transcript_path）
@@ -280,8 +389,16 @@ function handleStop(inp, file) {
 // ── 自测：纯函数调用，不依赖真实 stdin ──
 function selftest() {
   const file = join(TMP_DIR, 'team-wait-guard.selftest.json');
+  // ★ TOOL-QQWAIT-2：自测一律指向**隔离台账**（生产台账里若有真实未消费登记，
+  //   会把「① 无派发 ⇒ 放行」之类既有用例判红，看起来像回归其实是环境污染）。
+  const lf = join(TMP_DIR, 'qq-ask-ledger.selftest.json');
+  askLedger = lf;
   try { if (existsSync(file)) writeFileSync(file, '{"sessions":{}}', 'utf-8'); } catch { /* ignore */ }
-  const reset = () => { try { writeFileSync(file, '{"sessions":{}}', 'utf-8'); } catch { /* ignore */ } };
+  const resetAsk = () => { try { writeFileSync(lf, '{"events":[]}', 'utf-8'); } catch { /* ignore */ } };
+  const reset = () => {
+    try { writeFileSync(file, '{"sessions":{}}', 'utf-8'); } catch { /* ignore */ }
+    resetAsk();
+  };
   const cases = [];
   const T = (name, fn) => { try { const ok = fn(); cases.push([ok, name]); } catch (e) { cases.push([false, name + ' :: ' + e.message]); } };
 
@@ -336,6 +453,44 @@ function selftest() {
     handleDispatch({ session_id: 'conv-a', tool_name: 'task', tool_input: { name: 'm-conv' }, transcript_path: tp }, file);
     const r = handleStop({ session_id: 'conv-b', stop_hook_active: false, transcript_path: tp }, file);
     return r.code === 2 && r.stderr.includes('m-conv');
+  });
+
+  // ── ★ TOOL-QQWAIT-2（2026-10-28）：ask 判据（登记后必须有消费者）──
+  //   事故形状（第 6 例）：只登记 ask + 结束回合，无任何派发 ⇒ 旧判据 `无本会话派发台账 ⇒ 放行`。
+  const writeLedger = (events) => writeFileSync(lf, JSON.stringify({ events: events }), 'utf-8');
+  const regEv = (id, extra) => Object.assign({ id: id, conv: SID, t: Date.now(), event: 'register', kind: 'decision', handoff: false }, extra || {});
+
+  T('⑬ ask 登记后无任何消费者 ⇒ 拦截(2)，stderr 含 #id', () => {
+    reset(); writeLedger([regEv(41)]);
+    const r = handleStop(stopIn(), file);
+    return r.code === 2 && r.stderr.indexOf('#41') >= 0;
+  });
+  T('⑭ 同一 #N 第二次结束 ⇒ 放行（每 id 只拦一次，防 livelock）', () => handleStop(stopIn(), file).code === 0);
+  T('⑮ 有 consumed 事件 ⇒ 放行（默认等待命中后继续干活不得误拦）', () => {
+    reset(); writeLedger([regEv(42), { id: 42, t: Date.now(), event: 'consumed', answer: 'choice' }]);
+    return handleStop(stopIn(), file).code === 0;
+  });
+  T('⑯ giveup（6 片用尽）⇒ 放行（§3 协议要求停止等待）', () => {
+    reset(); writeLedger([regEv(43), { id: 43, t: Date.now(), event: 'wait-end' }, { id: 43, t: Date.now(), event: 'giveup' }]);
+    return handleStop(stopIn(), file).code === 0;
+  });
+  T('⑰ --handoff（模式 B）⇒ 放行（服务端起 headless 消费）', () => {
+    reset(); writeLedger([regEv(44, { handoff: true })]);
+    return handleStop(stopIn(), file).code === 0;
+  });
+  T('⑱ 登记之后派了 waiter ⇒ 不按 ask 判据拦（模式 D）', () => {
+    reset(); writeLedger([regEv(45)]);
+    handleDispatch(dispatchIn('waiter-q'), file);
+    const r = handleStop(stopIn(), file);
+    return r.stderr.indexOf('#45') < 0;
+  });
+  T('⑲ ask 台账损坏 ⇒ 放行(fail-open)，不得误拦', () => {
+    reset(); writeFileSync(lf, '{broken', 'utf-8');
+    return handleStop(stopIn(), file).code === 0;
+  });
+  T('⑳ 超窗(>90min)的未消费登记 ⇒ 放行', () => {
+    reset(); writeLedger([{ id: 46, conv: SID, t: Date.now() - (WAIT_WINDOW_MS + 60000), event: 'register' }]);
+    return handleStop(stopIn(), file).code === 0;
   });
 
   const pass = cases.filter(([ok]) => ok).length;

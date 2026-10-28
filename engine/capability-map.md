@@ -94,7 +94,7 @@
 | Team 并行决策 | 四维判据 + ≤3 / ≤15 万 | `team-agent-strategy.md` | ✅ |
 | 成员直写白名单 | dispatch_whitelist | `phase-04.md` · `engine/gate/gate-check.mjs` | ✅ |
 | 成员增量落盘 | team-out + 完成标记 | `phase-04.md` | ✅ |
-| 等待协议 A/B/D | 工位（`ask.js --wait` 首选 · 工具层待 TOOL-QQWAIT 落地）/ headless / QQ 唤醒 | `waiting-protocol.md` | ✅ |
+| 等待协议 A/B/D | 工位（`ask.js` 默认等待，**无「只登记」分支**；`--no-wait` 已删除）/ headless / QQ 唤醒（waiter 成员 `send_message`）；不可逆门禁卡 = 单向知会（无待确认项） | `waiting-protocol.md` | ✅ |
 | QQ 指令集 | /help · 开新迭代 · 继续 · 模型列表 | 项目侧 tools/qqbot/ | ✅ |
 | 确认门 QQ 登记 | 未登记 ⇒ 单向提醒（G1） | `engine/gate/gate-check.mjs` | ✅ |
 | 接管会话面板 | hub 确认/接管/派发 | 项目侧 tools/session-hub/ | ✅ |

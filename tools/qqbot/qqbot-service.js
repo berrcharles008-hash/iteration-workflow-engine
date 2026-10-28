@@ -1607,6 +1607,13 @@ function clearStaleAnswer(id) {
       log('[ANSWER CLEAR #' + id + '] 已清理同号历史答案文件（防撞号误读）');
     }
   } catch (e) { log('[ANSWER CLEAR ERR #' + id + '] ' + e.message); }
+  // ★ TOOL-QQWAIT-2（2026-10-28）：同号 `.done` 必须一并清理（否则 Stop 侧「已有消费者」恒真）。
+  //   这里是**所有登记来源**（ask.js / notify-enqueue / 门禁 / watcher）的统一清理口，
+  //   只改 ask.js 一侧无效；两处必须同批维护（另一处 = tools/qqbot/ask.js 的 clearStaleAnswer）。
+  try {
+    const d = answerFilePath(id).replace(/\.json$/, '.done');
+    if (fs.existsSync(d)) fs.unlinkSync(d);
+  } catch (e) { /* .done 仅供审计与 Stop 判据，清理失败不致命 */ }
 }
 /**
  * ★ TOOL-ANSWERKIND（2026-10-20）：答复语义表 —— 答案值 → 是否构成「授权」。

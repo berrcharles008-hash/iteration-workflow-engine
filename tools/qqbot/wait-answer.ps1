@@ -50,6 +50,14 @@ while ((Get-Date) -lt $deadline) {
     if ($useIt) {
       $raw = [System.IO.File]::ReadAllText($file, [System.Text.Encoding]::UTF8)
       Write-Output $raw
+      # TOOL-QQWAIT-2 (2026-10-28): consumer-evidence marker <id>.done (audit + Stop-side criterion).
+      #   It only proves "a process read this answer file"; it does NOT mean the IDE session can be woken.
+      #   Never used as a freshness criterion (do not write consumedAt, do not touch mtime).
+      try {
+        $donePath = Join-Path $proj ('.codebuddy\temp\qq-answers\' + $Id + '.done')
+        $doneJson = '{"id":' + $Id + ',"by":"wait-answer","ts":"' + (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ') + '"}'
+        [System.IO.File]::WriteAllText($donePath, $doneJson, (New-Object System.Text.UTF8Encoding($false)))
+      } catch { }
       # TOOL-ANSWERKIND (2026-10-20): see header. answerKind/allowed are written by qqbot-service.js;
       #   legacy answer files (no 'allowed' property) fall back to the table below (old 'ide' = NOT authorized).
       $allowed = $false

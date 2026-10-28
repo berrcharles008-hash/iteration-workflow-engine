@@ -2504,26 +2504,30 @@ function sendGateNotify(ev) {
     //   ⇒ 复用词元判定（strip `[CMD] ` 前缀 + 容忍 80 字符截断；评审片 3 🔴 FIX-20 只修一半问题）。
     const irreversibleText = reason + ' ' + String(target || '') + ' ' + detail;
     if (IRREVERSIBLE_RE.test(irreversibleText) || textHasGitChange(irreversibleText)) {
-      const askPath = join(PROJECT_DIR, 'tools/qqbot/ask.js');
-      if (existsSync(askPath)) {
-        const askPrompt = [
-          '【不可逆操作 · 需你本人确认】',
+      // ★ TOOL-QQWAIT-2（2026-10-28）：不可逆动作改**单向知会**，不再经 ask.js 登记待确认项。
+      //   旧形态（`ask.js --kind irreversible … --no-wait`）有三个结构性问题：
+      //     ① 该登记无 `command` ⇒ 用户「确认#N」后**什么都不执行**，回执却说「开始执行」；
+      //     ② 答案文件无人读取（没有等待者）⇒ 每条不可逆卡都制造一份「未消费答复」脏数据；
+      //     ③ 为它保留的 `--no-wait` 豁免，反过来成了跳过等待的合法借口（第 6 例 = `$env:` 自证豁免）。
+      //   现在：不落 pending、不落答案文件 ⇒ 结构上不存在「无人消费」问题。
+      //   ★ 不走 NOTIFIER 适配器：`adapter: none` 会让不可逆操作**静默**（notify-adapter 的 R3 边界，禁改）。
+      //   ★ 失效形态（防回归）：若 notify.qqbot.js 缺失，下方会回落到入队路径（带 #N），不会静默丢失。
+      const notifyPath = join(PROJECT_DIR, 'tools/qqbot/notify.qqbot.js');
+      if (existsSync(notifyPath)) {
+        const notice = [
+          '【不可逆操作 · 已被门禁拦截】',
           String(reason).slice(0, 200),
           '工具：' + (ev.tool || '?'),
           '目标：' + (target ? String(target).slice(0, 120) : '(未提供)'),
           '迭代：' + (ctx.id ? `${ctx.id}（阶段 ${ctx.phase || '?'}）` : '(无活跃迭代)'),
           '',
-          '此类操作不会自动执行，也不会被 headless 代跑；请在 IDE 内确认，或回「确认#N」登记意图。',
+          '此类操作不会自动执行，也不会被 headless 代跑；请在 IDE 内确认。',
+          '（本条为单向知会：QQ 侧不产生待确认项，回复不会被消费。）',
         ].join('\n');
-        // ★ 2026-10-26：`ask.js` 改「默认等待」⇒ 本回路必须显式 `--no-wait`：
-        //   本 spawn 是 detached + hook 15s 超时后不等子进程 ⇒ 若默认等待会白挂 300s 成孤儿。
-        // ★ 同日第 5 例空转后加固：`--no-wait` 已被 `QQ_ASK_AUTOMATION=1` 门控（fail-closed），
-        //   本回路是**唯一合法调用方** ⇒ 必须在此注入，否则拦截事件会静默登记不上（比拦截失败更隐蔽）。
-        const askChild = spawn(process.execPath,
-          [askPath, '--prompt', askPrompt, '--kind', 'irreversible', '--timeoutSec', '7200', '--no-wait'],
-          { detached: true, stdio: 'ignore', windowsHide: true, env: Object.assign({}, process.env, { QQ_ASK_AUTOMATION: '1' }) });
-        askChild.unref();
-        audit('QQ_ASK_IRREVERSIBLE', msg + ` | 工具=${ev.tool || '?'} 目标=${target || '-'}`);
+        const child = spawn(process.execPath, [notifyPath, notice, '--kind', 'gate'],
+          { detached: true, stdio: 'ignore', windowsHide: true });
+        child.unref();
+        audit('QQ_NOTICE_IRREVERSIBLE', msg + ` | 工具=${ev.tool || '?'} 目标=${target || '-'}`);
         return;
       }
     }

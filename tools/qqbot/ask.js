@@ -16,18 +16,19 @@
 //          （★ 不用 3：`request-confirm.js` 已占用 3 = 已登记但送达未确认，同家族双义；评审 R3 提出）
 //        · 片满无答复 ⇒ 输出 wait-timeout + exit 2（可重入续等）
 //     秒数：缺省 300（1 片）；`--wait 600` = 600；与 waiting-protocol §3「A = ≤5 分钟/片 × ≤6 片」口径一致
-//   ★ `--no-wait` = 关闭等待（逃生口）：只登记即退出。**仅供自动化 / 门禁回路使用**（如
-//     `engine/gate/gate-check.mjs` 的不可逆分支以 detached spawn 调本脚本 —— hook 15s 超时后
-//     子进程会变孤儿，若默认等待会白挂 300s）。Agent 在 IDE 内登记时**禁止**用它。
-//     ★ 默认等待的动因（2026-10-26 第 4 例空转实证）：opt-in 缺省关闭时，Agent 漏带 `--wait`
-//       即「只登记不等待」⇒ QQ 答复无人消费。默认值改为等待 ⇒ 漏带参数的失效方向从
-//       「静默空转」翻转为「多等 5 分钟」（可观测、可续等）。
-//   ★★ `--no-wait` 现为**环境变量门控**（2026-10-26 第 5 例空转后加固）：必须
-//      `QQ_ASK_AUTOMATION=1` 才生效，否则 exit 1（见下方 NO_WAIT_ENV 校验）。
-//      动因：默认等待是 opt-out ⇒ 一次「担心工具调用超时」的自我说服即可绕过 —— 第 5 例
-//      正是 IDE 会话显式带 `--json --no-wait` 登记 #3 后跳过轮询直接结束回合，用户 7 秒后
-//      回 A 却无人消费。⇒ 把逃生口从「命令行即可触发」收紧为「须由调用方注入环境变量」，
-//      使「默认等待」成为**不可被提示词绕过的机制**而非建议。
+//   ★★ `--no-wait` 已**删除**（2026-10-28 TOOL-QQWAIT-2 · 第 6 例空转后）：
+//     恒 exit 1 且**不登记**（在任何 HTTP 请求之前返回）。三条合法出路：
+//       ① 默认等待（本脚本行为，300s/片、可重入）② 登记后立刻派 waiter 成员 ③ `--handoff` 交模式 B。
+//     动因（两次加固都被同一形状绕过）：10-26 第 4 例 = 漏带参数；第 5 例 = `--json --no-wait`
+//       顺手绕过；第 6 例 = `$env:QQ_ASK_AUTOMATION="1"; ask.js … --no-wait` —— **豁免的声明方
+//       与被约束方是同一个模型** ⇒ 凡由调用方自己声明的豁免，等于没有豁免。
+//     ⇒ 不再保留任何「关掉等待」的开关；不可逆动作的知会改由 gate-check 直接调
+//       `notify.qqbot.js`（单向通知，不产生待确认项、不落答案文件，因此也没有"无人消费"问题）。
+//   ★ 审计台账（2026-10-28 TOOL-QQWAIT-2）：登记 / 消费 / 片满 / 放弃 四类事件写入
+//     `<IDE>/temp/qq-ask-ledger.json`，供 `team-wait-guard --stop-guard` 判「登记后有没有消费者」。
+//     该台账**不参与**答案新鲜度判据（不写 consumedAt、不碰 mtime），只做 Stop 侧判据与审计。
+//   ★ 消费证据（2026-10-28 TOOL-QQWAIT-2）：命中答复后写 `<answerDir>/<id>.done`（审计标记，
+//     只写不读、不参与任何等待语义）。它证明「有进程读过这份答复」，**不等于**「会话能被唤醒」。
 //
 // 输出：人类可读两行 + `#id=<n>`（供脚本解析）；加 --json 则只输出 {"id":n,"status":"pending"}
 // 配套：`tools/qqbot/wait-answer.ps1 -Id <n> -TimeoutSec 300`（轮询答案文件，拿到即返回 JSON）
@@ -60,6 +61,63 @@ function clearStaleAnswer(id) {
       console.error('[WARN] 已清理同号历史答案文件 #' + id + '.json（防撞号误读）');
     }
   } catch (e) { console.error('[WARN] 清理同号答案文件失败：' + e.message); }
+  // ★ TOOL-QQWAIT-2（2026-10-28）：同号 `.done` 必须一并清理。
+  //   失效形态（勿删本段）：id 会在服务重启后从 1 复用，上轮的 `3.done` 若残留 ⇒ Stop 侧
+  //   「本 id 已有消费者」判据恒真 ⇒ 守卫静默 fail-open，且日志里看不出任何异常。
+  try {
+    const d = path.join(answerDir(), String(id) + '.done');
+    if (fs.existsSync(d)) fs.unlinkSync(d);
+  } catch (e) { /* 清理失败不致命（.done 仅供审计与 Stop 判据，非主通道） */ }
+}
+/**
+ * ★ TOOL-QQWAIT-2（2026-10-28）：Ask 台账（供 Stop 侧判断「登记后有没有消费者」）。
+ *   为什么由 ask.js 自己写，而不是让 hook 解析命令行：
+ *     ① hook 在 PreToolUse 阶段**拿不到** `#id`（id 由服务端分配、只出现在工具返回里）；
+ *     ② 按命令文本匹配 `/ask\.js/` 会把 `Get-Content …ask.js` / `Select-String …` 全记成登记
+ *        （误拦概率≈1）；③ 脚本被包装（`$s='ask'; node …/$s.js`）时又完全不命中。
+ *   ⇒ 唯一同时解决三者的做法 = 登记方自己落结构化记录。
+ *   目录固定为项目 temp（**不随 QQ_ANSWER_DIR 漂移**——那是测试隔离用的答案目录）；
+ *   测试需要隔离时用 QQ_ASK_LEDGER 显式指定。
+ */
+function ledgerFile() {
+  const ov = process.env.QQ_ASK_LEDGER;
+  return (ov && String(ov).trim())
+    ? path.resolve(String(ov).trim())
+    : path.join(PROJ_ROOT, '.codebuddy', 'temp', 'qq-ask-ledger.json');
+}
+function convId() {
+  const v = process.env.CODEBUDDY_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
+  return String(v).trim().toLowerCase();
+}
+const LEDGER_MAX = 400;
+function ledgerAppend(ev) {
+  try {
+    const f = ledgerFile();
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    let doc = { events: [] };
+    try {
+      const raw = fs.readFileSync(f, 'utf8').replace(/^\uFEFF/, '');
+      const j = JSON.parse(raw);
+      if (j && Array.isArray(j.events)) doc = j;
+    } catch (e) { /* 不存在 / 半写 / 损坏 ⇒ 重建（台账损坏只会少一条判据，不阻断登记） */ }
+    doc.events.push(Object.assign({ id: null, t: Date.now(), ts: new Date().toISOString() }, ev));
+    if (doc.events.length > LEDGER_MAX) doc.events = doc.events.slice(-LEDGER_MAX);
+    fs.writeFileSync(f, JSON.stringify(doc), 'utf8');
+  } catch (e) { /* fail-open：台账写失败不得影响登记/等待主链 */ }
+}
+/** 本 id 已出现过几次「片满」——用于判定协议是否已用尽（§3：≤6 片） */
+function sliceCount(id) {
+  try {
+    const j = JSON.parse(fs.readFileSync(ledgerFile(), 'utf8').replace(/^\uFEFF/, ''));
+    return (j.events || []).filter((x) => x && x.id === id && x.event === 'wait-end').length;
+  } catch (e) { return 0; }
+}
+/** 消费证据（审计标记）：只写不读、不参与等待语义、不写 consumedAt */
+function writeDone(id, extra) {
+  try {
+    const f = path.join(answerDir(), String(id) + '.done');
+    fs.writeFileSync(f, JSON.stringify(Object.assign({ id: id, by: 'ask-wait', ts: new Date().toISOString() }, extra || {})), 'utf8');
+  } catch (e) { /* 与主链无关 */ }
 }
 /**
  * ★ TOOL-QQWAIT（2026-10-19）：同进程等待答复（模式 A 的首选实现）。
@@ -122,7 +180,7 @@ function parseArgs() {
       const nx = argv[i + 1];
       if (nx != null && /^\d+$/.test(nx)) { a.waitSec = parseInt(nx, 10); i++; } // `--wait` 无值 = 300；`--wait 600` = 600
     }
-    else if (k === '--no-wait') a.noWait = true;                                 // ★ 2026-10-26：关闭默认等待（自动化专用）
+    else if (k === '--no-wait') a.noWait = true;                                 // ★ TOOL-QQWAIT-2：已废弃，见下方硬拒绝
   }
   return a;
 }
@@ -149,26 +207,25 @@ if (!a.prompt) {
   console.error('Usage: node ask.js --prompt "..." [--kind ask] [--timeoutSec 1800] [--json] [--handoff --handoffPrompt "..."]');
   console.error('       node ask.js --prompt "问题" --options "A=方案一;B=方案二" [--recommend A]');
   console.error('       node ask.js --prompt "问题" --wait [秒]        # 默认已等待（缺省 300）；本参数只用于改秒数');
-  console.error('       QQ_ASK_AUTOMATION=1 node ask.js --prompt "…" --no-wait   # 关闭等待（仅自动化/门禁回路）');
   process.exit(1);
 }
-// ★★ 2026-10-26（第 5 例空转后加固）：`--no-wait` 须 `QQ_ASK_AUTOMATION=1` 门控 —— fail-closed。
-//   事故：IDE 会话以 `--json --no-wait` 登记 #3（11:18:37）→ 跳过轮询、11:19:01 结束回合
-//         → 用户 11:18:44 在 QQ 回 A，无人消费（"默认等待"被命令行参数绕过）。
-//   本校验必须放在**任何 HTTP 请求之前**：被拒时不得留下待确认项（否则更糟 —— 卡片已发但无人等）。
-//   失效形态（防回归）：若退化为"只打警告仍继续"⇒ 静默空转复发，等于本加固无效。
-//   合法调用方：`engine/gate/gate-check.mjs` 不可逆分支（detached spawn，已同批注入该变量）。
-const NO_WAIT_ENV = 'QQ_ASK_AUTOMATION';
-if (a.noWait && String(process.env[NO_WAIT_ENV] || '') !== '1') {
-  console.error('[ERR] --no-wait 仅限自动化 / 门禁回路：须显式注入环境变量 ' + NO_WAIT_ENV + '=1');
-  console.error('      IDE 内登记必须等待（默认 300s/片，可重入续等）；要改秒数用 --wait <秒>。');
-  console.error('      理由：登记 ≠ 等待（waiting-protocol §2）—— 只登记不等待的答复必然无人消费。');
+// ★★ TOOL-QQWAIT-2（2026-10-28 · 第 6 例空转后）：`--no-wait` 删除 —— **恒 exit 1、不登记**。
+//   为什么不是「删掉这个 else-if 分支就行」：`parseArgs` 对未知参数是**静默忽略**，
+//     连解析一起删 ⇒ 带该参数的调用会落到默认等待 ⇒ 白等 300s；而 gate-check 是 detached
+//     spawn + stdio:'ignore' + unref ⇒ 变孤儿进程挂 300s，且**没有任何报错**。
+//   ⇒ 必须显式识别并硬拒（本段位于任何 HTTP 请求之前：被拒时不得留下待确认项）。
+//   为什么连 env 门控也一起删：豁免的声明方与被约束方是**同一个模型**（一条 `$env:` 前缀即自证），
+//     故任何「由调用方自己声明」的豁免都等于没有豁免 —— 不再保留开关，只保留三条合法出路。
+if (a.noWait) {
+  console.error('[ERR] --no-wait 已删除：登记必须自带消费者（2026-10-28 第 6 例空转后移除）。');
+  console.error('      三条合法出路：① 默认等待（300s/片，可重入续等） ② 登记后立刻派 waiter 成员');
+  console.error('                    ③ 用 --handoff 交模式 B（headless 接管）。');
+  console.error('      不可逆动作的知会不走本脚本：gate-check 直接调 notify.qqbot.js（单向通知，无待确认项）。');
+  console.error('      本次**未登记任何编号**（在 HTTP 请求之前返回）。');
   process.exit(1);
 }
 // ★ 等待秒数归一（非法/缺省 = 300 = 1 片，可重入续等）
 const WAIT_SEC = (a.waitSec > 0 ? a.waitSec : 300);
-// ★ 2026-10-26：默认等待（`--no-wait` 才关闭）—— 见文件头「默认等待的动因」
-const SHOULD_WAIT = !a.noWait;
 const OPTIONS = parseOptions(a.options);
 const RECOMMEND = a.recommend ? String(a.recommend).trim().toUpperCase().slice(0, 1) : '';
 if (RECOMMEND && !OPTIONS.some((o) => o.key === RECOMMEND)) {
@@ -206,47 +263,47 @@ const req = http.request({
     // ★ FIX-40：登记时刻（供 wait-answer.ps1 -SinceIso 判定「答复是否早于本次登记」）
     const regTs = new Date().toISOString();
     clearStaleAnswer(j.id);
-    if (SHOULD_WAIT) {
-      // ★ 登记 + 等待在同一进程内完成 —— waiting-protocol §2「登记 ≠ 等待」铁律的机制保证。
-      //   2026-10-26 起**默认走本分支**（`--no-wait` 才落到下方只登记路径）。
-      if (!a.json) {
-        console.log('已登记 "#' + j.id + '" 并推送 QQ；进入同进程等待（' + WAIT_SEC + 's/片，片满可重入续等）');
-        console.log('#id=' + j.id);
-        console.log('#ts=' + regTs);
-      }
-      waitAnswer(j.id, regTs, WAIT_SEC).then((r) => {
-        if (r.ok) {
-          if (!isAuthorized(r.j)) {
-            // ★ TOOL-ANSWERKIND：有答复 ≠ 有授权（defer-ide / cancel / timeout 一律不得推进）
-            if (!a.json) console.log('⚠ 收到答复但**不构成授权**（' + (r.j.answerKind || r.j.answer) + '）：' + (r.j.hint || '禁止按本项推进'));
-            console.log(JSON.stringify(r.j));
-            process.exit(4);
-          }
-          if (!a.json) console.log('已收到答复 #' + j.id + '：');
+    // ★ TOOL-QQWAIT-2：登记即入台账 —— Stop 侧据此判「本会话登记了 ask 但无人消费」。
+    //   台账由**登记方自己写**（不是 hook 解析命令行）：hook 在 PreToolUse 拿不到 #id，
+    //   且文本匹配会把 Get-Content/Select-String 之类全记成登记。
+    ledgerAppend({ id: j.id, conv: convId(), event: 'register', kind: (a.kind || (OPTIONS.length ? 'decision' : 'ask')), handoff: !!a.handoff, waitSec: WAIT_SEC });
+    // ★ 登记 + 等待在同一进程内完成 —— waiting-protocol §2「登记 ≠ 等待」铁律的机制保证。
+    //   `--no-wait` 已在文件头硬拒 ⇒ 本分支是**唯一**路径（代码里不再存在"只登记"的分支）。
+    if (!a.json) {
+      console.log('已登记 "#' + j.id + '" 并推送 QQ；进入同进程等待（' + WAIT_SEC + 's/片，片满可重入续等）');
+      console.log('#id=' + j.id);
+      console.log('#ts=' + regTs);
+      console.log(OPTIONS.length
+        ? '选择题：回 ' + OPTIONS.map((o) => o.key).join('/') + ' 或带编号如 ' + OPTIONS[0].key + '#' + j.id
+        : '回复「确认#' + j.id + '」或「取消#' + j.id + '」');
+    }
+    waitAnswer(j.id, regTs, WAIT_SEC).then((r) => {
+      if (r.ok) {
+        // ★ TOOL-QQWAIT-2：答到即"有消费者"（本进程读到了）⇒ 落台账 + 审计标记。
+        //   ★ 边界（勿据此放宽判断）：`.done` 只证明「有进程读过这份答复」，
+        //     **不证明**「会话能被唤醒」—— 后台化的 ask.js 同样会写 .done 但模型看不到答案。
+        const allowed = isAuthorized(r.j);
+        ledgerAppend({ id: j.id, conv: convId(), event: 'consumed', answer: String(r.j.answer || ''), answerKind: String(r.j.answerKind || ''), allowed: allowed });
+        writeDone(j.id, { answer: String(r.j.answer || ''), allowed: allowed });
+        if (!allowed) {
+          // ★ TOOL-ANSWERKIND：有答复 ≠ 有授权（defer-ide / cancel / timeout 一律不得推进）
+          if (!a.json) console.log('⚠ 收到答复但**不构成授权**（' + (r.j.answerKind || r.j.answer) + '）：' + (r.j.hint || '禁止按本项推进'));
           console.log(JSON.stringify(r.j));
-          process.exit(0);
+          process.exit(4);
         }
-        if (!a.json) console.log('本片等待已用尽（' + WAIT_SEC + 's）。可重入续等：再跑一次同命令即可（服务端待确认项仍在）。');
-        console.log(JSON.stringify({ id: j.id, answer: 'wait-timeout' }));
-        process.exit(2);
-      });
-      return;
-    }
-    if (a.json) {
-      // ★ 2026-10-26（第 5 例空转）：`--json` 不允许吞掉「谁在等」告警 —— 原来此处直接 return，
-      //   调用方只看到 {"id","status","ts"}，零提示（第 5 例的会话甚至没意识到必须派 waiter）。
-      //   口径：stdout 保持纯 JSON（脚本可解析），告警一律走 stderr。
-      console.error('[WARN] --no-wait：已登记但**无等待者** —— 必须自行派 waiter 成员或用 poll-answer 读回，否则答复必然空转');
-      console.log(JSON.stringify(Object.assign({}, j, { ts: regTs })));
-      return;
-    }
-    console.log('已登记 "#' + j.id + '" 并推送到 QQ（--no-wait：只登记、不等待；须自行派 waiter 或用 poll-answer 读回）'
-      + (OPTIONS.length
-        ? '；选择题：回 ' + OPTIONS.map((o) => o.key).join('/') + ' 或带编号如 ' + OPTIONS[0].key + '#' + j.id
-        : '；回复「确认#' + j.id + '」或「取消#' + j.id + '」'));
-    console.log('#id=' + j.id);
-    console.log('#ts=' + regTs);
-    console.log('等待回答: powershell -NoProfile -ExecutionPolicy Bypass -File tools\\qqbot\\wait-answer.ps1 -Id ' + j.id + ' -TimeoutSec 300 -SinceIso ' + regTs);
+        if (!a.json) console.log('已收到答复 #' + j.id + '：');
+        console.log(JSON.stringify(r.j));
+        process.exit(0);
+      }
+      // ★ TOOL-QQWAIT-2：片满记账 —— 按 waiting-protocol §3「≤6 片」累积；
+      //   用尽即记 giveup，Stop 侧据此**放行**（否则「按协议停止等待」会被判成违规 = 正常流程误拦）。
+      const slice = sliceCount(j.id) + 1;
+      ledgerAppend({ id: j.id, conv: convId(), event: 'wait-end', reason: 'timeout', slice: slice });
+      if (slice >= 6) ledgerAppend({ id: j.id, conv: convId(), event: 'giveup', reason: 'slices-exhausted', slice: slice });
+      if (!a.json) console.log('本片等待已用尽（' + WAIT_SEC + 's，第 ' + slice + '/6 片）。可重入续等：再跑一次同命令即可（服务端待确认项仍在）。');
+      console.log(JSON.stringify({ id: j.id, answer: 'wait-timeout' }));
+      process.exit(2);
+    });
   });
 });
 req.setTimeout(5000, () => req.destroy(new Error('timeout')));
