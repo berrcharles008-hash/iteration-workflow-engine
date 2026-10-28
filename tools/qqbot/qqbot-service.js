@@ -266,7 +266,21 @@ async function getToken(force) {
   token = r.json.access_token; tokenAt = Date.now();
   return token;
 }
-async function send(content) {
+/**
+ * ★ SNOOZE-B（2026-10-20 用户拍板）：统一发送出口的静默门 —— **只对显式传 kind 的噪音类生效**。
+ *   白名单式设计：不传 kind（ask / decision / gate / 各类交互回执）⇒ 一律照发，
+ *   结构上不可能被静默误杀（"需要用户回话的消息不该被静默"是硬约束）。
+ *   kind='idle' ⇒ 受任一 scope 的静默约束（idle / all）；其它 kind ⇒ 仅受 scope=all 约束。
+ *   返回 200（而非抛错）：调用方视为"已处理"，不会重试、不会污染状态。
+ */
+async function send(content, kind) {
+  if (kind) {
+    const sn = (kind === 'idle') ? snoozeActive('idle') : snoozeActive('all');
+    if (sn) {
+      log('[SEND SKIP] snooze kind=' + kind + ' remainSec=' + Math.round((sn.until - Date.now()) / 1000));
+      return 200;
+    }
+  }
   if (!token) await getToken();
   const doPost = () => postJson('api.sgroup.qq.com', '/v2/users/' + OPENID + '/messages',
     { content, msg_type: 0 }, { Authorization: 'QQBot ' + token, 'X-UnionAppid': appId });
@@ -368,8 +382,9 @@ function inQuietHours() {
 //   背景（用户实测失效）：16:45:31「取消。1小时内不要再听」· 16:46:00「取消，并且1h内不再提醒」
 //     被 route() 的 cancel 关键词吞掉（只回「请带编号」）⇒ 16:50:03 同类邀请照发。
 //   两层语义（互不混淆）：
-//     scope='idle'（默认）只停「静置接管邀请」；fail / decision / 不可逆 一律照发
-//     scope='all'  等价全局静默（完成通知 + 门禁通知 + idle 邀请）
+//     ★ SNOOZE-B（2026-10-20）：默认 scope='all' —— 静默全部**噪音类**（由 send(content, kind) 白名单控制）；
+//       确认类（ask / decision / gate）调用不传 kind ⇒ 结构上永远照发。
+//     scope='idle' 仍可手工构造（只停静置邀请；send 门的 snoozeActive('all') 对它返回 null）。
 //   持久化：watcher.snoozeFile（默认 .codebuddy/temp/qqbot-snooze.json）⇒ 服务重启不丢
 // ══════════════════════════════════════════════════════════════
 const SNOOZE_INTENT_RE = /(静默|免打扰|勿扰|别提醒|不要提醒|不再提醒|别再提醒|停止提醒|snooze)/i;
@@ -417,7 +432,10 @@ function parseSnooze(text) {
     // ★ 无时长 ⇒ 仅当**整条消息就是一个静默词**时用默认时长（防「静默安装 / 静默失败 / 静默重试」等
     //   技术用语被误当指令；用户口径要求的是「xxh / xxmin」形式）
     if (!/^(全部|所有|一切|统统)?(静默|免打扰|勿扰|snooze)$/i.test(s.replace(/\s+/g, ''))) return null;
-    return { action: 'set', sec: def, scope: SNOOZE_ALL_RE.test(s) ? 'all' : 'idle', raw: String(text || '').trim(), capped: false };
+    // ★ SNOOZE-B（2026-10-20 用户拍板）：默认 scope 由 idle 改为 all —— 用户口径 =「静默就是别打扰我，
+    //   但需要我回话的 #N 必须照发」。all 的语义 = 静默全部**噪音类**（由 send(content, kind) 白名单控制）；
+    //   确认类调用不传 kind ⇒ 结构上永远照发。SNOOZE_ALL_RE 保留仅为兼容「静默全部xxh」写法（结果相同）。
+    return { action: 'set', sec: def, scope: 'all', raw: String(text || '').trim(), capped: false };
   }
   const n = parseFloat(m[1]);
   if (!(n > 0)) return null;
@@ -427,7 +445,7 @@ function parseSnooze(text) {
   if (!(sec > 0)) sec = def;
   let capped = false;
   if (sec > max) { sec = max; capped = true; }
-  return { action: 'set', sec: sec, scope: SNOOZE_ALL_RE.test(s) ? 'all' : 'idle', raw: String(text || '').trim(), capped: capped };
+  return { action: 'set', sec: sec, scope: 'all', raw: String(text || '').trim(), capped: capped };   // ★ SNOOZE-B：同上，默认 all
 }
 function setSnooze(sec, scope, raw) {
   loadSnooze();
@@ -482,16 +500,29 @@ function renderMergeText(items) {
 }
 function enqueueMerge(kind, content) {
   const now = Date.now();
+  // ★ SNOOZE-B：静默期**直接丢弃、不入队** —— 否则静默窗口内积压，到期一次性汇总刷屏（用户实测痛点）。
+  if (snoozeActive('all')) {
+    log('[MERGE DROP] snooze kind=' + kind + '（静默期不入队）');
+    return false;
+  }
   if (!MERGE.items.length) MERGE.firstAt = now;
   MERGE.items.push({ kind, content, at: now });
   log('[MERGE] +1 kind=' + kind + ' n=' + MERGE.items.length);
   if (MERGE.items.length >= (NCFG().mergeMax || 5)) flushMerge(true);
+  return true;
 }
 function flushMerge(force) {
   if (!MERGE.items.length) return;
   const win = NCFG().mergeWindowMs || 90000;
   if (!force && Date.now() - MERGE.firstAt < win) return;
   if (inQuietHours()) return;                    // 免打扰：等时段结束（fail/decision 不入队，不受此限）
+  // ★ SNOOZE-B：覆盖「入队后、flush 前才进入静默」的窗口 ⇒ 整批丢弃（不补发，防到期刷屏）
+  if (snoozeActive('all')) {
+    const n0 = MERGE.items.length;
+    MERGE.items = []; MERGE.firstAt = 0;
+    log('[MERGE DROP] snooze flush n=' + n0 + '（丢弃未发批次）');
+    return;
+  }
   const items = MERGE.items; MERGE.items = []; MERGE.firstAt = 0;
   const text = renderMergeText(items);
   send(text)
@@ -1123,7 +1154,7 @@ function watchLoop() {
           log('PUSH(QUEUE): idle ' + idleSec + 's → #' + id + (WATCH.autoHandoff ? ' [handoff]' : '')
             + ' session=' + path.basename(sess).slice(0, 8));
         } else if (!WATCH.autoQueue) {
-          send(buildIdlePrompt(idleSec, sess))
+          send(buildIdlePrompt(idleSec, sess), 'idle')   // ★ SNOOZE-B：autoQueue=false 直发分支也要受静默约束
             .then((st) => log('PUSH: idle ' + idleSec + 's HTTP ' + st))
             .catch((e) => log('PUSH ERR: ' + e.message));
         } else {
@@ -1357,9 +1388,15 @@ function renderRequestText(rec) {
   }
   const R = [];
   if (opts.length) {
-    const keys = opts.map((o) => o.key).concat(ideKey || []).join(' / ');
+    const keys = opts.map((o) => o.key).join(' / ');
     R.push(' ✓ 回 ' + keys + '（多条并存时带编号：' + opts[0].key + '#' + id + '）→ 记录选择'
       + (rec.handoff ? '并交新会话按选择执行' : '（落盘等 IDE 会话读取；原会话已停时需回 IDE 消费）'));
+    if (ideKey) {
+      // ★ TOOL-ANSWERKIND（2026-10-20）：回IDE 键**不是第四个选项**，而是「本项不在 QQ 定」。
+      //   原实现把它并进上面那行「✓ 回 A/B/C/D → 记录选择」，读起来像个正常的可选项
+      //   （事故的文案层诱因：用户按"选 D"理解，Agent 按"选了个东西"理解）。单列，并写明不构成授权。
+      R.push(' ↩ 回 ' + ideKey + ' → 本项**作废、不记录任何选择**，请回 IDE 原会话拍板（不构成授权）');
+    }
     R.push(' ✗ 取消#' + id + ' → 本项作废，不执行');
   } else if (rec.kind === 'sleep') {                    // ★ FIX-38：待机类（必须带编号）
     R.push(' ✓ 确认#' + id + ' → 进入待机；到 ' + (rec.wakeAtMs ? fmtTsMs(rec.wakeAtMs) : '?') + ' 自动唤醒');
@@ -1373,14 +1410,17 @@ function renderRequestText(rec) {
   } else if (rec.command) {
     R.push(' ✓ 确认#' + id + ' → 执行上述命令，完成/失败均回执');
     R.push(' ✗ 取消#' + id + ' → 不执行（阻塞保持）');
+    // ★ FIX-50（2026-10-16）：补「不支持免编号回复」警示行（与 sleep/shutdown/continue-iteration 同款），
+    //   让卡面承诺与实现对齐 —— confirm 关键词仍属宽匹配（曾误触发开闸事故），必须带 #N 才生效。
+    R.push(' ⚠️ 本项不支持免编号回复（任何闲聊式应答不生效，必须回「确认#' + id + '」）');
   } else if (rec.kind === 'idle') {
     R.push(' ✓ 确认#' + id + ' → 起 headless 接管执行上述步骤（前置复查：该会话 ' + guardSec + 's 内无写类操作、该迭代未被其他会话推进、无其它接管），完成回执');
     R.push(' ✗ 取消#' + id + ' → 本邀请作废，不执行任何操作（IDE 会话保持原状）');
     R.push(' 💬 其他文本 → 作为指示交新会话执行（仅当只有 1 条未决项时）');
     R.push(' ↩ 回 IDE 操作 → 不影响本邀请（接管前自动复查：人仍在干活则拒绝并回执）');
     // ★ FIX-36：静默入口写进消息本身（用户要求「xxh/xxmin 内不再提醒」必须照办）
-    R.push(' ⏸ 回「静默 2h」/「120min 内不再提醒」→ 期间不再发静置邀请（只掐本类；拍板/失败仍推）');
-    R.push(' ⏸ 回「全部静默 1h」→ 连完成通知与门禁通知一并静默（回「取消静默」解除）');
+    R.push(' ⏸ 回「静默 2h」/「120min 内不再提醒」→ 静默心跳/完成/静置邀请/环境告警（拍板 #N、上限暂停、成员卡死、失败仍推）');
+    R.push(' ⏸ 回「取消静默」提前解除（「全部静默 1h」为兼容写法，效果相同）');
   } else if (rec.kind === 'continue-iteration') {       // ★ TOOL-QQCONT：继续迭代（必须带编号）
     R.push(' ✓ 确认#' + id + ' → 启动 CLI 接管会话继续推进（接管前自动复查：该迭代未被推进、无其它接管）');
     R.push(' ✗ 取消#' + id + ' → 本项作废，不启动任何会话');
@@ -1521,11 +1561,12 @@ function normalizeCmd(s) {
     .replace(/[\uFF03\uFE5F]/g, '#');
 }
 function parseReply(content) {
-  // ★ 回IDE（2026-10-06）：「回IDE#N」= QQ 侧作废本项、回 IDE 原会话拍板（答案落盘 answer='ide'）
+  // ★ 回IDE（2026-10-06）：「回IDE#N」= QQ 侧作废本项、回 IDE 原会话拍板
+  // ★ TOOL-ANSWERKIND（2026-10-20）：内部类型同步改 'defer-ide'（落盘值同名，禁止再用 'ide'）
   const m = normalizeCmd(content).match(/^(确认|取消|回\s*IDE|confirm|cancel)\s*#\s*(\d+)$/i);
   if (!m) return null;
   const k = m[1].replace(/\s+/g, '').toLowerCase();
-  const type = (k === 'cancel' || k === '取消') ? 'cancel' : (k === '回ide' ? 'ide' : 'confirm');
+  const type = (k === 'cancel' || k === '取消') ? 'cancel' : (k === '回ide' ? 'defer-ide' : 'confirm');
   return { type, id: parseInt(m[2], 10) };
 }
 /**
@@ -1567,13 +1608,49 @@ function clearStaleAnswer(id) {
     }
   } catch (e) { log('[ANSWER CLEAR ERR #' + id + '] ' + e.message); }
 }
-// ★ A：等待式确认 —— 把回答落盘（confirm / cancel / timeout），供 agent 的 wait-answer.ps1 轮询读取
+/**
+ * ★ TOOL-ANSWERKIND（2026-10-20）：答复语义表 —— 答案值 → 是否构成「授权」。
+ *
+ * 事故动因（必须保留，勿按"命名风格"改回去）：2026-10-20 用户回选项 D「回 IDE 原会话拍板（QQ 侧作废本项）」，
+ * 服务端正确落盘 answer='ide'（选项判定无错），但**下游 Agent 把它读成「用户在 IDE 已确认通过」**，
+ * 连做两次 phase-advance（01→02 / 02→03）并自撰 quote。2 次 ide 答复 = 2 次误判。
+ *
+ * 两个致命点：
+ *  ① 词义撞车：本文件里的 'ide' = 「QQ 作废、未作答」；而 `state-apply.py` 的 `--confirm-by ide` = 「用户经 IDE 确认」。
+ *     同词反义 ⇒ 白名单反过来给误读背书。故落盘值改名 **defer-ide**（推迟到 IDE 决定），读侧兼容历史 'ide'。
+ *  ② 语义不落盘：裸 token 无法自证含义 ⇒ 每条答复额外写 answerKind / allowed / hint（必要时 visibleKey/visibleLabel），
+ *     让消费端**不需要靠猜**。allowed=false 表示「不构成任何授权」：不得推进阶段、不得写 phase_confirm。
+ */
+const DEFER_IDE_LABEL = '回 IDE 原会话拍板（QQ 侧作废本项）';
+const ANSWER_SEMANTICS = {
+  confirm: { kind: 'approve', allowed: true, hint: '用户确认；可按登记事项推进。' },
+  choice: { kind: 'approve', allowed: true, hint: '用户已选某个选项；只按该选项语义推进。' },
+  text: { kind: 'free-text', allowed: true, hint: '自由文本答复；按文本内容判断，不得默认视为同意。' },
+  cancel: { kind: 'reject', allowed: false, hint: '用户否决本项；禁止按本项推进。' },
+  'defer-ide': { kind: 'no-decision', allowed: false, hint: 'QQ 侧已作废本项，用户回 IDE 拍板 —— 本次无任何授权；禁止推进/禁止写 phase_confirm；结束回合并等用户在 IDE 直接发言。' },
+  ide: { kind: 'no-decision', allowed: false, hint: '（历史值，等同 defer-ide）QQ 侧已作废本项，本次无任何授权；禁止推进。' },
+  superseded: { kind: 'no-decision', allowed: false, hint: '本项已被新登记顶替；不得据此推进。' },
+  timeout: { kind: 'no-answer', allowed: false, hint: '无人应答；停止等待并保留 blocked，不得推进。' },
+};
+/** 由 answer 计算自述字段（消费端可据此直接判定，不必再解析 token 词义） */
+function answerMeta(answer, p) {
+  const m = ANSWER_SEMANTICS[answer] || { kind: 'unknown', allowed: false, hint: '未知答复类型；不得据此推进。' };
+  const meta = { answerKind: m.kind, allowed: !!m.allowed, hint: m.hint };
+  if (answer === 'defer-ide' || answer === 'ide') {
+    const ik = ideOptionKey((p && p.options) || []);
+    if (ik) meta.visibleKey = ik;                       // 用户实际按的那个字母（D），便于对上 QQ 消息
+    meta.visibleLabel = DEFER_IDE_LABEL;
+  }
+  return meta;
+}
+// ★ A：等待式确认 —— 把回答落盘（confirm / cancel / defer-ide / timeout …），供 agent 的 wait-answer.ps1 轮询读取
 function writeAnswer(p, answer, text, choice) {
   try {
     const dir = answerDirAbs();
     fs.mkdirSync(dir, { recursive: true });
     const rec = { id: p.id, answer: answer, ts: new Date().toISOString(), prompt: p.prompt || '', kind: p.kind || '',
       session: p.session || '' };                            // ★ session-hub v2：答复落盘带 session（hub 会话详情按此关联问答）
+    Object.assign(rec, answerMeta(answer, p));               // ★ TOOL-ANSWERKIND：answerKind / allowed / hint（+visibleKey/Label）
     // ★ FIX-17d：自由文本答复（answer='text'）时携带原文，供 wait-answer.ps1 / poll-answer.js 消费
     if (text != null) rec.text = String(text);
     // ★ FIX-31：选项答复（answer='choice'）携带所选键 + 选项定义（消费方可还原语义，不再只看到一个字母）
@@ -1597,8 +1674,17 @@ function forwardAnswerToJob(p, answer, text) {
     if (!serveHandoff || !serveHandoff.jobId) return;          // 无活跃 job ⇒ 静默跳过
     const inst = readServeInstance();
     if (!inst || !inst.port) return;
-    const label = String(answer || '') + (text != null && String(text) ? ('：' + String(text).slice(0, 200)) : '');
-    const msg = '【QQ 答复 #' + p.id + '】' + label + '。请勿重复登记本确认项，直接按其内容继续执行。';
+    const meta = answerMeta(answer, p);                        // ★ TOOL-ANSWERKIND：按授权分流
+    const label = String(answer || '') + (meta.answerKind ? ('（' + meta.answerKind + '）') : '')
+      + (text != null && String(text) ? ('：' + String(text).slice(0, 200)) : '');
+    // ★ TOOL-ANSWERKIND（2026-10-20）：无授权答复**绝不能再带「直接按其内容继续执行」**。
+    //   原实现无论答复是什么都下发这句放行指令 ⇒ headless/serve job 侧 100% 绕过读侧判据
+    //   （改答案名、加 answerKind 都拦不住它）。事故的 headless 同型通道即此处。
+    const msg = meta.allowed
+      ? ('【QQ 答复 #' + p.id + '】' + label + '。请勿重复登记本确认项，直接按其内容继续执行。')
+      : ('【QQ 答复 #' + p.id + '】' + label + '。★ 本次答复**不构成授权**（allowed=false）：'
+        + '禁止推进阶段、禁止写 phase_confirm、禁止按本项执行任何动作；'
+        + '请结束回合并等用户在 IDE 直接拍板。' + (meta.hint ? ('（' + meta.hint + '）') : ''));
     const jid = serveHandoff.jobId;
     adapter.replyJob({ port: inst.port }, jid, msg, (err) => {
       if (err) log('[ANSWER FWD #' + p.id + '] 注入 job=' + jid + ' 失败：' + err.message + '（答案文件已落盘，job 侧仍可 wait-answer 读取）');
@@ -2375,6 +2461,21 @@ function handoffGuard(p) {
 // ★ FIX-17d：自由文本答复处理 —— 记录答案；若该项带 handoff，则用答复内容起新一轮 headless（护栏同前）
 function doFreeReply(p, content) {
   const id = p.id;
+  // ★ FIX-50b（2026-10-16）：门禁/授权类（带 command、非 offline）**不接受自由文本、不消费本项** ——
+  //   事故复验：用户对 gate 开闸卡回「2222」，原通用分支 p.status='replied' + writeAnswer('text')
+  //   ⇒ ① 授权请求被静默消费（waiter 收到 answer='text'，Agent 只能重发卡）；② 回执「✅ 已记录你的答复」
+  //   与卡面「⚠️ 本项不支持免编号回复」自相矛盾。正确语义 = 保持 pending（timer 不清，超时机制不变），
+  //   仅提醒带编号回复；与 FIX-50a（route() 关键词直通拦截，handleMessage）构成双链闭环。
+  //   offline 类维持各自既有分支（shutdown 作废回执 = FIX-37 评审行为；new-iteration/continue-iteration
+  //   已在下方早拦截）⇒ 本分支必须位于 clearTimeout 之前（不清 timer）且早于 p.status 赋值。
+  if (p.command && !isOfflineKind(p.kind)) {
+    const gLabel = KIND_LABEL[String(p.kind || '').toLowerCase()] || '门禁·需授权';
+    log('[FREEREPLY #' + id + '] ' + gLabel + '项自由文本不消费（保持 pending）：' + String(content).slice(0, 60));
+    logInbox({ taskId: id, result: 'gate-freetext-ignored', text: String(content).slice(0, 60) });
+    send('⚠️ #' + id + ' 是「' + gLabel + '」项：自由文本不生效，本项仍在等待确认。'
+      + '请回「确认#' + id + '」执行，或「取消#' + id + '」作废。').catch(() => {});
+    return;
+  }
   clearTimeout(p.timer);
   // ★ TOOL-QQNEWITER（V2-1 · 红队 A-其它①）：「开新迭代」项**不接受自由文本答复** ——
   //   该项 handoff=true，若落到下面的通用分支会直接 runHeadless（= 用户回一句「嗯」就开工，且绕过编号校验）；
@@ -2458,10 +2559,10 @@ function doFreeReply(p, content) {
  */
 function doChoice(p, key) {
   const id = p.id;
-  // ★ 回IDE固定选项：命中追加键（如 A/B 被占时的 C）⇒ 不落 choice，走 ide 结算
-  //   （QQ 侧作废本项 + answer='ide' ⇒ waiter 读回后主 Agent 转 IDE 内确认）
+  // ★ 回IDE固定选项：命中追加键（如 A/B 被占时的 C）⇒ 不落 choice，走 defer-ide 结算
+  //   （QQ 侧作废本项 + answer='defer-ide' ⇒ 消费端据 allowed=false 判定「无授权、禁止推进」）
   const ik = ideOptionKey(p.options);
-  if (ik && String(key || '').toUpperCase() === ik) { doPending(id, 'ide'); return; }
+  if (ik && String(key || '').toUpperCase() === ik) { doPending(id, 'defer-ide'); return; }
   const hit = (p.options || []).filter((o) => o.key === key)[0];
   if (!hit) {
     send('⚠️ #' + id + ' 无选项 ' + key + '（可选：' + (p.options || []).map((o) => o.key).join(' / ') + '）。').catch(() => {});
@@ -2549,14 +2650,15 @@ function doPending(id, type) {
     return;
   }
   // ★ 回IDE（2026-10-06）：QQ 侧作废本项、用户回 IDE 原会话拍板。
-  //   与 cancel 的区别：答案落盘 answer='ide' ⇒ waiter 读回后主 Agent 知道是"回 IDE 处理"
-  //   （应转 IDE 内确认），而非用户否决本项。
-  if (type === 'ide') {
-    p.status = 'ide';
+  //   与 cancel 的区别：不是否决，而是"此项不在 QQ 定" ⇒ 由用户在 IDE 直接拍板。
+  //   ★ TOOL-ANSWERKIND（2026-10-20）：落盘值改 defer-ide（原 'ide' 与 --confirm-by ide 同词反义，
+  //     下游曾据此判定"IDE 已确认"并伪推进阶段）。仍接受历史内部值 'ide'。
+  if (type === 'defer-ide' || type === 'ide') {
+    p.status = 'defer-ide';
     send('↩ #' + id + ' 已在 QQ 侧作废：请回 IDE 原会话拍板（本项不再等待 QQ 回复）。').catch(() => {});
-    writeAnswer(p, 'ide');
+    writeAnswer(p, 'defer-ide');
     noteSettled(p);
-    logInbox({ taskId: id, result: 'ide' });
+    logInbox({ taskId: id, result: 'defer-ide' });
     return;
   }
   p.status = 'confirmed';
@@ -2963,9 +3065,10 @@ function startHttp() {
         const kind = String((data && data.kind) || 'done').toLowerCase();
         // fail / decision 立即发（要人马上知道 / 要人拍板）；其余入合并队列
         if (kind === 'done' || kind === 'progress') {
-          enqueueMerge(kind, content);
+          // ★ SNOOZE-B：静默期 enqueueMerge 返回 false（不入队、不补发）⇒ 回执如实标记 snoozed
+          const queued = enqueueMerge(kind, content);
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify({ ok: true, queued: true, kind })); return;
+          res.end(JSON.stringify({ ok: true, queued: queued, snoozed: !queued, kind })); return;
         }
         send(content)
           .then((st) => {
@@ -3106,7 +3209,7 @@ function sendOnlineNotice(prev) {
   queryWakeTimer((q) => {
     if (q && q.next) L.push('唤醒定时器：' + q.next);
     log('[ONLINE] ' + L.join(' ｜ '));
-    send(L.join('\n')).then((st) => log('[ONLINE] HTTP ' + st)).catch((e) => log('[ONLINE ERR] ' + e.message));
+    send(L.join('\n'), 'online').then((st) => log('[ONLINE] HTTP ' + st)).catch((e) => log('[ONLINE ERR] ' + e.message));   // ★ SNOOZE-B
   });
 }
 /** ★ FIX-38：优雅停止（写 stoppedAt → 发下线通知 → 退出；5s 兜底强退） */
@@ -3116,7 +3219,7 @@ function gracefulStop(reason) {
   if (NCFG().offlineNotice === false) { doExit(); return; }
   const text = '🔴 机器人已下线 · ' + ts() + '（pid ' + process.pid + '）\n' + MSG_SEP + '\n原因：' + reason;
   log('[OFFLINE] 发送下线通知：' + reason);
-  send(text).then((st) => { log('[OFFLINE] HTTP ' + st); doExit(); })
+  send(text, 'offline').then((st) => { log('[OFFLINE] HTTP ' + st); doExit(); })   // ★ SNOOZE-B
     .catch((e) => { log('[OFFLINE ERR] ' + e.message); doExit(); });
   setTimeout(doExit, 5000);      // 兜底：通知发不出去也要退出
 }
@@ -3321,7 +3424,7 @@ function buildHelpText() {
     '【待办】确认#编号 / 取消#编号 ｜ 回IDE#编号（作废本项，回 IDE 拍板）',
     '　　　　选择题回 A（多条并存写 A#编号）',
     '【查询】心跳（状态 / ping）｜ 查看迭代' + off(readOnlyCmdCfg('iterationDetail').enabled)
-      + ' ｜ 模型列表' + off(readOnlyCmdCfg('modelList').enabled) + ' ｜ 静默2h ｜ 全部静默1h ｜ 取消静默',
+      + ' ｜ 模型列表' + off(readOnlyCmdCfg('modelList').enabled) + ' ｜ 静默2h ｜ 取消静默',
     '【电源·须 确认#编号】待机 30min' + off((C.sleep || {}).enabled) + ' ｜ 开机 07:30 ｜ 关机' + off((C.shutdown || {}).enabled) + ' ｜ 中止关机',
     '【迭代】开新迭代 #23' + off((C.newIteration || {}).enabled) + '（无活跃迭代时；不带编号先列候选）',
     '　　　　继续迭代 [模型名]' + off((C.continueIteration || {}).enabled) + '（有活跃迭代时；须 确认#编号）',
@@ -3812,7 +3915,7 @@ function handleMessage(m) {
   //   否则会被自由文本兜底当成对该项的文字答复）。idle 项不适用：其「回 IDE 操作」= 不影响邀请，语义不同。
   if (/^回\s*ide$/i.test(normalizeCmd(content))) {
     const ideList = openList.filter((p) => p.kind !== 'idle');
-    if (ideList.length === 1) { doPending(ideList[0].id, 'ide'); return; }
+    if (ideList.length === 1) { doPending(ideList[0].id, 'defer-ide'); return; }
     if (ideList.length > 1) {
       send('当前有 ' + ideList.length + ' 条待确认，请带编号回复（如 回IDE#' + ideList[0].id + '）。').catch(() => {});
       return;
@@ -3846,9 +3949,10 @@ function handleMessage(m) {
       log('[SNOOZE] clear by user');
     } else {
       setSnooze(snz.sec, snz.scope, snz.raw);
-      const scopeLabel = (snz.scope === 'all') ? '全部通知（含完成/门禁）' : '静置接管邀请';
-      send('⏸ 已按你的要求静默：' + scopeLabel + ' 至 ' + snoozeLabel(SNOOZE.until)
-        + '｜需要你拍板的 #N、失败告警照常推送｜回「取消静默」提前解除。'
+      // ★ SNOOZE-B：文案与实现对齐 —— all 只静默「噪音类」；确认类调用不传 kind ⇒ 结构上必达
+      const scopeLabel = (snz.scope === 'all') ? '心跳/完成通知/静置邀请/环境告警' : '静置接管邀请';
+      send('⏸ 已静默 ' + scopeLabel + ' 至 ' + snoozeLabel(SNOOZE.until)
+        + '｜需你拍板的 #N、上限暂停、成员卡死、失败告警照常推送｜回「取消静默」提前解除。'
         + (snz.capped ? '（已按上限截断）' : '')).catch(() => {});
       log('[SNOOZE] set scope=' + snz.scope + ' sec=' + snz.sec + ' until=' + new Date(SNOOZE.until).toTimeString().slice(0, 8) + ' raw=' + snz.raw.slice(0, 60));
     }
@@ -3858,14 +3962,18 @@ function handleMessage(m) {
   const name = route(content);
   if ((name === 'confirm' || name === 'cancel') && openList.length > 0) {
     if (openList.length === 1) {
-      // ★ FIX-37（评估 P0-1）：关机项**禁止免编号直通** —— confirm 关键词含「好/可以/没问题/ok」，
+      // ★ FIX-37（评估 P0-1）：关机项**禁止免编号直通** —— confirm 关键词曾含「好/可以/没问题/ok」，
       //   若唯一未决项恰是关机项，一句闲聊式应答就会断电。取消方向仍放行（不作废更安全）。
+      // ★ FIX-50（2026-10-16）：拦截面**扩展至带命令的门禁/授权类**。
+      //   事故：09:00 唯一未决项恰是 #1 gate 开闸卡（rec.command 非空），用户回复含 confirm 关键词的闲聊
+      //   ⇒ 免编号直通 ⇒ 闸被误开。gate 卡与 shutdown/sleep 同属「高危授权」，却不在 isOfflineKind 名单里
+      //   ⇒ 卡面写「确认#N → 执行」但实现上闲聊即触发（承诺与实现不符）。本次与 offline 类同款拦截。
       const only = openList[0];
-      if (name === 'confirm' && isOfflineKind(only.kind)) {
-        // ★ TOOL-QQNEWITER：三态化（关机/待机/开新迭代）—— 标签与审计码统一走 kind 映射，勿再用二态三元式。
-        const kLabel = offlineKindLabel(only.kind);
+      if (name === 'confirm' && (isOfflineKind(only.kind) || only.command)) {
+        // ★ FIX-50：标签优先 KIND_LABEL（覆盖 gate/ask 等带命令的 kind），offlineKindLabel 兜底
+        const kLabel = KIND_LABEL[String(only.kind || '').toLowerCase()] || offlineKindLabel(only.kind) || '该操作';
         log('[GUARD #' + only.id + '] ' + kLabel + '项拒绝免编号直通（原文：' + firstLine(content) + '）');
-        logInbox({ taskId: only.id, result: String(only.kind || 'restricted') + '-bare-keyword-blocked', text: String(content).slice(0, 60) });
+        logInbox({ taskId: only.id, result: String(only.kind || (only.command ? 'gate' : 'restricted')) + '-bare-keyword-blocked', text: String(content).slice(0, 60) });
         send('⚠️ #' + only.id + ' 是「' + kLabel + '」确认：为避免误触，本项必须带编号回复「确认#' + only.id
           + '」；回「取消#' + only.id + '」则不作' + kLabel + '处理。').catch(() => {});
         return;
@@ -3900,6 +4008,14 @@ function connect() {
   https.get({ hostname: 'api.sgroup.qq.com', path: '/gateway', headers: { Authorization: 'QQBot ' + token } }, (res) => {
     let d = ''; res.on('data', (c) => d += c);
     res.on('end', () => {
+      // ★ FIX-51（2026-10-21）：gateway 401/403 = token 失效 ⇒ 强刷后再重连。
+      //   发送链有 FIX-17 的 401 自愈，ws 重连链原本没有 ⇒ 'no url' 死循环
+      //   （实测 2026-10-21 17:19~17:27 断线 8 分钟，直到恰有 SEND 触发刷新才恢复）。
+      if (res.statusCode === 401 || res.statusCode === 403) {
+        log('[GW ' + res.statusCode + '] token 失效 → 强刷后重连');
+        getToken(true).catch((e) => log('[GW ' + res.statusCode + '] 刷新失败: ' + e.message));
+        return scheduleReconnect('gateway ' + res.statusCode);
+      }
       let url; try { url = JSON.parse(d).url; } catch (e) { return scheduleReconnect('gateway parse'); }
       if (!url) return scheduleReconnect('no url');
       const ws = new WebSocket(url, { headers: { Authorization: 'QQBot ' + token, 'X-UnionAppid': appId } });
@@ -3915,7 +4031,13 @@ function connect() {
         } else if (mm.op === 0 && mm.t === 'C2C_MESSAGE_CREATE') {
           handleMessage(mm);
         } else if (mm.op === 7) {
-          log('[RECONNECT] 收到重连指令'); scheduleReconnect('op7');
+          // ★ FIX-51（2026-10-21）：op7 常伴随 token 生命周期终点 ⇒ 立即强刷后再重连。
+          //   反例（实测 2026-10-21 17:19~17:27）：不刷 token 直接 5s 后 connect() ⇒ gateway 401
+          //   ⇒ 'no url' 死循环 8 分钟，直到恰有一条 SEND 触发 FIX-17 强刷才恢复；
+          //   静默失效形态 = 重连看似在跑但永远拿不到 url，QQ 侧表现为「灵魂不在线」。
+          log('[RECONNECT] 收到重连指令');
+          getToken(true).catch((e) => log('[RECONNECT] token 强刷失败: ' + e.message));
+          scheduleReconnect('op7');
         }
       });
       ws.on('error', (e) => { log('[WS ERR] ' + e.message); scheduleReconnect('ws error'); });
@@ -4057,7 +4179,7 @@ if (args.helpTest) {
   const POS = [
     { input: '确认#1', via: 'reply', want: 'confirm' },
     { input: '取消#1', via: 'reply', want: 'cancel' },
-    { input: '回IDE#1', via: 'reply', want: 'ide' },
+    { input: '回IDE#1', via: 'reply', want: 'defer-ide' },
     { input: 'B#1', via: 'choice', want: 'B' },
     { input: '心跳', via: 'cmd', want: 'heartbeat' },
     { input: '待机 30min', via: 'cmd', want: 'sleep' },

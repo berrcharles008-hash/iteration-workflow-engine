@@ -100,6 +100,26 @@ function renderStructured(s) {
 //   progress = 长任务心跳｜decision = 需你拍板（**必须带 --id #N**，否则拒绝发送）
 //   中间环节静默；全局静默开关对本出口同样生效（FIX-19 时它只管门禁拦截，完成通知照发）。
 const PROJ = path.resolve(__dirname, '..', '..');
+/**
+ * ★ SNOOZE-B（2026-10-20 用户拍板）：读静默文件 —— 服务不可用时的**回退直发**也要认静默，
+ *   否则「静默期内服务一挂就恢复打扰」，与用户口径（静默期内服务挂也不打扰）冲突。
+ *   口径与服务侧 send 门一致：仅 scope=all 拦「完成/进度」类；fail/decision 属需知/需拍板 ⇒ 照发。
+ *   fail-open：文件缺失/损坏/过期 ⇒ 视为未静默（不阻断发送）。
+ */
+function readSnooze() {
+  try {
+    let rel = '.codebuddy/temp/qqbot-snooze.json';
+    try {
+      const c = JSON.parse(fs.readFileSync(path.join(__dirname, 'daemon.config.json'), 'utf8'));
+      if (c && c.watcher && c.watcher.snoozeFile) rel = c.watcher.snoozeFile;
+    } catch (e) {}
+    const j = JSON.parse(fs.readFileSync(path.join(PROJ, String(rel).replace(/\\/g, '/')), 'utf8').replace(/^\uFEFF/, ''));
+    const until = Number(j.until || 0);
+    if (!until || Date.now() >= until) return null;
+    if (String(j.scope || '') !== 'all') return null;
+    return { scope: 'all', until: until };
+  } catch (e) { return null; }
+}
 const KIND_LABEL = { done: '完成', fail: '失败', progress: '进度', decision: '需你确认' };
 const DONE_DEDUPE_MS = 10 * 60 * 1000;   // 同会话「完成类」最小间隔（防 Stop 兜底与显式 done 双发 / 防刷屏）
 
@@ -370,6 +390,15 @@ if (require.main === module) (async () => {
     const via = await tryViaService(msg, { kind, session: sess, fallback: isFallback });
     if (via.ok) { console.log('[OK] QQ 通知已发送（via service） ' + via.raw); return; }
     if (!hasCreds) { console.error('[ERR] 服务不可用且本机无凭据，无法发送：' + via.raw); process.exit(1); }
+    // ★ SNOOZE-B：回退直发前查静默（服务不可用也不能在静默期打扰）
+    if (kind === 'done' || kind === 'progress') {
+      const sn = readSnooze();
+      if (sn) {
+        console.log('[SKIP] 静默中（all 至 ' + new Date(sn.until).toLocaleString() + '）kind=' + kind
+          + '（服务不可用 ⇒ 回退直发，同样遵守静默）');
+        return;
+      }
+    }
     const token = await getToken();
     const st = await send(msg, token);
     console.log('[OK] QQ 通知已发送, HTTP ' + st);
@@ -377,7 +406,7 @@ if (require.main === module) (async () => {
 })();
 
 module.exports = {
-  renderStructured, mutedReason, KIND_LABEL, doneDedupe, sessionKey,
+  renderStructured, mutedReason, KIND_LABEL, doneDedupe, sessionKey, readSnooze,   // ★ SNOOZE-B：导出供离线自测
   // ★ FIX-22：供 qqbot-service.js（心跳/静置）复用「具体事项」推断
   readRecentToolCalls, inferWhat, tooVague, iterationStep,
 };

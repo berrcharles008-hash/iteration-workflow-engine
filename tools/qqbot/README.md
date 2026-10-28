@@ -13,13 +13,36 @@
 - **单机单实例**：登录自启快捷方式为固定名（`CodeBuddyQQWatcher.lnk`），同机第二个项目执行 install 会**静默顶替**第一个的自启（叠加 18765 端口冲突）。
 - 无凭据（`qqbot.creds.json` 缺失或空 appId）时服务启动即 `[FATAL]` + exit(1)，watchdog 同样不告警——这是预期行为，先完成步骤 3 再启动。
 
-### 安装到新项目（engine2project 之后）
-1. `npm install ws`（项目根或本目录）
-2. `copy daemon.config.example.json daemon.config.json`，按需改端口/quietHours/handoffPrompt
-3. `node qqbot-setup.js` 初始化凭据（生成 `qqbot.creds.json`；**含 secret，绝不入库/提交**）
-4. `powershell -NoProfile -ExecutionPolicy Bypass -File install-service.ps1`（注册登录自启 + 停旧 + 立即启动）
-5. 验证：`http://127.0.0.1:18765/health` 返回 200；service.log 无「确认模块跳过」；QQ 实发一条
-6. 卸载顺序：先移除宿主 `.codebuddy/settings.json` 中对 `tools/qqbot/notify.qqbot.js` 的 hook 注册，再删目录
+### 安装到新项目（推荐：一条命令）
+```powershell
+# 方式 A：本目录已在目标项目里（engine2project / 手工拷贝之后）—— 就地安装
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\qqbot\install-all.ps1
+
+# 方式 B：从别的项目或引擎仓库直接装 —— bootstrap 模式，先复制再就地重跑
+powershell -NoProfile -ExecutionPolicy Bypass -File <源路径>\tools\qqbot\install-all.ps1 -ProjectRoot <新项目根>
+```
+`install-all.ps1` 按 9 步执行且**幂等**（可反复跑）：复制工具包 → 单机冲突检测 → `ws` 依赖 → 凭据 → 实例配置 → Stop hook → manifest `notifications.adapter` → 自启（服务 + 看门狗）→ `/health` 验证。
+
+常用参数：`-AppId/-Secret/-OpenId`（或 `-CredsSource <别处 qqbot.creds.json>`）写凭据；`-Port` 覆盖 `listenPort`；`-ResetConfig` 从模板重置实例配置（**与 `-Force` 分开**，避免为了越过冲突而误清 `handoffPrompt`）；`-NoService/-NoWatchdog/-NoHook/-NoManifest/-NoStart/-NoDeps` 跳过对应步骤；`-DryRun` 只打印计划；`-Force` 越过单机冲突（代价：原项目停止工作）。
+
+退出码：`0` 完成；`2` 完成但有手工待办（结尾列 TODO，最常见 = 缺凭据）；`1` 中止（单机冲突 / 环境缺失）。
+
+**唯一无法自动化的一步 = `openid`**：需要手机 QQ 真给机器人发一条消息。先 `node qqbot-setup.js` 交互完成，或用 `-CredsSource` 复用同一机器人的凭据（openId 同值），再重跑脚本收尾。
+
+> ★ 单机单实例：自启载体（`CodeBuddyQQWatcher.lnk` 或计划任务 `CodeBuddyQQWatchdog`）与端口 18765 都是全局唯一的，同机装第二个项目会顶替第一个。脚本在**任何写盘之前**做冲突检测并默认中止。
+
+#### 手工等价步骤（9 步，无脚本时照做）
+1. 拷贝本目录到 `<新项目根>/tools/qqbot`（排除 `daemon.config.json` / `qqbot.creds.json` / `*.log` / `*.jsonl` / `runtime/` / `node_modules/`）
+2. 单机冲突检测：`Get-NetTCPConnection -LocalPort 18765 -State Listen`、`Get-ScheduledTask -TaskName CodeBuddyQQWatchdog`、`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\CodeBuddyQQWatcher.lnk` 是否指向别的项目
+3. `npm install ws`（项目根或本目录；缺失 = 服务「静默半死」）
+4. `node qqbot-setup.js` 初始化凭据（生成 `qqbot.creds.json`；**含 secret，绝不入库/提交**）
+5. `copy daemon.config.example.json daemon.config.json`，按需改端口/quietHours/handoffPrompt
+6. `.codebuddy/settings.json` 的 `hooks.Stop` 追加 `node tools/qqbot/notify.qqbot.js --kind done --fallback`
+7. `.codebuddy/skills/iteration-workflow/project/project.manifest.yaml` 改 `notifications.adapter: "qqbot"`（模板默认 `none` = QQ 通道静默关闭）
+8. `powershell -NoProfile -ExecutionPolicy Bypass -File install-service.ps1`（注册自启 + 停旧 + 立即启动）**和** `install-watchdog.ps1`（计划任务看门狗；漏装 = 服务死了没人拉起）
+9. 验证：`http://127.0.0.1:18765/health` 返回 200；service.log 无「确认模块跳过」；QQ 实发一条
+
+卸载顺序：先移除宿主 `.codebuddy/settings.json` 中对 `tools/qqbot/notify.qqbot.js` 的 hook 注册，再 `install-watchdog.ps1 -Uninstall`，最后删目录。
 
 ### 运维约定（sync 口径）
 - 不随包文件（仅存在于项目实例）：`daemon.config.json`（实例配置，本目录 example 为模板）、`qqbot.creds.json`（凭据）、`DECOUPLING-PLAN.md`（0010 内部架构评估记录，**勿当操作指南**，其中 fail-open 规划与现行门禁口径不同）、`*.log`/`inbox.jsonl`/`runtime/`（运行时产物）。
@@ -28,7 +51,8 @@
 ## 文件说明
 | 文件 | 作用 |
 |---|---|
-| `qqbot-setup.js` | 一键接入向导（推荐新人/他人使用） |
+| `install-all.ps1` | **★ 新项目一键安装**（9 步幂等：复制 / 单机冲突检测 / ws / 凭据 / 配置 / hook / manifest / 自启 / health；`-DryRun` 可预演） |
+| `qqbot-setup.js` | 凭据初始化向导（AppID/Secret + 手机发消息取 openid，**此步必须人工**） |
 | `qqbot-listen-once.js` | 仅监听获取 openid（底层） |
 | `notify.qqbot.ps1` | 发送通知（底层，PowerShell 版） |
 | `notify.qqbot.js` | 发送通知（Node 版，供 **hooks/命令行** 调用；凭据 env > `qqbot.creds.json`） |
@@ -36,11 +60,13 @@
 | `qqbot-service.js` | **★ 合并服务（推荐）**：单进程 = IDE 静置推送 + QQ 双向确认，共享 token / 凭据 / 日志（取代下面两个 legacy） |
 | `start-service.ps1` | 启动合并服务（后台；已在跑则自动跳过） |
 | `install-service.ps1` | 注册登录自启（覆盖同名快捷方式，无需管理员）+ 停旧组件 + 立即启动 |
+| `install-watchdog.ps1` | 注册看门狗自启（计划任务 `CodeBuddyQQWatchdog`：登录触发 + 每 5 分钟重复 + 失败重启）；`-Uninstall` 卸载 |
+| `qqbot-watchdog.js` | 看门狗：`GET :18765/health` 探活三路分流（半死只告警 / 无进程才拉起 / 优雅停不拉起），单实例锁 + 冷却 300s + 每小时上限 3 次；`--force` 人工处置半死进程 |
 | `notify-enqueue.js` | 通知「可回复」入口：优先把通知送进服务待确认队列（带 #id），服务不可用时回退直发（门禁拦截通知走它） |
 | `ask.js` | **等待式确认登记器**：`node ask.js --prompt "…"` → 推送 QQ 并输出 `#id=<n>`（agent 用它替代"停下来等输入"） |
-| `wait-answer.ps1` | **等待答案**：`-Id <n> -TimeoutSec 300` 轮询答案文件，拿到即打印答案 JSON（exit 0）；分片超时 → `wait-timeout`（exit 2） |
+| `wait-answer.ps1` | **等待答案**：`-Id <n> -TimeoutSec 300` 轮询答案文件，拿到即打印答案 JSON（授权答复 exit 0；**有答复但无授权**（`defer-ide`/`cancel`/`timeout`）→ **exit 4**）；分片超时 → `wait-timeout`（exit 2） |
 | `notify-watcher.ps1` | （legacy，已被合并服务取代）IDE 自动推送兜底：轮询会话历史目录，写入静止即推 QQ |
-| `install-watcher.ps1` | （legacy）注册 watcher 自启并立即启动 |
+| `install-watcher.ps1` | （legacy，**默认拒绝执行**）注册 watcher 自启并立即启动；与 `install-service.ps1` 争抢同一快捷方式名 `CodeBuddyQQWatcher.lnk`，跑它会把自启降级成 legacy ⇒ 入站回复死（见 §故障史 2026-10-22）。改用 `install-service.ps1`；确需 legacy 加 `-Force` |
 | `watcher.log` | watcher 运行日志（发现路径 / 每次 PUSH 结果） |
 | `qqbot-daemon.js` | 常驻确认 daemon（方案 C/B）：WebSocket 监听 + 本地 HTTP 注册口（方案 B） |
 | `request-confirm.js` | 向 daemon 注册一条待确认项（方案 B 的 genie/进程侧调用） |
@@ -132,6 +158,35 @@ powershell -File start-service.ps1                     # 仅启动（后台；�
 - ★ PowerShell 里 `curl.exe -d '{"k":"v"}'` 会因参数引号被吞而报 `bad json` ⇒ 请用 `node request-confirm.js` 或 `Invoke-RestMethod`。
 - 手动停止：`Stop-Process -Id <pid>`（或任务管理器结束命令行含 `qqbot-service.js` 的 `node.exe`）。
 - 回退：旧 `notify-watcher.ps1` / `qqbot-daemon.js` **仍保留**（未被删除），可单独运行。
+
+## ★ TOOL-MEMBERSTALL：成员卡死检测（2026-10-14 上线）
+
+成员卡死（等确认/限流/宿主资源耗尽/整队静默）时**主动推 QQ 定向卡**，不必再盯 IDE 成员 tab。实现 = 本服务进程内 tick（`stall-watcher.js`），数据源 = IDE 日志 `%LOCALAPPDATA%\CodeBuddyExtension\Logs\CodeBuddyIDE\<日期>\<工作区>__<hash>.log`（**UTF-8**，按 mtime 最新文件增量 tail）。
+
+| 档 | 触发 | 默认阈值 |
+|---|---|---|
+| ① 工具确认挂起 | `handleStateChange: parsing -> pending` 后无 `pending -> *` | 90s |
+| ② 平台限流 | `AI_APICallError` + 速率限制 / Too Many Requests（**中英双锚**） | 即时 |
+| ⑥ 宿主资源 | `HostStarvation` 主线程阻塞 / `EMFILE` / `file limit` | 即时 |
+| ③ 成员静默 | **已派发未回音**（lead→成员后无回信）且会话零新日志 | 120s |
+| ③c 轮次未收口 | 该成员 `最后活动 > 最后 onAgentEnd`（这轮没结束）且静默 | **600s（窗口 600~900s）** |
+| ⑦ 上限暂停 | `isMaxStepLimit: true` / `isMaxTokenLimit: true`（2000 请求 / Token 上限 ⇒ 弹「是否继续？」） | 即时（事件型，每次一张） |
+| ③b 整队静默 | lead + 全员均无新日志（团队 30min 内活跃过） | 600s |
+
+> ③c 阈值标定依据（2026-10-14 两天真实日志回放）：300s ⇒ 10-14 出 11 张（多为 waiter/正常待命类 6.5~7.8 分钟噪声）；**600s ⇒ 10-14 仅 1 张、10-13 补 2 张真卡**；900s ⇒ 归零但过钝。窗口上限 900s 之外交阶梯与 ③b 承担。③c 与 ③ 互斥（同一成员不双发）。
+
+**次级信号折叠**（2026-10-14 拍板）：`EMFILE`/文件监视上限属**次级**——主信号（限流/宿主饥饿/断连/中断）本轮将触发或已有在案卡时，次级**只留痕不单发**（同一次事故一张卡；`service.log` 里会写 `次级信号 X 已折叠进主信号`）。若再看到「主卡 + 文件上限卡」成对出现即为回归。
+
+抑制门控（缺一不发）：近端平台信号 300s 内 / 有未决 `ask·decision`（RESUME-1·D 等待期）/ 日志停写（IDE 关闭）/ 团队早已收口 / `team-out/<成员>.md` 含 `TEAM-OUT-COMPLETE`（已交付）。阶梯 = 首卡 → +5min → +10min → 每 30min（+4 次封顶），会话出新行即恢复。
+
+```powershell
+node stall-watcher.js --selftest                     # 离线自测（解析器/门控/阶梯，40 项）
+node stall-watcher.js --replay <log 文件>            # 真实日志回放（模拟时钟，不发 QQ）
+node qqbot-service.js --no-stall                     # 临时关闭本模块
+curl http://127.0.0.1:18765/health                   # 读数：.stall.{file,convs,active,pending,sent}
+```
+
+配置：`daemon.config.json → stallWatcher`（`enabled` / `silenceSec` / `pendingStallSec` / `teamSilenceSec` / `escalateSec` / `longTermSec` / `workspaceHash`（钉死工作区）/ `logRoot`）。设计要点：增量 offset 读 + 单 tick 上限（不整读 188MB）、每 tick 续写心跳（循环假死 ⇒ watchdog 180s 告警）、平台信号不续热团队窗（否则主会话的 EMFILE 会把早已待命的成员误判成静默）。
 
 ### 档 3（2026-09-17）：通知「可回复」
 
@@ -246,7 +301,21 @@ powershell -File start-service.ps1                     # 仅启动（后台；�
   # #id=3
   ```
 
-- **等待**（**模式 A** 分片 ≤5 分钟/次，**总时限与 D 同为 30 分钟**（≤6 片）；**模式 D** 单片 900s、一轮 2 片 = 30 分钟 —— 细则唯一来源：`.codebuddy/skills/iteration-workflow/engine/waiting-protocol.md`；另见文末「方案 D」）：
+- ★ **等待（2026-10-19 TOOL-QQWAIT 起 = 模式 A 首选；2026-10-26 起 = 默认行为）**：登记与等待**一条命令**完成 —— `ask.js` 在同一进程内轮询答案文件，命中即输出答案 JSON（`exit 0`），片满输出 `wait-timeout`（`exit 2`，可重入续等）：
+
+  ```powershell
+  node tools\qqbot\ask.js --prompt "…"                 # 默认等待 300s（1 片）
+  node tools\qqbot\ask.js --prompt "…" --wait 600      # 指定秒数
+  # ★ 关闭等待（仅自动化 / 门禁回路）：必须注入环境变量，裸 --no-wait 会被拒（exit 1）
+  $env:QQ_ASK_AUTOMATION='1'; node tools\qqbot\ask.js --prompt "…" --no-wait
+  ```
+
+  ★ **默认等待**（2026-10-26 翻转，原 opt-in 缺省关闭）：第 4 例空转实证（QQ `#1` 答复 9 秒到达仍无人消费）表明「漏带参数」是主要失效面 ⇒ 漏带参数的失效方向改为「多等 5 分钟」（可观测、可续等）。
+  ★★ **`--no-wait` 现为环境变量门控**（2026-10-26 第 5 例空转后加固）：必须 `QQ_ASK_AUTOMATION=1`，否则 `exit 1` 且**不登记**。动因 = 默认等待是 opt-out，某 IDE 会话曾以 `--json --no-wait` 登记 #3 后直接结束回合，用户 7 秒后回 A 无人消费 ⇒ 逃生口不能再由命令行单独触发。
+  合法调用方只有 `engine/gate/gate-check.mjs` 不可逆分支（detached spawn，已同批注入该变量）；**Agent 在 IDE 内登记一律不得关闭等待**（豁免路径也不存在）。
+  另：`--json` 不再吞掉「无等待者」告警 —— stdout 保持纯 JSON，告警走 stderr。
+  测试隔离可用 `QQ_ANSWER_DIR=<临时目录>` 覆盖答案目录（生产不要传）。
+  等价退化 = 登记后手动跑 `wait-answer.ps1`（分片 ≤5 分钟/次，**总时限与 D 同为 30 分钟**（≤6 片）；**模式 D** 单片 900s、一轮 2 片 = 30 分钟 —— 细则唯一来源：`.codebuddy/skills/iteration-workflow/engine/waiting-protocol.md`；另见文末「方案 D」）：
 
   ```powershell
   powershell -NoProfile -ExecutionPolicy Bypass -File tools\qqbot\wait-answer.ps1 -Id 3 -TimeoutSec 300
@@ -254,7 +323,24 @@ powershell -File start-service.ps1                     # 仅启动（后台；�
   # exit 2 + {"id":3,"answer":"wait-timeout"}      ← 本片未拿到，再调一次继续等
   ```
 
-- **答案取值**：`confirm` / `cancel` / `timeout`（超时由服务写入；`ask.js --timeoutSec` 可覆盖 `requestTimeoutMs`）。
+- ★ **登记 ≠ 等待**（`waiting-protocol.md` §2 铁律）：只登记不等待 = 本次登记无效。三种合法等待形态**只取其一、不得都省**：① `ask.js` 默认等待（或显式 `--wait`）／登记后立即挂 `wait-answer.ps1`（模式 A）② 登记后立即派 waiter 成员（模式 D）③ 登记时带 `--handoff`（模式 B）。**只登记然后结束回合 ⇒ 答复必然无人消费**（IDE 会话唯一唤醒通道 = team 成员 `send_message`；2026-09-29 / 10-01 / 10-19 / **10-26** 四次实证）。
+- ★ **不存在「模式 E：用户在 IDE 聊天窗口直接回」**（2026-10-26）：IDE 内发言能唤醒会话、**QQ 答复不能**；非 `--handoff` 卡在服务端只落盘、不唤醒。⇒「反正他在 IDE，会直接回我」不构成等待方式。
+- **invariant**：`--wait` 命中后**不得**同回合再跑 `poll-answer.js --consume`（`--wait` 不写 `consumedAt`，会重复读到同一答复）；三套新鲜度判据 = `--wait` 判 JSON `ts` / `wait-answer.ps1` 判 mtime / `poll-answer.js` 判 `consumedAt`。
+
+- **答案取值**：`confirm` / `choice` / `text` / `cancel` / `defer-ide` / `timeout` / `superseded`（超时由服务写入；`ask.js --timeoutSec` 可覆盖 `requestTimeoutMs`）。
+- ★ **答复类型 ≠ 是否授权**（TOOL-ANSWERKIND · 2026-10-20）：答案文件同时写 `answerKind` / `allowed` / `hint`（必要时 `visibleKey` / `visibleLabel`），消费端**先判 `allowed` 再决定动作**：
+
+  | answer | answerKind | allowed | 允许动作 |
+  |---|---|---|---|
+  | `confirm` / `choice` | approve | ✅ | 可按登记事项推进（`choice` 仅按该选项语义） |
+  | `text` | free-text | ✅ | 按文本判断，**不得**默认视为同意 |
+  | `cancel` | reject | ❌ | 禁止推进 |
+  | `defer-ide`（旧值 `ide`） | no-decision | ❌ | **禁止任何推进与留痕**；结束回合，等用户在 IDE 直接发言 |
+  | `timeout` / `superseded` | no-answer / no-decision | ❌ | 停止等待、保留 `blocked`；不得据此推进 |
+
+  `wait-answer.ps1` / `ask.js --wait` 对 `allowed=false` 的答复输出 JSON 后 **exit 4**（0=授权 / 2=片超时无答复 / 4=有答复但无授权）。
+  ★ **不用 3**：`request-confirm.js` 的 exit 3 = 「已登记但送达未确认」，同家族双义会误导（评审 R3 ②）。
+  **为什么改名**：原落盘值 `ide` 与 `state-apply.py` 的 `--confirm-by ide`（= 用户经 IDE **确认**）同词反义 —— 2026-10-20 实测被读成「IDE 已确认」，两次伪推进阶段（01→02 / 02→03）并自撰 quote。`defer-ide` = 「推迟到 IDE 决定」，二者不再共用词。
 - **答案文件**：`.codebuddy/temp/qq-answers/<id>.json`（含 `prompt` 原文，便于对账）。
 - **确认后要"接管继续"**：登记时加 `--handoff --handoffPrompt "剩余工作：…"`，走方案 B 的 headless 路径。
 - **agent 侧约定**：需要用户确认时**优先用 ask + wait**（而非直接提问后停下）；`MEMORY.md` 已登记该约定。
@@ -357,9 +443,13 @@ powershell -File start-service.ps1                     # 仅启动（后台；�
 **配套 `poll-answer.js`（IDE 侧主动拉取）**：IDE 会话无法被推送唤醒 ⇒ 回到工位后由 agent 主动读答复（避免与 headless 重复劳动）：
 
 ```powershell
-node tools/qqbot/poll-answer.js            # 列出未消费答复（--all / --since / --json）
-node tools/qqbot/poll-answer.js --consume  # 标记已消费（写 consumedAt）
+node tools/qqbot/poll-answer.js                     # 列出未消费答复（--all / --since / --json / --id）
+node tools/qqbot/poll-answer.js --id 1 --consume    # 只消费 #1（写 consumedAt）
+node tools/qqbot/poll-answer.js --since 2026-10-26T00:00:00.000Z --consume
 ```
+
+> ★ **`--consume` 必须限定范围**（TOOL-QQCONSUME · 2026-10-26）：答案目录**跨会话共享**，无限定消费会把其它会话的答复一并标记（实测 2026-10-26 一次列出 8 条含他会话 4 条）⇒ 既无 `--id` 也无 `--since` 时**直接拒绝**（exit 2）。
+> 首选 `--id <ask.js 返回的 #id>`；消费后回显「已消费 #N …」清单。
 
 > ★ **消费约定（2026-09-30 新增 · QQ-WAKE-1）**：**处理完毕才消费**——答复内容落入本轮动作后再跑 `--consume`（幂等，只标未消费项）；
 > **不得**与 `wait-answer.ps1 -SinceIso` **同回合混用**：`--consume` 会整文件重写答案 JSON ⇒ **mtime 前移到现在**，
@@ -716,7 +806,7 @@ P2 改用 **`{convId}` 目录 mtime**（随消息前进），且 `index.json` **
 |---|---|---|
 | `确认#N` / `取消#N` | 二元项（命令 / 门禁 / 接管邀请） | 执行 / 不执行 |
 | `选项#N`（如 `B#12`）；唯一未决选择题时 `B` | 选择题 | 落 `answer:"choice"` + `choice` + `options`；带 handoff 则按选择起接管 |
-| `回IDE#N`；唯一未决非 idle 项时 `回IDE` | ask / 选择题（模板固定选项） | QQ 侧作废本项，落 `answer:"ide"` ⇒ waiter 读回后回 IDE 原会话拍板；idle 项不适用（其「回 IDE 操作」= 不影响邀请） |
+| `回IDE#N`；唯一未决非 idle 项时 `回IDE` | ask / 选择题（模板固定选项） | QQ 侧作废本项，落 `answer:"defer-ide"`（`answerKind:"no-decision"`/`allowed:false`，历史值 `ide`）⇒ 消费端**不得推进**，回 IDE 原会话拍板；idle 项不适用（其「回 IDE 操作」= 不影响邀请） |
 | 其他文本（≤ `freeText.maxChars`） | 唯一未决项 | 作为指示交接管（`originPrompt` 保留原题面） |
 
 **消息样例**：
@@ -810,18 +900,28 @@ IDE（插件）版**不提供 hooks**，无法在回合结束时自动触发。�
 安装（用户级、无需管理员）：
 ```powershell
 cd tools/qqbot
-powershell -File install-watcher.ps1 -IdleSeconds 30
+powershell -File install-service.ps1     # ← 合并服务，统一走这个
 ```
-- 会在「启动」文件夹创建 `CodeBuddyQQWatcher.lnk`（登录自启），并立即后台启动 watcher。
+- ★ `install-watcher.ps1` 已废弃：它和 `install-service.ps1` 写**同一个**快捷方式名 `CodeBuddyQQWatcher.lnk`，跑它会把自启降级成 legacy（详见本节末「故障史」）。
+- 会在「启动」文件夹创建 `CodeBuddyQQWatcher.lnk`（登录自启），并立即后台启动服务（legacy 路径下启动的是 watcher）。
 - 运行日志：`tools/qqbot/watcher.log`。
 - 卸载自动启动：删除该快捷方式 `C:\Users\<你>\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\CodeBuddyQQWatcher.lnk`。
 - 若想用计划任务（需管理员）：`Register-ScheduledTask` 在本机被拒（Access denied），故改用启动文件夹方案。
 
 注意点（与 hooks 的取舍）：
 - watcher 是"文件静止=回合结束"的**启发式**，无法精确区分"有实质产出"——长思考中途若停顿超阈值可能误推；纯闲聊静置也会推。可接受，若嫌烦可调大 `IdleSeconds`。
-- IDE 升级若改动历史目录结构，watcher 的自动发现（`*CodeBuddyIDE*\history`）可能失效，需重跑 `install-watcher.ps1`。
+- IDE 升级若改动历史目录结构，自动发现（`*CodeBuddyIDE*\history`）可能失效；合并服务下重启服务即可（`stop-service.ps1` + `start-service.ps1`），**不要**再重跑 `install-watcher.ps1`（会降级自启）。
 - 与 CLI 互不影响：CLI 走 Stop 钩子（路径不含 `CodeBuddyIDE`），两者不会重复推送。
 - 安全：Secret 属敏感信息，切勿在群聊/公开渠道明文张贴。
+
+### 故障史：QQ 回「该机器人的"灵魂"不在线」（2026-10-22 埋雷 → 10-23 复现）
+
+`install-service.ps1` 与 `install-watcher.ps1` **写的是同一个快捷方式名** `CodeBuddyQQWatcher.lnk`（前者 → `start-service.ps1` 合并服务；后者 → `notify-watcher.ps1` legacy），后跑者覆盖。10-22 16:48 恢复 Startup 5 个 lnk 时误用了 `install-watcher.ps1` ⇒ 自启回退成 legacy：
+- 登录后只起 `notify-watcher.ps1` + `qqbot-watchdog.js`，持有 QQ WebSocket 的 `qqbot-service.js` 从未启动；
+- 症状**分裂**：出站照旧（`watchdog.log` 里 `[NOTIFY] ... HTTP 200`、静置推送都正常），入站全死（用户回复撞平台自动回复，`127.0.0.1:18765` 不监听）；
+- 判据（三步）：node 进程里无 `qqbot-service.js` → `netstat -ano | Select-String ':18765'` 无监听 → 解析 lnk 的 `Arguments`。**参数尾巴可辨来源**：`install-service` 写 `-IdleSeconds 0`，`install-watcher` 写 `-IdleSeconds 30`。
+- 修复：`install-service.ps1`（停 legacy + 覆盖同名 lnk + 起服务），随后 `service.log` 应见 `token OK` → `[READY] 监听中` → `[ONLINE] ... HTTP 200`，`/health` 的 `hbAgeSec` 为个位数。
+- 现在 `install-watcher.ps1` 默认 `exit 1` 拒绝执行；带 `-Force` 时若 lnk 已指向 `start-service.ps1` 仍 `exit 2` 拒绝覆盖。
 
 ## 方案 C：常驻确认 daemon（人机闭环）
 适用：机器人发消息问你，你在 QQ 回复后**自动**执行后续动作（无需回到 genie 对话）。
@@ -996,13 +1096,13 @@ genie 执行危险操作前，可先调 `request-confirm.js` 把命令注册为�
 
 | 你回 | 效果 | 回复范围 |
 |---|---|---|
-| `静默2h` / `120min内不再提醒` / `1.5h 别提醒` / `静默` | 静默指定时长（无时长 = `snoozeDefaultSec`，默认 1h） | **只掐静置邀请** |
-| `全部静默1h` | 连完成通知 + 门禁通知一并静默 | 全部 |
+| `静默2h` / `120min内不再提醒` / `1.5h 别提醒` / `静默` | 静默指定时长（无时长 = `snoozeDefaultSec`，默认 1h） | ★ SNOOZE-B：**静默全部噪音类**（心跳/完成/静置邀请/环境类 stall/上下线）；确认类照发 |
+| `全部静默1h` | 兼容写法（SNOOZE-B 后默认即 all，二者等价） | 同 all |
 | `取消静默` | 提前解除 | — |
 
 - **解析规则**：`意图词`（静默/免打扰/勿扰/别提醒/不再提醒/…）**与** `时长`（`h`/`hr`/`hour`/`小时`/`min`/`m`/`分钟`，支持小数）**必须同时命中**；仅当整条消息就是静默词时用默认时长 ⇒ 「静默安装依赖」「静默处理一下」**不会**误触。
 - **优先级**：`确认#N` / `取消#N` / `B#12` **不受影响**；静默分支**必须早于 `route()`** —— 否则「取消，并且1h内不再提醒」会被 cancel 关键词吞掉（案例③的根因）。
-- **不被静默**：`fail` / `decision` / `irreversible` / `ask.js` 登记项一律照发（除非 `全部静默`）。
+- **不被静默（硬约束）**：`ask` / `decision`（含选择题）/ `gate` 门禁 / `irreversible` / `fail` / 各类交互回执 / stall 的 `pending`·`silence`·上限暂停 —— ★ SNOOZE-B 后这些调用**不传 kind ⇒ 结构上不可能被静默**（见下节）。
 - **落盘**：`snoozeFile`（默认 `.codebuddy/temp/qqbot-snooze.json`）；`/health.watch.snooze` 与 `/status` 区块 5 可见。
 
 **离线自测（不启动服务、不真发 QQ）**：
@@ -1013,6 +1113,33 @@ node tools/qqbot/qqbot-service.js --snooze-parse "取消，并且1h内不再提�
 node tools/qqbot/qqbot-service.js --snooze-parse "确认#12"                 # 回归：不得被静默分支劫持
 node --check tools/qqbot/qqbot-service.js
 ```
+
+### ★ SNOOZE-B：静默覆盖全通道 + 确认类硬放行（2026-10-20 用户拍板）
+
+**起因（用户报障 + 当日实证）**：发「静默2h」后仍持续弹消息。取证：`snoozeActive()` 全文件仅 3 处引用（idle 登记 / `/health` / `/status`），**`/notify`、stall 卡、上/下线通知、ask 卡全部绕过** —— 当日 09:30~13:36 实发 10 条心跳 + 9 条 ask + 7 张 stall 卡，静默期内 13:36 仍发出 `#9`。且旧文案承诺 `scope=all` 会停「全部通知（含完成/门禁）」，实现根本未接线（假承诺）。
+
+**口径（用户硬约束）**：**正常需要用户确认的消息不允许被静默**。
+
+**改法 = 白名单式 `send(content, kind)`**：不传 `kind` ⇒ 一律照发；只有显式标记的噪音类在 `scope=all` 时丢弃并写 `[SEND SKIP]`（返回 200 = 已处理，调用方不重试）。
+
+| 通道 | kind | 静默期 |
+|---|---|---|
+| ask / decision / 选择题 / 门禁 gate / 各类回执 | **不传** | 照发（结构上不可能被静默） |
+| 心跳 progress / done（`enqueueMerge` + `flushMerge` 双丢弃） | 入队前判 | 丢弃，**不积压**（防到期刷屏） |
+| 静置邀请（`autoQueue=false` 直发分支） | `idle` | 丢弃（任一 scope） |
+| 上线 / 下线 | `online` / `offline` | 丢弃 |
+| stall 环境噪音（`ratelimit`/`filelimit`/`hoststarvation`/`netdown`/`aborted`、`team-silence`、`turn-silence`） | `stall:…` | 丢弃 |
+| stall 需人动手（`pending` 工具确认挂起、`silence` 成员卡死、`steplimit`/`tokenlimit` 上限暂停） | **不传** | 照发 |
+| `fail` 失败告警 | 不传 | 照发 |
+| 服务挂掉时 `notify.qqbot.js` **回退直发** | 客户端 `readSnooze()` | done/progress 同样丢弃 |
+
+`parseSnooze` 默认 scope 由 `idle` 改为 `all`（`静默2h`/`静默`/`全部静默2h` 等价）；`取消静默` 立即恢复。`.codebuddy/hooks/.qq-notify-off` 保持为独立「全局硬静默」开关（语义不动）。
+
+**改动**：`qqbot-service.js`（send 门 / parseSnooze / enqueue+flush / idle 直发 / 上下线 / 回执文案）、`stall-watcher.js`（`stallKeep()` 分类 + send 传 kind）、`notify.qqbot.js`（`readSnooze()` 回退直发拦截，已导出供自测）。
+
+**实测（2026-10-20 13:56~13:57 重启后真机）**：`--snooze-parse` 4 组（`静默2h`→all/7200 · `静默30min`→all/1800 · `取消静默`→clear · `静默安装`→null）；`readSnooze()` 对 `scope=idle` 返回 null（不误拦）；负向对照 = 静默期内 `--kind progress` 回执 `{queued:false,snoozed:true}` + 日志 `[MERGE DROP] snooze kind=progress`（QQ 无消息）；正向对照 = 静默期内 `ask.js` 照常 `[ASK #1] HTTP 200`（QQ 收到）；`取消静默` 后 `until=0`。
+
+**自测时间漂移（2026-10-20 已修）**：`stall-watcher.js --selftest` 曾为 61/62，`3b: team-out 含 COMPLETE ⇒ 抑制沉默卡` 失败 —— 自测固定模拟时钟 `T0=2026-10-14`，而 `memberDone()` 要求 team-out 文件 **mtime 与模拟时钟同日**（`toDateString()` 相等）；非 10-14 当天运行必红（实测 `simClockDay=Wed Oct 14 2026` vs `fileMtimeDay=Tue Oct 20 2026`）。**修法** = 写入临时 team-out 后 `fs.utimesSync(fdone, new Date(T), new Date(T))` 把 mtime 对齐模拟时钟（**不动生产判据**的「只认当天」语义），3c 对照同步对齐以保持唯一变量；复跑 **62/62 OK**。
 
 **实测（2026-09-20）**：`node --check` 通过；`--snooze-parse` 14 用例全对（`静默2h`→7200/idle · `120min内不再提醒`→7200 · `取消，并且1h内不再提醒`→3600 · `1.5h 别提醒`→5400 · `全部静默30min`→1800/all · `静默`→3600 · `静默48h`→86400/capped · `静默处理一下`/`静默安装依赖`/`5分钟后给我答复`→null · `确认#12`/`取消#12`/`B#12` 解析不受影响 · `取消静默`→clear）；重启后 `/health` = `idleSeconds:900 · idleMinGapSec:600 · idleCooldownSec:1800 · taskGate:true · snooze:null`。
 
@@ -1225,14 +1352,14 @@ node tools/qqbot/adapter-headless.js --modellist --no-cache              # 清�
 | 查询 | `心跳`（`状态` / `ping`） | 状态探针：服务/迭代/接管/静默 |
 | 查询 | `查看迭代`（`迭代状态` / `当前迭代`） | ★ TOOL-QQCONT：迭代 ID/阶段/卡点/全量待办/接管状态（只读） |
 | 查询 | `模型列表`（`模型清单`） | ★ TOOL-QQCONT：支持模型清单（来源 = CLI `--help`，只读） |
-| 查询 | `静默2h` ｜ `全部静默1h` ｜ `取消静默` | 静置邀请 / 全部通知 的静默与解除 |
+| 查询 | `静默2h` ｜ `取消静默` | ★ SNOOZE-B：静默噪音类（心跳/完成/静置邀请/环境告警）；需拍板 #N、上限暂停、成员卡死、失败告警照发 |
 | 电源 | `待机 30min` ｜ `开机 07:30` | S3 待机（带定时唤醒）/ 注册唤醒并立即待机 |
 | 电源 | `关机` ｜ `中止关机` | 90s 倒计时关机 / 取消倒计时 |
 | 迭代 | `开新迭代 #23`（不带编号先列候选） | ACTIVE=none 时从工位外启动新迭代 |
 | 迭代 | `继续迭代 [模型名]` | ★ TOOL-QQCONT：ACTIVE 存在时续推当前迭代（模型可选，须命中清单） |
 | 帮助 | `/help`（`指令` / `帮助`） | 本清单 |
 
-> 电源与迭代口令均需二次确认（回 `确认#编号`）；关机/待机/开新迭代/继续迭代项**禁止免编号直通**（回「好/ok」不生效），继续迭代项的自由文本按作废处理。
+> 电源与迭代口令均需二次确认（回 `确认#编号`）；**离线类**（关机/待机/开新迭代/继续迭代）与**门禁·需授权**类（带 `command` 的待执行项，如开闸）**禁止免编号直通**（回「好/ok/可以/同意」等含 confirm 关键词的闲聊不生效，必须带 `#编号`），继续迭代项的自由文本按作废处理。★ FIX-50（2026-10-16）：门禁类一并纳入关键词拦截，与卡面警示行一致；★ FIX-50b：门禁类的**自由文本同样不生效且不消费本项**（保持 pending 并回执提醒，超时机制不变），离线类维持既有分支（shutdown 作废回执 / new-iteration·continue-iteration 作废）。
 
 **配置**（`daemon.config.json → commands.help`）：`enabled`（默认 true；false = 不识别本口令、落回兜底）、`keywords`（触发词表，整条精确匹配；含全角 `／help`）。
 
@@ -1271,15 +1398,15 @@ node tools/qqbot/qqbot-service.js --help-test     # 探针：清单每条语法�
 | 服务启动 | 🟢「机器人已上线」+ 迭代/待确认/口令开关/**上次退出方式** | 启动块直接发（含 `queryWakeTimer` 结果） |
 | 优雅停（`stop-service.ps1` / `POST /shutdown` / Ctrl+C） | 🔴「机器人已下线（原因）」 | 服务发完通知再退出，并写 `stoppedAt` |
 | 由机器人发动的「关机」/「待机」 | ✅ 确认回执里带 🔴 预告行 | 执行前发出（关机后进程已死，发不了） |
-| **硬杀 / 系统关机 / 崩溃** | ⚠️ 由**看门狗**补发（"心跳中断 N 分钟，预计异常退出"） | 心跳文件过期判定；**只通知不重启** |
+| **硬杀 / 系统关机 / 崩溃** | ⚠️ 由**看门狗**补发（"心跳中断 N 分钟，预计异常退出"）；无服务进程时 ≤1 个轮询周期内**自动拉起** | 心跳过期 + `:18765/health` 端口探活；半死（进程在/端口死）只告警不杀 |
 
 ### 新增文件 / 命令
 
 | 文件 | 作用 |
 |---|---|
 | `stop-service.ps1` | **优雅停**（推荐用法）：POST `/shutdown` → 等 ≤12s → 仍在则强杀 |
-| `qqbot-watchdog.js` | 心跳看门狗（60s 轮询；只通知不重启）；日志 `watchdog.log` |
-| `start-watchdog.ps1` / `install-watchdog.ps1` | 后台启动 / 注册登录自启（`CodeBuddyQQWatchdog.lnk`，已注册） |
+| `qqbot-watchdog.js` | 看门狗（60s 轮询）：心跳告警 + `:18765/health` 端口探活；**无服务进程才自动拉起**（锁 / 冷却 5min / 每小时 3 次），半死只告警；`--force` = 人工杀+拉起；日志 `watchdog.log` |
+| `start-watchdog.ps1` / `install-watchdog.ps1` | 后台启动 / 注册**计划任务**自启（`CodeBuddyQQWatchdog`：登录触发 + 每 5 分钟重复 + 失败重启 3×1min；`-Uninstall` 卸载） |
 | `POST /shutdown` | 仅回环（127.0.0.1/::1）；`stop-service.ps1` 调用 |
 
 ### 配置（`daemon.config.json`）
@@ -1292,6 +1419,29 @@ node tools/qqbot/qqbot-service.js --help-test     # 探针：清单每条语法�
 | `commands.wake.taskName` | `PIVAS-WakeTimer` | 唤醒定时器的计划任务名 |
 | `notify.onlineNotice` / `offlineNotice` | `true` | 上线/下线通知开关 |
 | `notify.liveness.writeSec` / `staleSec` / `watchPollSec` | `30` / `180` / `60` | 心跳写入间隔 / 判定阈值 / 看门狗轮询 |
+| `notify.liveness.restart.enabled` | `true` | 端口不通且**无服务进程**时自动拉起（半死态永不自动杀） |
+| `notify.liveness.restart.cooldownSec` / `maxPerHour` / `probeTimeoutMs` | `300` / `3` / `2000` | 拉起冷却 / 每小时上限 / `/health` 单次探活超时 |
+| `notify.liveness.restart.probeAttempts` / `halfDeadAlertSec` | `2` / `120` | 单轮探活次数（全失败才判不通）/ 半死须持续多久才告警 |
+| `notify.liveness.restart.graceSec` / `cimTimeoutMs` | `180` / `60000` | 自动拉起后的宽限期（此间端口不通只等待）/ 进程清单查询超时 |
+
+### ★ TOOL-SELFHEAL：服务自愈（端口探活 + 有限自动拉起，2026-10-28）
+
+**背景（2026-10-28 实测三连）**：① `start-service.ps1` 判活口径是「进程存在即跳过」⇒ 进程在而端口拒连时静默不动（当天 09:43 实证）；② 当天看门狗**根本没在跑**（`.lnk` 载体不可观测，曾发生自启被回退）⇒ 自愈实为零；③ `qqbot-service.js` 对 `EADDRINUSE` 只记日志不退出 ⇒ 双实例 = 顶号 + 通知双发。
+
+**分流口径（每个轮询周期 `GET :18765/health`，单次超时 2s × 最多 2 次）**：
+
+| 端口 | 进程 | 动作 |
+|---|---|---|
+| 通 | — | 正常（沿用原心跳告警逻辑） |
+| 不通 | 在 | **半死**：**须持续 ≥120s** 才 QQ 告警一次（同一 pid 不重复刷屏），**不杀、不拉起**，需人工处置；重启后 180s 宽限期内只记 `[SVC WAIT]`（启动扫描期 `/health` 会短暂不应答） |
+| 不通 | 不在 | **自动拉起**：调 `start-service.ps1`，带单实例锁（`temp/qqbot-watchdog-restart.lock`；>120s 僵尸锁可接管）+ 冷却 300s + 每小时 ≤3 次 + 拉起前二次复检（端口/进程） |
+| 不通 | 不在 + 心跳带 `stoppedAt` | **不拉起**（尊重 `stop-service.ps1` / `POST /shutdown` 的人工意图） |
+
+- 日志口径：`[SVC DOWN]`（含重试次数）／`[SVC UP]`／`[SVC WAIT]`（重启宽限期）／`[HALF-DEAD?]`（观察中，未达 120s）／`[HALF-DEAD]`（达阈值，已告警）／`[RESTART]`（含本小时第 N 次）→ `[RESTART OK] /health 恢复，pid=…` ／ `[RESTART WAIT]` ／ `[RESTART SKIP] 原因`（冷却、上限、锁占用、复检已恢复、优雅停止）。达每小时上限会发一条 QQ 告警并停止自动拉起。
+- **降噪依据（2026-10-28 实测）**：重启后服务做全量扫描（112MB 日志 / 40 万文件索引）时 `/health` 有 1~2 分钟不应答 ⇒ 「单次探活失败即告警」当天误发 2 条 `kind=fail` QQ。故加「重试 ×2 + 半死须持续 120s + 重启宽限 180s」三闸。
+- **杀进程只能人工**（用户 2026-10-28 拍板）：`node tools/qqbot/qqbot-watchdog.js --force` —— 仅当端口不通且 CIM 校验 `CommandLine` 命中 `qqbot-service.js` 才 `taskkill /F`，等进程退出（≤5s）后拉起，且不计入自动配额。**任何自动路径都不得进入 `--force`**。
+- 自启 = 计划任务 `CodeBuddyQQWatchdog`（登录触发 + 每 5 分钟重复 + 失败重启 3×1min + `IgnoreNew` 防重入）。周期重复本身也是「看门狗自己死了自动复活」的兜底（`start-watchdog.ps1` 对已运行实例直接跳过）。`install-watchdog.ps1` 会先删旧 `CodeBuddyQQWatchdog.lnk` 防双启动，`-Uninstall` 反注册。
+- 判据（实施已验证）：无进程被硬杀 ⇒ 下一轮询内 `/health` 恢复且日志出现 `[RESTART]` + pid 变化；半死 ⇒ 只出一次告警、零拉起；并发触发 ⇒ 只有一次真正拉起（锁生效）。
 
 ### 离线自测（不待机、不发 QQ）
 
@@ -1301,14 +1451,18 @@ node tools/qqbot/qqbot-service.js --cmd-parse "开机 07:30"    # → action=wak
 node tools/qqbot/qqbot-service.js --cmd-parse "待机 abc"      # → sleepMinutes=null（会被拒并提示格式）
 node tools/qqbot/qqbot-service.js --wake-test 3               # 建→查→删 唤醒定时器（不待机）
 node tools/qqbot/qqbot-service.js --wake-query                # 查当前定时器
-# 看门狗告警路径自测（用独立测试文件，不污染真实心跳）：
+# 看门狗告警路径自测（用独立测试文件，不污染真实心跳；SELFTEST 下自动拉起默认关闭）：
 $env:QQBOT_WD_SELFTEST='1'; node tools/qqbot/qqbot-watchdog.js --once
+# 三路分流演练（桩端口 + 桩匹配串 + 桩拉起脚本 ⇒ 绝不碰真服务）：
+$env:QQBOT_WD_SELFTEST='1'; $env:QQBOT_WD_PORT='18799'; $env:QQBOT_WD_PROC_MATCH='__none__'
+$env:QQBOT_WD_START_PS1='<stub.ps1>'; $env:QQBOT_WD_AUTO='1'; $env:QQBOT_WD_NO_NOTIFY='1'
+node tools/qqbot/qqbot-watchdog.js --once
 ```
 
 ### 已知边界
 
 - **开机 ≠ 服务可用**：合并服务是「登录自启」⇒ 唤醒/开机后需登录（或配自动登录）机器人才回话；**S3 唤醒**例外（进程未重启，直接续跑）。
-- 看门狗**只通知不重启**（按用户 2026-09-21 决策）；机器关机期间看门狗同样不在线，该次中断由下次「上线通知」标注。
+- 看门狗**只在「端口不通且无服务进程」时自动拉起**（2026-10-28 决策，取代 2026-09-21 的「只通知不重启」）；**半死（进程在/端口死）只告警、不自动杀**，需人工 `--force`；机器关机期间看门狗同样不在线，该次中断由下次「上线通知」标注。
 - `node -e` 属解释器内联会被门禁拦 ⇒ 所有自测都提供 `--flag` 形式；异步自测（`--wake-*`）已在 `require.main` 守卫中排除，避免误启动整套服务（实测踩过）。
 
 ## ★ FIX-39：「汇总」把完成通知截成半句（2026-09-21）
@@ -1414,6 +1568,7 @@ powershell -File tools/qqbot/wait-answer.ps1 -Id N -TimeoutSec 300 -SinceIso <IS
   powershell -NoProfile -ExecutionPolicy Bypass -File tools\qqbot\wait-answer.ps1 -Id N -TimeoutSec 900 -SinceIso TS
 - exit 0 且 stdout 的 ts 为本次（≥ TS）⇒ send_message 给 main：答案原文 <stdout 逐字>，然后结束
 - exit 0 但 ts 早于 TS ⇒ 视为残留（FIX-40）⇒ 继续等下一片
+- exit 4（有答复但不构成授权：defer-ide / cancel / timeout）⇒ **立即 send_message 给 main：答案原文 + 明写「不构成授权、禁止推进」并结束；不得再跑片 2**
 - exit 2（wait-timeout）⇒ 执行下一片
 两片均超时 ⇒ send_message 给 main：「等待超时未获答复（一轮 30 分钟已用尽）」⇒ **主 Agent 停止等待**
 约束：不得改参数；不得读写其它文件；不得重试超过 2 片。

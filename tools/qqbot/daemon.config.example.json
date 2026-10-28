@@ -10,7 +10,8 @@
     "continueIteration": "commands.continueIteration 为 QQ 口令「继续迭代 [模型名]」（opt-in，默认 false）：与开新迭代互为镜像 —— 要求 ACTIVE **存在**（none 时回执引导「开新迭代」）；口令只登记，回「确认#N」后由 CLI 接管会话按接续入口继续推进**登记时快照的那个迭代**。模型名可选且**硬校验**（须命中 CLI --help 清单；CLI 对错模型名静默接受，故必须服务侧校验）。handoffPrompt 留空 = 复用 watcher.handoffPrompt（D-3=A）+ 自动注入目标迭代 ID 自检前缀",
     "iterationDetail": "commands.iterationDetail 为**只读**口令「查看迭代」（默认 true）：回执含迭代 ID/阶段/卡点/全量待办/接管状态；不登记 #N、不受静默影响",
     "modelList": "commands.modelList 为**只读**口令「模型列表」（默认 true）：清单单一来源 = CLI `--help`（cacheSec 为 TTL 秒）；解析失败回落 headless.fallbackModels，再不可用 ⇒ 明确拒绝（不静默报空）",
-    "fallbackModels": "headless.fallbackModels 为「继续迭代」模型校验的**兜底清单**（可选）：CLI --help 解析失败时用它，并在回执里标注「内置兜底清单」；留空 = 解析失败即拒绝登记并提示省略模型名"
+    "fallbackModels": "headless.fallbackModels 为「继续迭代」模型校验的**兜底清单**（可选）：CLI --help 解析失败时用它，并在回执里标注「内置兜底清单」；留空 = 解析失败即拒绝登记并提示省略模型名",
+    "watchdog": "notify.liveness.restart = 看门狗自愈参数（端口探活 + 有限自动拉起）。enabled=false 关闭自动拉起；进程在而端口死的「半死态」只告警、不自动杀（杀进程只能人工 --force）；判活一律看 GET /health，不看进程是否存在"
   },
   "openId": "",
   "dryRun": false,
@@ -43,8 +44,36 @@
     "liveness": {
       "writeSec": 30,
       "staleSec": 180,
-      "watchPollSec": 60
+      "watchPollSec": 60,
+      "restart": {
+        "enabled": true,
+        "cooldownSec": 300,
+        "maxPerHour": 3,
+        "probeTimeoutMs": 2000,
+        "probeAttempts": 2,
+        "halfDeadAlertSec": 120,
+        "graceSec": 180,
+        "cimTimeoutMs": 60000
+      }
     }
+  },
+  "stallWatcher": {
+    "enabled": true,
+    "silenceSec": 120,
+    "pendingStallSec": 90,
+    "teamSilenceSec": 600,
+    "teamActiveSec": 600,
+    "teamKeepSec": 1800,
+    "turnSilenceSec": 600,
+    "turnSilenceMaxSec": 900,
+    "turnKeepSec": 1800,
+    "logAliveSec": 120,
+    "platformSuppressSec": 300,
+    "escalateSec": [300, 600],
+    "longTermSec": 1800,
+    "longTermMax": 4,
+    "workspaceHash": "",
+    "logRoot": ""
   },
   "watcher": {
     "idleSeconds": 900,
@@ -79,7 +108,11 @@
       "coldStartMs": 3000,
       "maxRestart": 2,
       "instanceFile": "runtime/serve-instance.json",
-      "alivePollMs": 30000
+      "alivePollMs": 30000,
+      "jobPermissionMode": "bypassPermissions",
+      "orphanSweepMs": 300000,
+      "orphanSweepOnStart": true,
+      "orphanMinAgeMs": 120000
     }
   },
   "commands": {

@@ -120,3 +120,5 @@ tools/qqbot/qqbot.creds.json
 tools/qqbot/DECOUPLING-PLAN.md
 tools/qqbot/*.jsonl
 tools/qqbot/runtime/
+# 0010 gate negative-probe residue (10-byte test artifact, never distributed)
+tools/qqbot/.gate-negative-probe.txt
