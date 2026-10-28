@@ -461,26 +461,26 @@ if ($NoManifest) {
     foreach ($l in ($mraw -split "`r?`n")) { [void]$lines.Add($l) }
     $ni = -1
     for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '^notifications:\s*$') { $ni = $i; break } }
+    $msg = ''
     if ($ni -lt 0) {
       [void]$lines.Add('')
       [void]$lines.Add('notifications:')
       [void]$lines.Add('  adapter: "qqbot"')
-      Ok 'notifications block appended with adapter: qqbot'
+      $msg = 'notifications block appended with adapter: qqbot'
     } else {
       $end = $lines.Count
       for ($j = $ni + 1; $j -lt $lines.Count; $j++) { if ($lines[$j] -match '^\S') { $end = $j; break } }
       $found = -1
       for ($j = $ni + 1; $j -lt $end; $j++) { if ($lines[$j] -match '^\s+adapter:') { $found = $j; break } }
-      if ($found -ge 0) {
-        $lines[$found] = '  adapter: "qqbot"'
-      } else {
-        $lines.Insert($ni + 1, '  adapter: "qqbot"')
-      }
-      $bak = "$mp.bak-$(Get-Date -Format yyyyMMdd-HHmmss)"
-      Copy-Item -LiteralPath $mp -Destination $bak -Force
-      [IO.File]::WriteAllText($mp, ($lines -join "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
-      Ok "notifications.adapter set to qqbot (backup: $bak)"
+      if ($found -ge 0) { $lines[$found] = '  adapter: "qqbot"' } else { $lines.Insert($ni + 1, '  adapter: "qqbot"') }
+      $msg = 'notifications.adapter set to qqbot'
     }
+    # Write-back MUST be outside the branches: the append path previously only printed OK
+    # and never touched the file (silent no-op, found by the 2026-10-28 D-drive rehearsal).
+    $bak = "$mp.bak-$(Get-Date -Format yyyyMMdd-HHmmss)"
+    Copy-Item -LiteralPath $mp -Destination $bak -Force
+    [IO.File]::WriteAllText($mp, ($lines -join "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
+    Ok "$msg (backup: $bak)"
   }
 }
 
