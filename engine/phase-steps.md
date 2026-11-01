@@ -122,12 +122,14 @@
 | 步骤ID | 步骤名称 | 强制 | 触发条件 |
 |--------|---------|:--:|---------|
 | step-0-frontend-build | 前端构建验证 | ✅ | 涉前端变更 |
-| step-0-5 | 合规检查（4 条通用规则：路径一致性 / 双副本同步 / Markdown 结构 / 跨文档引用） | ✅ | 始终 |
+| step-0-5 | 合规检查（4 条通用规则：路径一致性 / 镜像面自洽〔本侧；跨侧 version 仅报告〕/ Markdown 结构 / 跨文档引用） | ✅ | 始终 |
+| step-0-6-backend-sql-smoke | 后端真库冒烟（`--sql-smoke` + `--test-schema`） | ✅ | 始终（2026-10-30 强制化） |
 | step-1-generate-cases | 自动生成测试用例 | ✅ | 始终 |
 | step-2-user-review | 用户审核用例 | — | 可选 |
 | step-3-execute | 自动执行【自动】用例 | ✅ | 始终 |
+| step-3-5-real-link | 真链路全页面矩阵 + 端点覆盖对账 | ✅ | 始终（2026-10-30 强制化；需 8080+6337 常驻，不可达 ⇒ 降级手动并登记 `deferred` 理由） |
 | step-4-output | 生成测试报告 | ✅ | 始终 |
-| step-fix-05-1-register | 缺陷登记（写入 `defects[]` + 根因分档 + 判 `design_changed`） | — | 存在 `open` 缺陷 |
+| step-fix-05-1-register | 缺陷登记（写入 `defects[]` + 根因分档 + 判 `design_changed` + `[MECH:*]` 机制标记（可被已建机制拦截时必填）） | — | 存在 `open` 缺陷 |
 | step-fix-05-2-code | 就地修复编码（**05 期预授权窗口内**；窗口未开 ⇒ 发一次预授权卡；涉后端码 ⇒ 不得就地修，回 04） | — | step-fix-05-1-register 完成 |
 | step-fix-05-3-regress | 失败用例回归（含动作链用例；**既有用例结果不回改**，新增续接编号） | — | step-fix-05-2-code 完成 |
 | step-fix-05-4-reclose | 缺陷关闭（置 `fixed` + `verified_by` + 按 §3.3 R8 补 `fix_files`） | — | step-fix-05-3-regress 通过 |

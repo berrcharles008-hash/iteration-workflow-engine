@@ -30,7 +30,7 @@
 | # | 规则 | 检查方式 | 说明 |
 |---|------|---------|------|
 | 1 | 文件路径一致性 | `read_file` 逐个验证 | 文档中引用的所有文件路径是否都存在 |
-| 2 | 镜像面一致性 | `search_content` 关键符号 / MD5 | **镜像面白名单（`state.yaml` / `ACTIVE`）在 `sync-runtime.py` 收敛后两侧一致**；单侧运行产物（审计 / write-claims / metrics / snapshots / archived / qq 通知状态）**不参与**判定（★ FIX-49 v2.4：单写下允许瞬时分叉，对齐动作 = 跑 sync；**禁止手工复制**） |
+| 2 | 镜像面自洽（★ SYNC-PASSIVE-1） | `read_file` 本侧 ACTIVE/state + `validate-state` | **不判两侧一致**：硬判据 = 本侧 `ACTIVE` 与 `<id>.state.yaml` 可解析且 `validate-state` ERR 0；跨侧 `version` 差异**只报告**（不判失败、不触发收敛）；单侧运行产物不参与判定；**Agent 不代跑 `sync`**（细则见 `startup-protocol.md` B.3） |
 | 3 | 引擎 Markdown 结构规范 | `read_file` | 模板完整、标题层级正确、必填章节存在 |
 | 4 | 跨文档引用一致性 | `read_file` + 人工校验 | 引用链接不悬空 |
 
@@ -39,7 +39,7 @@
 ```
 📋 合规检查报告：
 ✅ 规则1：文件路径一致性 — 全部 N 个路径存在
-✅ 规则2：镜像面一致性 — 镜像面白名单 2/2 一致（sync 收敛后；单侧运行产物不参与判定）
+✅ 规则2：镜像面自洽 — 本侧 ACTIVE + state 可解析（ERR 0）；跨侧 version 差异：无（仅报告，不判失败）
 ✅ 规则3：引擎 Markdown 结构规范 — 全部模板完整
 ⚠️ 规则4：跨文档引用一致性 — X 处链接需确认
 ```
@@ -49,7 +49,23 @@
 | 阶段 | 检查项 | 目的 |
 |------|--------|------|
 | 04 `step-4-csproj` / `step-6-spec` | 命名空间、继承关系、目录位置、类名后缀 | 代码与技术方案一致 |
-| 05 `step-0-5` 合规检查 | 文件路径一致性、镜像面一致性（sync 收敛后）、文档结构、引用一致性 | 交付物与规范一致 |
+| 05 `step-0-5` 合规检查 | 文件路径一致性、镜像面**自洽**（本侧；跨侧 version 差异仅报告，不跑 sync）、文档结构、引用一致性 | 交付物与规范一致 |
+
+### Step 0.6：后端真库冒烟（★强制 · 2026-10-30 新增）
+
+> 详细命令与判据见 `project/build-verify.yaml` → `sql_smoke`。
+
+**为什么强制**：NUnit 跑在独立测试 schema（`SJ_PIVAS_TEST`），E2E 全桩化（`installMock` 拦 `/webapi/**`）⇒
+「真库 SQL 语法 / 列名 / 映射」这一层曾**没有任何自动手段**，D-3（`as ROWID` ⇒ ORA-00923）在四道防线全绿时完全不可见。
+
+```
+1. 编译 Console：msbuild "back-end/IntravenousAdmixtureCenter/SJ.PIVAS.AdmixtureCenter.Console.sln" /p:Configuration=Debug /t:Build /v:minimal
+2. 业务库只读冒烟：bin\Console.SJ.PIVAS.AdmixtureCenter.exe --sql-smoke
+3. 测试库写路径闭环：bin\Console.SJ.PIVAS.AdmixtureCenter.exe --sql-smoke --test-schema
+```
+
+**判据**：两条均 EXIT 0 且输出无 `FAIL` 行。`SKIP` 允许但必须附原因（鉴权前置 / 数据前置不足）。
+**★改 `Console/Program.cs` 后必须编 Console.sln** —— Web.sln 不含 Console 项目，只编 Web.sln 会让新分支静默不生效。
 
 ### Step 1：自动生成测试用例
 
@@ -74,6 +90,36 @@
 
 > ★ **执行方式注记（同 Step 0 SLIM-1 C-1 约束）**：自动用例执行默认下沉 code-explorer 子代理（prompt 同附 `build-verify.yaml` 命令与禁改约束 + 同一回报格式 + fail-open 四态）；★ **下沉派发前主 Agent 先验证 dev server/环境进程存活，不存活走既有降级**。
 
+### Step 3.5：真链路全页面矩阵 + 端点覆盖对账（★强制 · 2026-10-30 新增）
+
+> 详细命令、三级判据、棘轮口径见 `project/build-verify.yaml` → `real_link_pages`。
+
+**为什么强制**：28 个 E2E spec 全桩化（`installMock` 拦 `/webapi/**`）⇒ 桩化 E2E **一行后端 SQL 都不执行**；
+NUnit 直调 BLL **不经 Web 路由**（只做反射断形参）。于是「HTTP 路由名 / DTO 绑定 / 权限码位置」整层无人覆盖。
+2026-10-30 实跑取证：界面调用 **138 个端点**，真链路仅覆盖 **35 个（25.36%）**。
+
+```
+1. node tools/gen-pivas-endpoints.mjs --check     # 端点清单与源码漂移 ⇒ 必须先重建再跑，否则分母错
+2. npx playwright test r_real_smoke_pages --output ../../.codebuddy/temp/pw-results-<唯一后缀>
+   （cwd = front-end/pivas_admixture_center；需 dev server 8080 + 后端 6337 同时常驻）
+3. npx playwright test r_real_smoke               # 深链路（点动作）2 例
+```
+
+**判据（★三级不可合并）**：
+
+| 级 | 现象 | 是否计入真覆盖 |
+|:--:|:--|:--:|
+| L2 | 有请求且 `C === 0` | ✅ |
+| L2b | 有请求、`C !== 0` 但 `T` 不含 `AUTH_`（业务拒绝，其前 SQL 已执行） | ✅ |
+| L1 | 有请求但 `T` 含 `AUTH_`（判码在取数之前，**SQL 未执行**） | ❌ 单列 |
+| L0 | 无请求（前端前置拦截 / 动作未点） | ❌ 单列 |
+
+**硬门禁**：① 全部页面 0 次 HTTP ≥ 400；② 0 次响应含 `ORA-`；③ 每页命中 > 0；④ 端点真覆盖数 ≥ 棘轮基线。
+
+**报告义务**：L1 / L0 清单**逐条**写进 05 报告（可归并为分档表，但不得只写总数）；
+本迭代 `03-技术方案` 涉及的端点必须全部落 L2/L2b，否则计缺陷。
+写端点的真库覆盖走 `Step 0.6` 的 `--sql-smoke --test-schema`，**不**靠点写按钮。
+
 ### Step 4：生成测试报告
 
 输出 `05-测试验证/05-测试验证报告.md`（模板：`phase-05-测试验证报告.md`，🟢简单用 `phase-05-测试报告-lite.md`，优先级见启动协议 §模板解析优先级）。
@@ -87,9 +133,12 @@
 1. 逐条登记 `state.yaml` 的 `defects[]`（`id: "D-1"`… / `severity` / `root_cause_level` / `design_changed` —— ★ 后者**须用户确认**）；
 2. 按根因档选通道（判据见 `workflow-engine.md` §缺陷根因判定判据）：**L1** → 回退 04 走 `step-fix-*` 修复窗口；**L2** → 回退 03（先改 03 再改码）；**L3** → 回退 01/02；
 3. 修复后回归：**既有用例结果不回改**，新增用例**续接编号**；
-4. 报告「五、缺陷记录」节与 `defects[]` 按 `D-xx` **双向对账**；未修者转「七、遗留问题」并置 `status: "deferred"` + `defer_reason`（用户裁决）。
+4. 报告「五、缺陷记录」节与 `defects[]` 按 `D-xx` **双向对账**；未修者转「七、遗留问题」并置 `status: "deferred"` + `defer_reason`（用户裁决）；
+5. **机制标记（★ 2026-11-01 批 2 新增）**：缺陷描述**末尾**追加 `[MECH:<码>]` —— **仅当**该缺陷本可被某个**已建机制**拦截（例：列表列与 03 §2.3.1 不一致 ⇒ `[MECH:M4]`）。码表**不在本文件复述**（SSOT = 项目侧《机制有效性台账》§2；`M1`~`M6` 依次 = 列定义表 / 检索条件表 / 契约落地 / spec-parity / 原型 parity / 渲染清单）。**前缀 `[MECH:` 是唯一判据**，与模块代号 `M1~M11` 无关；只标新登记缺陷，历史不追溯。
 
 **交付标准**：所有自动用例 ✅ 通过或 ⚠️ 跳过（有解释），手动用例 ⏳ 待验证，用户确认"测试通过"；**文档版式自检 ERROR 0**（`python scripts/doc_lint.py <文档>`）；★ 缺陷台账与报告**对账一致**
+
+★ **页面型迭代附加判据（2026-11-01 批 2 新增）**：03 方案含 §2.3 两表（列定义表 / 检索条件表）的迭代，05 报告**必须**含「平台渲染验收清单」节且 8 项逐项有勾选或证据 —— **缺节即视为 05 未完成**（模板见 `phase-05-测试验证报告.md` 同名小节）。
 ★ 本阶段确认点（测试通过 / design_changed / deferred 裁决）的等待方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`。
 
 **动作链覆盖**（2026-09-18 新增；标准版 / 精简版报告**均必填**）：
@@ -104,11 +153,13 @@
 |--------|---------|:--:|---------|
 | step-0-frontend-build | 前端构建验证 | ✅ | 涉前端变更 |
 | step-0-5 | 合规检查（4条规则集） | ✅ | 始终 |
+| step-0-6-backend-sql-smoke | 后端真库冒烟（`--sql-smoke` + `--test-schema`） | ✅ | 始终（2026-10-30 强制化） |
 | step-1-generate-cases | 自动生成测试用例 | ✅ | 始终 |
 | step-2-user-review | 用户审核用例 | — | 可选 |
 | step-3-execute | 自动执行【自动】用例 | ✅ | 始终 |
+| step-3-5-real-link | 真链路全页面矩阵 + 端点覆盖对账 | ✅ | 始终（2026-10-30 强制化；需 8080+6337 常驻，不可达 ⇒ 降级手动并登记 `deferred` 理由） |
 | step-4-output | 生成测试报告 | ✅ | 始终 |
-| step-fix-05-1-register | 缺陷登记（`defects[]` + 根因分档 + `design_changed`） | — | 存在 `open` 缺陷 |
+| step-fix-05-1-register | 缺陷登记（`defects[]` + 根因分档 + `design_changed` + `[MECH:*]` 机制标记（可被已建机制拦截时必填）） | — | 存在 `open` 缺陷 |
 | step-fix-05-2-code | 就地修复编码（**05 期预授权窗口内自主修**；窗口未开 ⇒ 先发一次预授权卡；涉后端码 ⇒ 回 04） | — | 上一步完成 |
 | step-fix-05-3-regress | 失败用例回归（既有结果不回改、新增续接编号） | — | 上一步完成 |
 | step-fix-05-4-reclose | 缺陷关闭（`fixed` + `verified_by` + `fix_files` 对账） | — | 回归通过 |

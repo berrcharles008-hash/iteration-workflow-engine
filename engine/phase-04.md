@@ -224,22 +224,31 @@ Start-Process powershell -WindowStyle Hidden -ArgumentList @(
 >      `{IDE}/teams/<leadConv>/<team>/config.json` 的 `members[].sessionId`（≠ `mainConversationId`）
 >      识别成员会话并放行。否则成员被拦后会被平台以「继续未完成任务」续跑（空转 + 白耗其 max_turns，
 >      2026-10-27 实测发生过一次）。排查时看 `{IDE}/temp/team-wait-guard.log` 的 `STOP_ENTER/STOP_SKIP` 行。
->   ⑦ ★ **上限暂停自动续跑 waiter（2026-10-27 上线 · TOOL-AUTORESUME）**：成员触顶（`isMax*Limit: true`）
->      即「执行已暂停」，平台无对外机制点「继续」，**同队 `send_message` 注入「请继续执行未完成的任务。」
->      可秒级复活**（实测 0.5~0.7s），但**恢复窗口仅 1~4 分钟**（超窗即 `cleanupSession`，注入失效）
->      ⇒ **建队 / 派首批成员时同批派一名常驻 waiter**（同 team、`subagent_name=iteration-workflow`、
->      `mode=bypassPermissions`、`max_turns`≤8），其循环 = 每 75s 跑
->      `node tools/qqbot/auto-resume-waiter.mjs --once`，照返回 JSON 办事：
->      `status=INJECT` ⇒ 立即 `send_message(recipient=<recipient>)` 注入 `text`（判据/护栏全在脚本内，waiter
->      **零判断自由度**）；`RESUME`/`NO-RESUME`/`GUARD`/`SKIP` ⇒ 只回报**不重试**（失败由该脚本的心跳
->      `temp/auto-resume-waiter.json` 交给 stall-watcher 补发 QQ 卡；waiter 在场时该卡自动抑制 ⇒ 无
->      双通道）。红线：目标会话已 `cleanupSession`/`Agent destroyed` 不注入；窗内出现 IDE 恢复锚
+>   ⑦ ★ **上限暂停自动续跑（2026-10-27 上线 · 2026-10-29 改造 · TOOL-AUTORESUME）**：成员触顶
+>      （`isMax*Limit: true`）即「执行已暂停」，平台无对外机制点「继续」，**同队 `send_message` 注入
+>      「请继续执行未完成的任务。」可秒级复活**（2026-10-27 实测 0.5~0.7s；2026-10-29 复测 1.9s）。
+>      ★ **窗口口径（2026-10-29 更正，旧文写"仅 1~4 分钟"不准）**：lead 回合进行中时，暂停会话实测
+>      存活 **≥12 分钟**（`cleanupSession` 是 lead 回合结束后的 sweeper 触发的）⇒ 真瓶颈是
+>      **检测延迟**（IDE 日志落盘滞后 17~60s），不是窗口。
+>      ▶ **检测常驻化**：不再派 team 成员每 75s 轮询（该成员 `max_turns=8` 会**自己先触顶** —— 2026-10-28
+>      实测观察者成了被救对象，同批 4 次暂停 0 注入）。改由 **qqbot 服务内常驻 tick** 调用
+>      `auto-resume-waiter.mjs` 的 `once()`（配置 `autoResume.intervalSec`，默认 15s），
+>      判定 `INJECT` 时写信号 `{IDE}/temp/auto-resume-signal.json`。
+>      ▶ **注入仍由成员执行**：建队时派一名 waiter（同 team、`subagent_name=iteration-workflow`、
+>      `mode=bypassPermissions`、`max_turns`≤8），其循环 = 跑
+>      `node tools/qqbot/auto-resume-waiter.mjs --wait-signal --timeout 300`（**一次调用阻塞覆盖 300s**，
+>      返回 JSON 后再跑下一条 ⇒ 8 步预算可覆盖约 40 分钟），拿到信号即
+>      `send_message(recipient=<recipient>)` 注入 `text`；判据全在脚本内，waiter **零判断自由度**。
+>      ▶ **暂停队列**：并发多个触顶逐个处理；某条目标已 `cleanupSession` 只作废该条、**继续试下一条**
+>      （2026-10-28 单槽覆盖 + `GUARD` 直接放弃 ⇒ 3 个并发只剩 1 个候选且已死 ⇒ 0 注入）。
+>      ▶ 红线（不变）：目标会话已 `cleanupSession`/`Agent destroyed` 不注入；窗内出现 IDE 恢复锚
 >      （`userInput=请继续执行未完成的任务。`）不注入；每暂停事件只注入一次；只注入本队成员。
->      ★ **观察窗必须按「读到时刻」算，不能按锚点时间戳算**（2026-10-27 真实验收逼出）：IDE 日志有写缓冲，
->      锚点时间戳可能比它在文件里**可见**的时刻早 25~110s ⇒ 注入后 4 次 tick 全在 120s 窗内却读不到锚点、
->      误判 `NO-RESUME`（还会把 `failed` 粘滞住 ⇒ 下一轮真暂停被跳过去直接发卡）。故脚本保留 **600s 迟到锚
->      纠正窗**（命中即改判 `RESUME` 并清 `failedAt`），并把每 tick 写进 `temp/auto-resume-waiter.log`
->      （含 `lagSec`）以便量化滞后；**禁止**按锚点时间戳直接判负。
+>      ▶ **观察窗按「读到时刻」算**（IDE 日志写缓冲 25~110s；按锚点时间戳判负会误报 `NO-RESUME` 并把
+>      `failed` 粘滞），脚本保留 600s 迟到锚纠正窗；每 tick 写 `temp/auto-resume-waiter.log`，
+>      含 `lagSec` / `queue` / `detectLagSec`（命中率从此可量测）。
+>      ▶ ★ **这只是兜底**：触顶绝大多数是**我方派发预算**造成的 ⇒ 见 `team-agent-strategy.md` §七
+>      「一个成员 = 一个可交付单元」，把任务切进预算内，**从源头消灭触顶**；真发生触顶一律按
+>      「正常收束」处理（成员最后一步必写 `TEAM-OUT-COMPLETE`，lead 见截断即重派下一单元）。
 >   ★ **否决记录（2026-10-16）**：不采用"派发后结束回合 + 依赖平台唤醒下一步"（同日两例停摆丢回传）；
 >     不采用"waiter 成员代等"（成员消息对已停 poller 的 lead 无效，10-03 + 10-16 双证）；
 >     "同步子代理天然阻塞"为**未验证假设**，不写入本条。

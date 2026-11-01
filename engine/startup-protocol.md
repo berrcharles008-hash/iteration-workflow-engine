@@ -100,19 +100,25 @@
 
 **校验逻辑**（不阻塞流程，仅输出警告）：
 
+> ★ **SYNC-PASSIVE-1（2026-10-30）**：本步**只报告不自愈** —— Agent **不代跑** `sync-runtime.py`，
+> 是否同步由用户决定。标题「★ 强制」指**必须做这次比对**，不指必须让两侧一致。
+
 ```
 1. 读取本侧（{IDE}）/skills/iteration-workflow/runtime/ACTIVE      ← 判定源 = 本宿主侧
 2. 读取另一侧 /skills/iteration-workflow/runtime/ACTIVE
 3. 双文件都存在：
    ├── 内容一致 → 静默通过
-   └── 内容不一致 → 输出警告；**对齐动作 = 跑 sync-runtime.py**（禁止手工 copy 覆盖）
+   └── 内容不一致 → 输出警告；对齐动作 = **由用户决定**是否跑 sync-runtime.py（Agent 不代跑；禁止手工 copy 覆盖）
 4. 仅另一侧存在（本侧 runtime 未初始化 = α 态）：
-   └── 按「首次接入指引」跑 sync-runtime.py --from <有数据的侧>
-       （自动建本侧 runtime/ 并复制镜像面白名单；★ 禁止新建重复迭代）
+   └── **提示用户**：本侧 runtime 未初始化；如确认接入，请**由用户**执行
+       sync-runtime.py --from <有数据的侧>（Agent 不代跑；★ 禁止新建重复迭代）
 5. 仅本侧存在：
    └── 无需动作（接力方接入时由其**在自己那侧**跑 sync 收敛）
 6. 双文件都不存在（首次使用）：
    └── 静默通过，等 01 阶段启动时创建
+7. 对侧 ACTIVE 指向的迭代在本侧已是 `*.state.archived.yaml`（已结案）：
+   └── **显性提示**「该迭代已结案，请以 ACTIVE=none 一侧为准，勿在该侧继续」
+       （仍不代跑 sync；★ 防 B.1 按字典序把对侧旧 state 当活跃迭代恢复）
 ```
 
 **不一致警告格式**：
@@ -120,11 +126,14 @@
 ⚠️ ACTIVE 指针双副本不一致：
   {IDE}/runtime/ACTIVE       → {内容}      ← 本侧（判定源）
   另一侧/runtime/ACTIVE      → {内容}
-  对齐动作：python {IDE}/skills/iteration-workflow/scripts/sync-runtime.py（按"新者胜"收敛）
+  对齐动作：**由用户**执行 python {IDE}/skills/iteration-workflow/scripts/sync-runtime.py（Agent 不代跑；按"新者胜"收敛）
 ```
 
 > **变更记录（2026-07-23 S4.1）**：新增 Step B.3 ACTIVE 双副本一致性校验，不阻塞流程。
 > **变更记录（2026-10-15 FIX-49）**：判定源改本宿主侧；"手工同步另一侧"改走 `sync-runtime.py`（③-7/③-3b）。
+> **变更记录（2026-10-30 SYNC-PASSIVE-1）**：本步降为**纯报告** —— Agent **不代跑** `sync-runtime.py`
+> （含 α 态与不一致两分支与警告格式文案）；新增分支 7「对侧 ACTIVE 指向本侧已结案迭代 ⇒ 显性提示以 `none` 侧为准」。
+> 依据 `runtime/SYNC-PASSIVE-1-四件套.md` v2（用户 2026-10-30 拍板：不主动同步，仅提示）。
 
 ---
 

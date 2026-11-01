@@ -18,6 +18,8 @@
     A6 回流水位      项目侧 skill ↔ 源仓库（缺路径则 SKIP）
     A8 等待点指针    含"等待用户"类确认表述的 engine md 须挂 `waiting-protocol.md` 指针（★ E4，RESUME-3 批次 1）
     A10 通用性自检   a 项目 token / c 派生表对账 / d 落点存在性（★ 2026-10-24 批次 0；b/e 依赖批次 2 ⇒ 显式 SKIP）
+    A11 页面两表    委托 scripts/check-03-page-tables.py（★ 2026-11-01 批 2）：有前端页面改动的 03 是否写了
+                    §2.3.1 列定义表 / §2.3.2 检索条件表；并断言 engine/phase-03.md 的挂载点未被删
 
 规范页：engine/consistency-checklist.md
 """
@@ -421,6 +423,47 @@ def a8_wait_points():
             err('A8', '%s 含确认等待表述但未挂 `%s` 指针' % (h, WAIT_PROTO_REF))
     else:
         ok('A8', '等待点指针完备（扫描 %d 个 engine md）' % scanned)
+
+
+# ── A11 03 页面两表完整性（★ 2026-11-01 批 2）────────────────
+A11_SCRIPT = 'scripts/check-03-page-tables.py'
+A11_MOUNT_DOC = 'engine/phase-03.md'
+
+
+def a11_page_tables():
+    """委托 `check-03-page-tables.py` 判「有前端页面改动的 03 是否写了 §2.3.1/§2.3.2」。
+
+    为什么 subprocess 而不内联判据：判据本体在脚本里（03 期由同一条命令执行），
+    审计只做「exit code → ERR/WARN」转译 ⇒ **单源**，不会出现收口与 03 期两套口径。
+    超时 / 解释器不可用一律降 WARN —— 环境性原因不该阻断收口。
+    """
+    sp = os.path.join(SKILL_ROOT, A11_SCRIPT.replace('/', os.sep))
+    if not os.path.exists(sp):
+        err('A11', '机检脚本缺失：%s' % A11_SCRIPT)
+        return
+    doc = os.path.join(SKILL_ROOT, A11_MOUNT_DOC.replace('/', os.sep))
+    try:
+        dtext = open(doc, encoding='utf-8').read()
+    except Exception:
+        dtext = ''
+    if 'check-03-page-tables.py' not in dtext:
+        err('A11', '%s 未挂载 %s（挂载点被删 ⇒ 判据静默失联）' % (A11_MOUNT_DOC, A11_SCRIPT))
+        return
+    try:
+        p = subprocess.run([sys.executable, sp], cwd=SKILL_ROOT,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+    except Exception as e:                                    # noqa: BLE001
+        warn('A11', '机检脚本执行异常（不阻断）：%r' % (e,))
+        return
+    out = (p.stdout or b'').decode('utf-8', 'replace').strip()
+    etxt = (p.stderr or b'').decode('utf-8', 'replace').strip()
+    if p.returncode == 0:
+        ok('A11', '03 页面两表完整性：%s' % (out.splitlines()[0] if out else 'PASS'))
+    elif p.returncode == 1:
+        detail = ' ｜ '.join([l.strip() for l in out.splitlines()[1:4] if l.strip()])
+        err('A11', '03 页面两表不完整（%s）%s' % (A11_SCRIPT, detail))
+    else:
+        warn('A11', '机检脚本异常退出 rc=%d（不阻断）%s' % (p.returncode, etxt[:120]))
 
 
 # ── A5 治理文档时效 ─────────────────────────────────────────
@@ -1283,7 +1326,7 @@ def main():
 
     for name, fn in (('A1', a1_orphan), ('A2', a2_step_ids), ('A3', a3_doc_names),
                      ('A4', a4_refs), ('A4b', a4b_var_typos), ('A8', a8_wait_points),
-                     ('A10', a10_check), ('A5', a5_gov_docs)):
+                     ('A10', a10_check), ('A11', a11_page_tables), ('A5', a5_gov_docs)):
         try:
             fn()
         except Exception as e:
