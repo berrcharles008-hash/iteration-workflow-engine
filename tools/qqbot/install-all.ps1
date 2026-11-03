@@ -251,6 +251,23 @@ function Test-HostConflict([int]$port, [bool]$portOnly) {
   } else {
     Skip "no scheduled task $taskName yet"
   }
+
+  # ★ TOOL-SELFHEAL-2 (2026-11-03): the HKCU Run key is now a third carrier, so it MUST join the
+  #   singleton probe. Without this, a second project silently hijacks the first one by overwriting
+  #   the Run value while the .lnk / task probes above both report "no conflict".
+  $runKeyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+  foreach ($rn in @('CodeBuddyQQService', 'CodeBuddyQQWatchdog')) {
+    $rv = ''
+    try { $rv = [string](Get-ItemProperty -Path $runKeyPath -Name $rn -ErrorAction Stop).$rn } catch { $rv = '' }
+    if (-not $rv) {
+      Skip "no Run-key carrier $rn yet"
+    } elseif ($rv.IndexOf($targetQq, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+      Warn "Run key $rn points to ANOTHER project -> it would be overwritten"
+      $bad = $true
+    } else {
+      Skip "Run key $rn already points here"
+    }
+  }
   return $bad
 }
 

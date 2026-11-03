@@ -22,6 +22,12 @@ $workDir = Join-Path $proj 'tools\qqbot'
 $startup = [System.Environment]::GetFolderPath('Startup')
 $lnk = Join-Path $startup 'CodeBuddyQQWatchdog.lnk'
 $me = "$env:USERDOMAIN\$env:USERNAME"
+# ★ TOOL-SELFHEAL-2 (2026-11-03): third carrier = HKCU\...\Run (see install-service.ps1 for the
+#   measurement behind this). The scheduled task alone is a single point of failure: on 2026-11-03
+#   both this task AND every Startup shortcut were gone, so nothing ever started the watchdog and
+#   the whole self-heal chain was silently dead for ~2 days.
+$runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+$runName = 'CodeBuddyQQWatchdog'
 
 function Remove-LegacyShortcut {
   if (Test-Path $lnk) {
@@ -43,6 +49,12 @@ if ($Uninstall) {
   } catch {
     Write-Host ("no scheduled task to remove (" + $TaskName + "): " + $_.Exception.Message)
   }
+  try {
+    Remove-ItemProperty -Path $runKey -Name $runName -ErrorAction Stop
+    Write-Host "Run-key carrier removed: HKCU\...\Run\$runName"
+  } catch {
+    Write-Host ("no Run-key carrier to remove (" + $runName + ")")
+  }
   Remove-LegacyShortcut
   exit 0
 }
@@ -51,6 +63,22 @@ if (-not (Test-Path $startPs1)) { Write-Host "missing: $startPs1"; exit 1 }
 
 # 1) kill the legacy carrier first -- otherwise a .lnk plus the task = two watchdogs
 Remove-LegacyShortcut
+
+# 1b) register the Run-key carrier. Deliberately placed BEFORE the task registration:
+#     if task registration fails (elevation / policy), the Run key alone still starts the watchdog.
+#     Duplicate launches are safe -- start-watchdog.ps1 skips when qqbot-watchdog.js is already running.
+$runCmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$startPs1`""
+try {
+  if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
+  if ($runCmd.Length -ge 260) {
+    Write-Host ("WARN: Run-key command is " + $runCmd.Length + " chars (>=260 limit) -- NOT registered; shorten the path or use a wrapper .cmd") -ForegroundColor Yellow
+  } else {
+    Set-ItemProperty -Path $runKey -Name $runName -Value $runCmd -Type String -ErrorAction Stop
+    Write-Host "autostart registered (Run key): HKCU\...\Run\$runName"
+  }
+} catch {
+  Write-Host ("WARN: Run-key registration failed: " + $_.Exception.Message)
+}
 
 # 2) register the scheduled task
 $arg = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$startPs1`""

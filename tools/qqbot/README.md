@@ -29,17 +29,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File <源路径>\tools\qqbot\inst
 
 **唯一无法自动化的一步 = `openid`**：需要手机 QQ 真给机器人发一条消息。先 `node qqbot-setup.js` 交互完成，或用 `-CredsSource` 复用同一机器人的凭据（openId 同值），再重跑脚本收尾。
 
-> ★ 单机单实例：自启载体（`CodeBuddyQQWatcher.lnk` 或计划任务 `CodeBuddyQQWatchdog`）与端口 18765 都是全局唯一的，同机装第二个项目会顶替第一个。脚本在**任何写盘之前**做冲突检测并默认中止。
+> ★ 单机单实例：自启载体（Startup `CodeBuddyQQWatcher.lnk` / 计划任务 `CodeBuddyQQWatchdog` / `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 下的 `CodeBuddyQQService`、`CodeBuddyQQWatchdog`）与端口 18765 都是全局唯一的，同机装第二个项目会顶替第一个。脚本在**任何写盘之前**做冲突检测并默认中止。
+>
+> ★ 三条载体是**冗余**关系，不是替代：任意一条存活即可拉起服务，多条同时触发也不会重复启动（`start-service.ps1` / `start-watchdog.ps1` 都有进程级 skip）。加 Run 键的原因见 §故障史 2026-11-03。
 
 #### 手工等价步骤（9 步，无脚本时照做）
 1. 拷贝本目录到 `<新项目根>/tools/qqbot`（排除 `daemon.config.json` / `qqbot.creds.json` / `*.log` / `*.jsonl` / `runtime/` / `node_modules/`）
-2. 单机冲突检测：`Get-NetTCPConnection -LocalPort 18765 -State Listen`、`Get-ScheduledTask -TaskName CodeBuddyQQWatchdog`、`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\CodeBuddyQQWatcher.lnk` 是否指向别的项目
+2. 单机冲突检测：`Get-NetTCPConnection -LocalPort 18765 -State Listen`、`Get-ScheduledTask -TaskName CodeBuddyQQWatchdog`、`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\CodeBuddyQQWatcher.lnk`、`Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run -Name CodeBuddyQQService`（以及 `CodeBuddyQQWatchdog`）是否指向别的项目
 3. `npm install ws`（项目根或本目录；缺失 = 服务「静默半死」）
 4. `node qqbot-setup.js` 初始化凭据（生成 `qqbot.creds.json`；**含 secret，绝不入库/提交**）
 5. `copy daemon.config.example.json daemon.config.json`，按需改端口/quietHours/handoffPrompt
 6. `.codebuddy/settings.json` 的 `hooks.Stop` 追加 `node tools/qqbot/notify.qqbot.js --kind done --fallback`
 7. `.codebuddy/skills/iteration-workflow/project/project.manifest.yaml` 改 `notifications.adapter: "qqbot"`（模板默认 `none` = QQ 通道静默关闭）
-8. `powershell -NoProfile -ExecutionPolicy Bypass -File install-service.ps1`（注册自启 + 停旧 + 立即启动）**和** `install-watchdog.ps1`（计划任务看门狗；漏装 = 服务死了没人拉起）
+8. `powershell -NoProfile -ExecutionPolicy Bypass -File install-service.ps1`（注册自启 + 停旧 + 立即启动）**和** `install-watchdog.ps1`（计划任务看门狗；漏装 = 服务死了没人拉起）。两者现在各注册**两条载体**（Startup lnk 或计划任务 + `HKCU\...\Run`），跑完可用 `Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run | Format-List CodeBuddy*` 自检
 9. 验证：`http://127.0.0.1:18765/health` 返回 200；service.log 无「确认模块跳过」；QQ 实发一条
 
 卸载顺序：先移除宿主 `.codebuddy/settings.json` 中对 `tools/qqbot/notify.qqbot.js` 的 hook 注册，再 `install-watchdog.ps1 -Uninstall`，最后删目录。
@@ -59,8 +61,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File <源路径>\tools\qqbot\inst
 | `qqbot.creds.json` | 本地凭据文件（appId/secret/openId；**含 secret，已进 .gitignore，绝不提交**） |
 | `qqbot-service.js` | **★ 合并服务（推荐）**：单进程 = IDE 静置推送 + QQ 双向确认，共享 token / 凭据 / 日志（取代下面两个 legacy） |
 | `start-service.ps1` | 启动合并服务（后台；已在跑则自动跳过） |
-| `install-service.ps1` | 注册登录自启（覆盖同名快捷方式，无需管理员）+ 停旧组件 + 立即启动 |
-| `install-watchdog.ps1` | 注册看门狗自启（计划任务 `CodeBuddyQQWatchdog`：登录触发 + 每 5 分钟重复 + 失败重启）；`-Uninstall` 卸载 |
+| `install-service.ps1` | 注册登录自启（覆盖同名快捷方式，无需管理员）+ `HKCU\...\Run\CodeBuddyQQService` + 停旧组件 + 立即启动 |
+| `install-watchdog.ps1` | 注册看门狗自启（计划任务 `CodeBuddyQQWatchdog`：登录触发 + 每 5 分钟重复 + 失败重启，**外加** `HKCU\...\Run\CodeBuddyQQWatchdog`）；`-Uninstall` 卸载 |
 | `qqbot-watchdog.js` | 看门狗：`GET :18765/health` 探活三路分流（半死只告警 / 无进程才拉起 / 优雅停不拉起），单实例锁 + 冷却 300s + 每小时上限 3 次；`--force` 人工处置半死进程 |
 | `notify-enqueue.js` | 通知「可回复」入口：优先把通知送进服务待确认队列（带 #id），服务不可用时回退直发（门禁拦截通知走它） |
 | `ask.js` | **等待式确认登记器**：`node ask.js --prompt "…"` → 推送 QQ 并输出 `#id=<n>`（agent 用它替代"停下来等输入"） |
@@ -925,6 +927,26 @@ powershell -File install-service.ps1     # ← 合并服务，统一走这个
 - 修复：`install-service.ps1`（停 legacy + 覆盖同名 lnk + 起服务），随后 `service.log` 应见 `token OK` → `[READY] 监听中` → `[ONLINE] ... HTTP 200`，`/health` 的 `hbAgeSec` 为个位数。
 - 现在 `install-watcher.ps1` 默认 `exit 1` 拒绝执行；带 `-Force` 时若 lnk 已指向 `start-service.ps1` 仍 `exit 2` 拒绝覆盖。
 
+### 故障史：三载体全灭导致「灵魂不在线」（2026-11-03，第 3 次复发）
+
+**症状**：QQ 里给机器人发消息，平台回「该机器人的"灵魂"不在线」。本机开机 08:35:01，10:08 检查时 `18765`/`18766`/`19000` 三端口全无监听，node 进程列表无 `qqbot-service.js`。
+
+**取证**（与 10-22 / 10-29 同一模式）：
+- Startup 目录只剩 `desktop.ini`（5 个 lnk 全无）；文件夹 `CreationTime` 仍是 2020-07-25、`desktop.ini` 仍是 2021-04-22 ⇒ **不是文件夹被重建/重定向，是 lnk 被单独删除**
+- 计划任务 `CodeBuddyQQWatchdog` / `CodeBuddySessionHub` / `CloudflareTunnelWatchdog` 全部「找不到」；同机 360Zip / CleanerOnePro / NVIDIA / WPS / Firefox / HP 的任务都在 ⇒ **针对性删除，非整体清空**
+- `HKCU\...\StartupApproved\StartupFolder` 里 5 项字节仍是 `02…`（ENABLED）⇒ 不是「被禁用」，是文件被删
+- `HKCU\...\Run` 下 11 项全部存活 ⇒ **清扫面不含 Run 键**（本条是加第三载体的直接依据）
+- `watchdog.log` 停在 2026-10-30 15:37，服务靠孤儿进程活到 2026-11-02 19:16（QQ 下发关机）⇒ **自愈链已死约 2 天无人知**
+
+**删除者未确证**：`Microsoft-Windows-TaskScheduler/Operational` 当时 `IsEnabled=False`，无删除事件；回收站无 lnk。高度可疑但未确证：本机装 360 安全卫士 13.0.1.2002（`C:\ProgramData\360safe\softmgr\bootitem.ini` 于 11-03 08:38:36 被重写、`count=413`；`trashcleanlog.ini` 显示 10-29 10:28 清理 4.69 GB，与第二次复发同日）；Cleaner One Pro 亦通过 Run 键 `--hidden` 每次开机静默运行。
+
+**已加固**：
+1. 启用 `Microsoft-Windows-TaskScheduler/Operational`（需管理员：`wevtutil sl Microsoft-Windows-TaskScheduler/Operational /e:true`）⇒ 下次被删可拿到 Event 141/142 与删除进程
+2. `install-service.ps1` / `install-watchdog.ps1` 各增加 `HKCU\...\Run` 载体（第三通道，零 UAC）
+3. `install-all.ps1` 的单机冲突探测纳入 Run 键
+
+**30 秒自检判据**：`Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run | Format-List CodeBuddy*`、`Get-ScheduledTask -TaskName CodeBuddyQQWatchdog`、Startup lnk —— 三条至少一条在，就能自愈。
+
 ## 方案 C：常驻确认 daemon（人机闭环）
 适用：机器人发消息问你，你在 QQ 回复后**自动**执行后续动作（无需回到 genie 对话）。
 
@@ -1442,7 +1464,8 @@ node tools/qqbot/qqbot-service.js --help-test     # 探针：清单每条语法�
 - 日志口径：`[SVC DOWN]`（含重试次数）／`[SVC UP]`／`[SVC WAIT]`（重启宽限期）／`[HALF-DEAD?]`（观察中，未达 120s）／`[HALF-DEAD]`（达阈值，已告警）／`[RESTART]`（含本小时第 N 次）→ `[RESTART OK] /health 恢复，pid=…` ／ `[RESTART WAIT]` ／ `[RESTART SKIP] 原因`（冷却、上限、锁占用、复检已恢复、优雅停止）。达每小时上限会发一条 QQ 告警并停止自动拉起。
 - **降噪依据（2026-10-28 实测）**：重启后服务做全量扫描（112MB 日志 / 40 万文件索引）时 `/health` 有 1~2 分钟不应答 ⇒ 「单次探活失败即告警」当天误发 2 条 `kind=fail` QQ。故加「重试 ×2 + 半死须持续 120s + 重启宽限 180s」三闸。
 - **杀进程只能人工**（用户 2026-10-28 拍板）：`node tools/qqbot/qqbot-watchdog.js --force` —— 仅当端口不通且 CIM 校验 `CommandLine` 命中 `qqbot-service.js` 才 `taskkill /F`，等进程退出（≤5s）后拉起，且不计入自动配额。**任何自动路径都不得进入 `--force`**。
-- 自启 = 计划任务 `CodeBuddyQQWatchdog`（登录触发 + 每 5 分钟重复 + 失败重启 3×1min + `IgnoreNew` 防重入）。周期重复本身也是「看门狗自己死了自动复活」的兜底（`start-watchdog.ps1` 对已运行实例直接跳过）。`install-watchdog.ps1` 会先删旧 `CodeBuddyQQWatchdog.lnk` 防双启动，`-Uninstall` 反注册。
+- 自启 = 计划任务 `CodeBuddyQQWatchdog`（登录触发 + 每 5 分钟重复 + 失败重启 3×1min + `IgnoreNew` 防重入）**+ `HKCU\...\Run\CodeBuddyQQWatchdog`**（2026-11-03 加，见下条）。周期重复本身也是「看门狗自己死了自动复活」的兜底（`start-watchdog.ps1` 对已运行实例直接跳过）。`install-watchdog.ps1` 会先删旧 `CodeBuddyQQWatchdog.lnk` 防双启动，`-Uninstall` 反注册任务与 Run 值。
+- ★ **为什么看门狗也需要第二条载体（2026-11-03 实测）**：原设计假定「计划任务不在 Startup 目录，清理工具删不到」。该假设被证伪——11-03 开机后 `CodeBuddyQQWatchdog` / `CodeBuddySessionHub` / `CloudflareTunnelWatchdog` 三个任务**全部消失**，同机 Startup 的 5 个 lnk 也全灭，而 `HKCU\...\Run` 下 11 项第三方启动项（OneDrive / 百度网盘 / Cleaner One Pro / WorkBuddy / 360 sesvc / Bandicam …）**无一损失**。⇒ 清扫动作覆盖「Startup 文件夹 + 任务库」，不覆盖 Run 键；看门狗若只有任务一条载体，任务被删即整条自愈链静默死亡（`watchdog.log` 停在 10-30 15:37，服务靠孤儿进程活到 11-02 关机）。
 - 判据（实施已验证）：无进程被硬杀 ⇒ 下一轮询内 `/health` 恢复且日志出现 `[RESTART]` + pid 变化；半死 ⇒ 只出一次告警、零拉起；并发触发 ⇒ 只有一次真正拉起（锁生效）。
 
 ### 离线自测（不待机、不发 QQ）

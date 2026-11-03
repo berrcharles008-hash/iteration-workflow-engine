@@ -44,6 +44,32 @@ $sc.Description = 'CodeBuddy QQ service (merged: idle watcher + QQ confirm)'
 $sc.Save()
 Write-Host "autostart registered (overwrote same-name shortcut): $lnk"
 
+# ★ TOOL-SELFHEAL-2 (2026-11-03): third autostart carrier = HKCU\...\Run value.
+#   Why (measured on THIS host): three separate incidents (10-22 / 10-29 / 11-03) wiped BOTH the
+#   Startup-folder shortcuts AND the scheduled tasks. The same sweeps left all 11 entries under
+#   HKCU\...\Run untouched (OneDrive / BaiduNetdisk / Cleaner One Pro / WorkBuddy / 360 sesvc / ...).
+#   So the sweeper enumerates the Startup folder and the task store, not the Run key.
+#   This value is REDUNDANT with the .lnk above, not a replacement: whichever survives brings the
+#   service back. A double start is harmless -- start-service.ps1 skips when the service is running.
+#   Silent failure mode if this block is dropped: the shortcut becomes the only carrier again, and a
+#   single sweep puts us back to "the bot's soul is offline" with zero visible symptom.
+$runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+$runName = 'CodeBuddyQQService'
+$runCmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$startPs1`" -IdleSeconds $IdleSeconds"
+try {
+  if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
+  # Run values are capped at 260 chars (CreateProcess command line). Project paths are short today;
+  # if this ever overflows, autostart silently stops working at logon -- hence the explicit check.
+  if ($runCmd.Length -ge 260) {
+    Write-Host ("WARN: Run-key command is " + $runCmd.Length + " chars (>=260 limit) -- NOT registered; shorten the path or use a wrapper .cmd") -ForegroundColor Yellow
+  } else {
+    Set-ItemProperty -Path $runKey -Name $runName -Value $runCmd -Type String -ErrorAction Stop
+    Write-Host "autostart registered (Run key): HKCU\...\Run\$runName"
+  }
+} catch {
+  Write-Host ("WARN: Run-key registration failed: " + $_.Exception.Message)
+}
+
 if (-not $NoStart) {
   # ★ FIX-34 收尾（2026-09-19）：先停**当前合并服务**（node + qqbot-service.js），
   #   否则 start-service.ps1 的 guard 判定「already running」⇒ skip start ⇒ 旧代码继续跑
