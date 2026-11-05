@@ -36,6 +36,48 @@
 >
 > ★ **缺陷修复窗口（2026-09-23 DEFECT-1 新增）**：`step-fix-*` **六步**（含 `step-fix-1-5-handoff`）**挂本阶段**（04 是唯一免开闸的合法落盘窗口），仅在「存在 `open` 缺陷且 `design_changed=false`」时写入；收口后回 05，既有用例结果保留（`state-protocol.md` §5.3）。**禁止**自造游离步骤块。
 
+**★ 写入方式（P-239 · 2026-11-04 内联模板）**：`phase_steps` 是**跨阶段累积**的，初始化本阶段只能**块末追加**。
+
+| # | 硬约束 | 违反后果 |
+|---|---|---|
+| 1 | 禁整块替换（块区间一次性赋值的形态） | 删掉前序阶段全部步骤记录（2026-11-01 删 35 条、11-04 删 12 条） |
+| 2 | **禁从 `runtime/_steps_*.py` 复制** | 该目录正反两类历史脚本并存，形态不可辨 |
+| 3 | 追加后必须打印 total 并核对 | 期望值 = 各阶段步骤数之和 |
+
+```python
+# 通用模板：只替换 PATH 与 STEPS（按上表填全），其余照抄
+import io, os, re
+PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '<迭代ID>.state.yaml')
+STEPS = [('step-0-sql-gen', '数据库脚本生成', 'pending', True)]
+
+lines = io.open(PATH, encoding='utf-8').read().split('\n')
+i = lines.index('phase_steps:')
+end = len(lines)
+for j in range(i + 1, len(lines)):
+    if re.match(r'^[A-Za-z_][A-Za-z0-9_]*:', lines[j]):
+        end = j
+        break
+
+existing = set()
+for j in range(i + 1, end):
+    m = re.match(r'^  - id: "([^"]+)"', lines[j])
+    if m:
+        existing.add(m.group(1))
+dup = [s[0] for s in STEPS if s[0] in existing]
+if dup:
+    raise SystemExit('ABORT: step id 已存在: %s' % ','.join(dup))
+
+out = []
+for sid, name, status, mandatory in STEPS:
+    out += ['  - id: "%s"' % sid, '    name: "%s"' % name,
+            '    status: "%s"' % status, '    mandatory: %s' % ('true' if mandatory else 'false')]
+lines[end:end] = out          # ★ 块末追加（唯一正确形态）
+
+with io.open(PATH, 'w', encoding='utf-8', newline='\n') as f:
+    f.write('\n'.join(lines))
+print('appended %d; total = %d' % (len(STEPS), len(existing) + len(STEPS)))
+```
+
 ### Step 0：数据库脚本生成与执行（涉 DML/DDL 变更时强制）
 
 > 凡 03-技术方案 中有数据库表/数据变更（INSERT/UPDATE/DELETE/ALTER/CREATE），必须执行此步骤。
@@ -80,7 +122,7 @@
 
 在 `04-开发实现/{{DOC_04_TASK_LIST}}` 自动生成任务表格（模板：`phase-04-开发任务清单.md`，优先级见启动协议 §模板解析优先级），按依赖关系排序（SQL脚本→Net→BLL→Domain→Page→Route）。
 
-> **表格列固定 4 列**（编号/类型/文件/状态）；关键签名与验证证据写在下方的"条目块"（见模板 §1.1 示例），禁止塞进表格单元格。每个任务编号格式 `T{阶段序号}-{任务序号}`，类型取值 `ADDED`/`MODIFIED`/`DELETED`/`同步`，状态列 `⬜` 开始 → `✅` 完成。代码片段仅写关键签名或伪代码，禁止粘贴完整实现。
+> **表格列固定 5 列**（编号/类型/文件/状态/**模式**）；「模式」列填 `[模式: P-xxx]` 或 `—`，采纳口径见 Step 1.5。关键签名与验证证据写在下方的"条目块"（见模板 §1.1 示例），禁止塞进表格单元格。每个任务编号格式 `T{阶段序号}-{任务序号}`，类型取值 `ADDED`/`MODIFIED`/`DELETED`/`同步`，状态列 `⬜` 开始 → `✅` 完成。代码片段仅写关键签名或伪代码，禁止粘贴完整实现。
 >
 > **版式纪律**：产出文档须遵循 `engine/doc-style-guide.md`；生成后自检 `python scripts/doc_lint.py <文件>`（ERROR 必修）。
 
@@ -96,6 +138,7 @@
 | 命名冲突 | MODIFIED-追加类型任务，搜索目标文件是否已存在同名方法 |
 | 依赖关系 | 任务依赖图是否与方案阶段划分一致 |
 | **页面契约落地（强制）** | 03 §2.3.1 列定义表 / §2.3.2 检索条件表的**每一项**都有对应任务，或显式标注「无需改动」。缺项 ⇒ 清单不完整 |
+| **模式回填（强制）** | 采纳的模式逐条写进「模式」列；04+05 合计 ≥3 条（机器判据 = audit A12-d） |
 
 审查后必须输出：**"已对照技术方案审查，共 N 项，无遗漏"** 或 **"发现遗漏 X 项，已补全"**。
 

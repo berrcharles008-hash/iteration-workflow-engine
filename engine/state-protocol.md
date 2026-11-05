@@ -860,8 +860,9 @@ function gate_check(state):
 >      —— Claude 宿主下**当前完全不存在**；
 >   ② **宿主无关共享点（保留为全局、不随侧迁移）**：`.codebuddy/temp/gate-events.jsonl`（allow 记账，
 >      审计等式第二账本）、`.codebuddy/temp/handoff/RUNNING.json`（交接锁，唯一真实跨会话互斥机制）；
->   ③ **读死一侧的消费方（登记后续工单）**：`tools/gen_iteration_board.py`、`runtime/metrics/*`、
->      `check-distill.mjs` 硬编码 `.codebuddy`（改造后与目标同向）；
+>   ③ **读死一侧的消费方（登记后续工单）**：`tools/gen_iteration_board.py`、`runtime/metrics/*`；
+>      ★ `check-distill.mjs` 已于 2026-11-05（BATCH-B）改「按脚本位置推导 skill 根」⇒ 从本清单**移出**
+>      （另一侧无该文件、亦无 `project/`，故推导只落在 `.codebuddy` 侧，不会读错）；
 >   ④ **伪本侧注释**：`validate-state.py`（脚本物理只在 `.codebuddy` ⇒ Claude 宿主下校验的是另一侧）。
 > · ★ **双宿主复活检测**（v2.2 · R41）：门禁启动时探测另一侧 `settings.json` / `hooks/gate-check.mjs`
 >   是否存在，存在即 audit 一行 `FIX49_MULTIHOST_WARNING`（零放行面变化，只留痕；带 dedup 标记）——

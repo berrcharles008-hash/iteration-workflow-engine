@@ -191,7 +191,7 @@
 | step-3-6-attribution | 偏差归因 | — | 跳过 | ✅ | ✅ |
 | step-4-actions | 行动项（改进措施落实到人） | — | 跳过 | ✅ | ✅ |
 | step-5-lessons | 正向模式提炼 | ✅ | ✅ | ✅ | ✅ |
-| step-6-archive | 回顾归档（更新 state.yaml 完成 07，刷新机器投影，释放 ACTIVE） | ✅ | ✅ | ✅ | ✅ |
+| step-6-archive | 回顾归档（更新 state.yaml 完成 07，刷新机器投影，释放 ACTIVE；§6.1 自检 **4 项**，第 4 项 = `runtime/check-distill.mjs` 退出码） | ✅ | ✅ | ✅ | ✅ |
 
 ---
 ## 步骤编号约定

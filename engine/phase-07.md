@@ -68,6 +68,48 @@
 | step-5-lessons | 正向模式提炼（从原 06 step-3 迁移过来） | ✅ | ✅ | ✅ | ✅ |
 | step-6-archive | 回顾归档（更新 state.yaml 完成 07，释放 ACTIVE） | ✅ | ✅ | ✅ | ✅ |
 
+**★ 写入方式（P-239 · 2026-11-04 内联模板）**：`phase_steps` 是**跨阶段累积**的，初始化本阶段只能**块末追加**。
+
+| # | 硬约束 | 违反后果 |
+|---|---|---|
+| 1 | 禁整块替换（块区间一次性赋值的形态） | 删掉前序阶段全部步骤记录（2026-11-01 删 35 条、11-04 删 12 条） |
+| 2 | **禁从 `runtime/_steps_*.py` 复制** | 该目录正反两类历史脚本并存，形态不可辨 |
+| 3 | 追加后必须打印 total 并核对 | 期望值 = 各阶段步骤数之和 |
+
+```python
+# 通用模板：只替换 PATH 与 STEPS（按上表填全），其余照抄
+import io, os, re
+PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '<迭代ID>.state.yaml')
+STEPS = [('step-1-summary', '迭代总结', 'pending', True)]
+
+lines = io.open(PATH, encoding='utf-8').read().split('\n')
+i = lines.index('phase_steps:')
+end = len(lines)
+for j in range(i + 1, len(lines)):
+    if re.match(r'^[A-Za-z_][A-Za-z0-9_]*:', lines[j]):
+        end = j
+        break
+
+existing = set()
+for j in range(i + 1, end):
+    m = re.match(r'^  - id: "([^"]+)"', lines[j])
+    if m:
+        existing.add(m.group(1))
+dup = [s[0] for s in STEPS if s[0] in existing]
+if dup:
+    raise SystemExit('ABORT: step id 已存在: %s' % ','.join(dup))
+
+out = []
+for sid, name, status, mandatory in STEPS:
+    out += ['  - id: "%s"' % sid, '    name: "%s"' % name,
+            '    status: "%s"' % status, '    mandatory: %s' % ('true' if mandatory else 'false')]
+lines[end:end] = out          # ★ 块末追加（唯一正确形态）
+
+with io.open(PATH, 'w', encoding='utf-8', newline='\n') as f:
+    f.write('\n'.join(lines))
+print('appended %d; total = %d' % (len(STEPS), len(existing) + len(STEPS)))
+```
+
 ### Step 3 执行标准（🟡 "按需"的判断规则）
 
 > 🟡 中等级"按需"不等于"可选"。满足以下任一条件即为"需要写入"：
@@ -115,6 +157,8 @@
 
 > ★ **两个维度勿混**：本步骤 `mandatory = true` 指**「必须执行」**；「ERR/WARN 不为空」**不阻塞归档**。
 > 禁止把「审计未清零」当作归档的前置条件（那会造成"引擎有问题 ⇒ 业务迭代无法归档"的死锁）。
+> ★ **范围限定（2026-11-05）**：本条只约束**本步骤**的审计结果；`§6.1` 第 4 项（蒸馏义务）不属此列 ——
+> 它的补救动作（就地蒸馏）在归档前可做，见 §6.1 三码分流，不会形成闭环。
 
 > **禁止**以"本次迭代与引擎无关"为由跳过 —— 该步骤检查的正是**引擎自身是否被改坏 / 改乱**。
 
@@ -168,8 +212,19 @@
 | step-3 声称需写入错误模式 | 回顾报告 §3 节 | 若声称"需写入"，则 `project/lessons-learned.md` 必须已有对应新增行 |
 | step-5 声称有正向模式 | 回顾报告 §5 节 | 若声称"有"，则 `project/lessons-learned.md` 必须已有 P-xxx（success）行 |
 | lessons-learned.md 实际内容 | `search_content` 搜索最新 P 编号 | 确认新增行存在于文件中，非仅在报告中 |
+| 模式库蒸馏义务（第 4 项） | `node runtime/check-distill.mjs` 退出码 | 0 通过 / 3 需蒸馏 / 1 工具故障 |
 
 > **若任何一项检查失败**：不更新 state.yaml、不释放 ACTIVE。先执行缺失的写入操作，再重新自检。
+
+> ★ **第 4 项三码分流（2026-11-05 BATCH-B 新增）** —— 退出码由 `runtime/check-distill.mjs` 给出：
+> - `0` ⇒ 通过（活跃条目 ≤15 **且** 活跃表 ≤6000 字符）。
+> - `3` ⇒ **不得归档**：就地按 `engine/lessons-learned.md` §七 蒸馏至 ≤10，重跑得 `0` 再继续。
+>   07 归档前是本步的**兜底蒸馏窗口**（门禁在 07 阶段放行该文件；蒸馏工序同 01-03，含 `.bak` 备份 + 留痕）。
+> - `1` ⇒ 工具故障（文件不可读 / 结构变更 / 脚本异常）：登记 `runtime/TOOLING-TODO.md`，**不阻断归档**。
+>   （故 3 与 1 必须分码：node 未捕获异常同为 `1`，混用会把一次崩溃读成「活跃超阈值」。）
+> ★ **为何 `3` 不构成死锁**：Step 5 强制「有则立即写入」⇒ 归档时活跃数必然上抬；若此处只判「超阈值 ⇒ 拒绝」，
+> 而蒸馏又只能在「下一次 01-03」，正好闭合成「归档被拒 ⇒ 没有下一迭代 ⇒ 没有 01-03 窗口」。
+> ⇒ 补救动作必须在本步可用，这是把阈值红灯接上「当场可做的动作」而非只接拒绝。
 
 **6.2 归档操作**：
 
@@ -264,7 +319,7 @@ self_evolve:
 |:--:|---------|---------|:--:|
 | AP-1 | 报告中写"建议下一个迭代写入模式库" | 本迭代 07 阶段结束时必须实际写入 `project/lessons-learned.md` | 028 |
 | AP-2 | step-3 标记为"按需"后全部跳过不评估 | 逐条对照 §Step 3 执行标准 评估，不应写入时需在报告中说明理由 | 015, 028 |
-| AP-3 | step-6 归档时不验证模式库是否实际更新 | 执行 §6.1 前置自检的 3 项检查，失败则补写 | 015, 028 |
+| AP-3 | step-6 归档时不验证模式库是否实际更新 | 执行 §6.1 前置自检的 4 项检查（第 4 项 = 蒸馏义务退出码），失败则补写 | 015, 028 |
 | AP-4 | 正向模式只写在回顾报告中，不修改 lessons-learned.md | step-5 流程第 2 步：有则立即 `replace_in_file` | 028 |
 
 > **违反以上铁律 = step-6 自检不过 → ACTIVE 不释放 → 迭代不能结束。**

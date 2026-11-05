@@ -97,6 +97,48 @@ python scripts/gen-knowledge-base.py --force     # ② 无条件全量刷新
 | step-4-archive-check | 归档检查：检查 `10-临时/` 是否清空，未清空则分类移出 | ✅ | 始终 |
 | 3.5 | ★ 归档完成自检 | ✅ | step-3-archive 写入完成后立即执行，三项全通过 |
 
+**★ 写入方式（P-239 · 2026-11-04 内联模板）**：`phase_steps` 是**跨阶段累积**的，初始化本阶段只能**块末追加**。
+
+| # | 硬约束 | 违反后果 |
+|---|---|---|
+| 1 | 禁整块替换（块区间一次性赋值的形态） | 删掉前序阶段全部步骤记录（2026-11-01 删 35 条、11-04 删 12 条） |
+| 2 | **禁从 `runtime/_steps_*.py` 复制** | 该目录正反两类历史脚本并存，形态不可辨 |
+| 3 | 追加后必须打印 total 并核对 | 期望值 = 各阶段步骤数之和 |
+
+```python
+# 通用模板：只替换 PATH 与 STEPS（按上表填全），其余照抄
+import io, os, re
+PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '<迭代ID>.state.yaml')
+STEPS = [('step-1-deploy-stage1', '发布到开发测试服务器', 'pending', True)]
+
+lines = io.open(PATH, encoding='utf-8').read().split('\n')
+i = lines.index('phase_steps:')
+end = len(lines)
+for j in range(i + 1, len(lines)):
+    if re.match(r'^[A-Za-z_][A-Za-z0-9_]*:', lines[j]):
+        end = j
+        break
+
+existing = set()
+for j in range(i + 1, end):
+    m = re.match(r'^  - id: "([^"]+)"', lines[j])
+    if m:
+        existing.add(m.group(1))
+dup = [s[0] for s in STEPS if s[0] in existing]
+if dup:
+    raise SystemExit('ABORT: step id 已存在: %s' % ','.join(dup))
+
+out = []
+for sid, name, status, mandatory in STEPS:
+    out += ['  - id: "%s"' % sid, '    name: "%s"' % name,
+            '    status: "%s"' % status, '    mandatory: %s' % ('true' if mandatory else 'false')]
+lines[end:end] = out          # ★ 块末追加（唯一正确形态）
+
+with io.open(PATH, 'w', encoding='utf-8', newline='\n') as f:
+    f.write('\n'.join(lines))
+print('appended %d; total = %d' % (len(STEPS), len(existing) + len(STEPS)))
+```
+
 ### ★ step-3.5 归档完成自检（强制）
 
 > step-3-archive 写入完成后立即执行以下自检，全部通过才算 06 阶段完成。

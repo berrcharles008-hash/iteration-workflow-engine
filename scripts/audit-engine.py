@@ -20,6 +20,9 @@
     A10 通用性自检   a 项目 token / c 派生表对账 / d 落点存在性（★ 2026-10-24 批次 0；b/e 依赖批次 2 ⇒ 显式 SKIP）
     A11 页面两表    委托 scripts/check-03-page-tables.py（★ 2026-11-01 批 2）：有前端页面改动的 03 是否写了
                     §2.3.1 列定义表 / §2.3.2 检索条件表；并断言 engine/phase-03.md 的挂载点未被删
+    A12 模式库义务  （★ 2026-11-05 BATCH-B）a 活跃表「落点」前缀合法（ERR）；b 落点路径实存（WARN，双基准解析）；
+                    c 活跃条目越阈值（WARN，红灯在 check-distill 退出码 3）；d 当前迭代 04/05 的
+                    `[模式: P-xxx]` 合计 <3（WARN）且编号须存在于模式库全集
 
 规范页：engine/consistency-checklist.md
 """
@@ -1289,6 +1292,213 @@ def _a10e():
             print('    | %s' % line)
 
 
+# ── A12 模式库义务（★ 2026-11-05 BATCH-B）───────────────────
+#
+# 为什么需要这一维（背景，非形式化描述）：
+#   ① A1（2026-11-04）给活跃模式表加了「落点」列，但**没有任何机器读它** ——
+#      A10-d 的落点存在性只扫 `capability-map.md` / `README.md` / `CONTRIBUTING.md`
+#      （见 `_a10d` 的 docs 列表），模式库不在其中 ⇒ 落点写「提示」还是写不存在路径，审计都看不见。
+#   ② 注入侧只到 01：2026-11-03-002 迭代实测 01 注入 14 条 → 02 卡 7 → 03 卡 4 → **04/05 各 0 条**。
+#      没有条数判据 ⇒「模式采纳率」永远无法统计（P-241：模板有位置 + 判据有条文 + 机器有出口，缺一即失效）。
+#   本维只补「第三件：机器出口」，位置与条文两件由 phase-04/05 + 两个模板同批提供（BATCH-B B4）。
+#
+# 级别口径（刻意不激进，防变成第 16 条常驻噪音 —— 基线 WARN 已有 15 条）：
+#   a 前缀非法 ⇒ **ERR**（客观、可零成本修正）
+#   b 路径实存  ⇒ **WARN**（历史形态不统一：`.codebuddy/…` 为项目根相对、`engine/…` 为 skill 根相对、
+#                `back-end/…cs:533` 带行号后缀、`规范: … §Step 0.6` 带章节后缀）
+#                ⇒ 只做「双基准解析后仍找不到」提示，先观察一轮再决定是否升 ERR。
+#   c ACTIVE 越阈值 ⇒ WARN（真正的红灯在 `runtime/check-distill.mjs` 退出码 3，由 01/07 消费；
+#                本维只做记账，避免与归档门禁形成第二套阻断口径）
+#   d 04/05 的 `[模式: P-xxx]` 合计 < 3 ⇒ WARN；编号不在模式库全集 ⇒ 另报 WARN（防「写三个不存在的号凑数」）
+#
+# 假绿守卫：
+#   · 无活跃迭代（ACTIVE 缺失/为 none）⇒ d 显式 **SKIP**，不会静默算作「达标」。
+#   · 05 文档尚不存在 ⇒ d 记 OK 并注明「05 未开始」，**不**判未达标（否则每个迭代在 04/05 期都会红）。
+#   · 活跃区解析不出任何行 ⇒ a 报 ERR（文件结构变更时不能静默通过）。
+A12_LESSONS_REL = 'project/lessons-learned.md'
+A12_ZONE_RE = re.compile(r'^#{2,4}\s*(?:[一二三四五六七八九十百]+、)?\s*(活跃模式|已蒸馏模式)')
+A12_ANY_HEAD_RE = re.compile(r'^#{2,4}\s')
+A12_ROW_RE = re.compile(r'^\|\s*(P-\d+)\s*\|')
+# ★ `提示` 允许不带冒号：活跃表口径段写「提示（无机器出口）」，实测填法就是裸 `提示`
+#   ——若强制冒号，10 行里 3 行（P-232/P-239/P-240）会被判前缀非法 = 上线即假红。
+A12_PREFIXES = ('脚本:', '断言:', '规范:', '提示')
+# 路径形态：只认「带扩展名的段」；不含中文，避免把叙述文字吃进来
+A12_PATH_RE = re.compile(
+    r'[A-Za-z0-9_.\-/]+\.(?:md|py|mjs|js|cs|json|yaml|yml|ps1|sh|sql)')
+A12_MARK_RE = re.compile(r'\[模式:\s*(P-\d+)\s*\]')
+A12_ACTIVE_MAX = 15          # 与 runtime/check-distill.mjs 的 ACTIVE_MAX 同源（SSOT = engine/lessons-learned.md §七）
+A12_MIN_MARKS = 3            # T2 判据：04 + 05 合计 ≥3
+A12_STAT = {'rows': 0, 'err': 0, 'warn': 0, 'marks': 'SKIP', 'unknown': 0}
+
+
+def _a12_project_root():
+    """项目根：manifest `project.workspace_root` 优先，回落「skill 根上溯 3 级」。"""
+    cfg = _a10_load_manifest()
+    ws = (cfg.get('project.workspace_root') or '').strip().replace('\\', '/')
+    if ws:
+        return os.path.abspath(ws)
+    return os.path.abspath(os.path.join(SKILL_ROOT, '..', '..', '..'))
+
+
+def _a12_bases():
+    """落点解析基准（保序去重）。项目根必须在最前：`.codebuddy/…`、业务根目录相对都是项目根相对。"""
+    roots = [_a12_project_root(), SKILL_ROOT]
+    roots += [os.path.join(SKILL_ROOT, d) for d in ('engine', 'scripts', 'project', 'runtime')]
+    out = []
+    for r in roots:
+        a = os.path.abspath(r)
+        if a not in out:
+            out.append(a)
+    return out
+
+
+def _a12_zones():
+    """返回 (active_rows, all_ids)。active_rows = [(编号, 落点单元格原文), ...]。"""
+    p = os.path.join(SKILL_ROOT, A12_LESSONS_REL.replace('/', os.sep))
+    text = read(p)
+    if not text:
+        return None, []
+    act, allids, zone = [], [], ''
+    for line in text.replace('\ufeff', '').splitlines():
+        mz = A12_ZONE_RE.match(line.strip())
+        if mz:
+            zone = 'active' if mz.group(1) == '活跃模式' else 'distilled'
+            continue
+        if A12_ANY_HEAD_RE.match(line):
+            zone = ''
+            continue
+        m = A12_ROW_RE.match(line)
+        if not m:
+            continue
+        allids.append(m.group(1))
+        if zone == 'active':
+            cells = [c.strip() for c in line.split('|')[1:-1]]
+            act.append((m.group(1), cells[-1] if cells else ''))
+    return act, allids
+
+
+def _a12a(act):
+    """a 前缀合法性（ERR） + b 路径实存（WARN）。"""
+    if act is None:
+        err('A12-a', '模式库不可读：%s' % A12_LESSONS_REL)
+        A12_STAT['err'] += 1
+        return
+    if not act:
+        err('A12-a', '活跃模式区解析不出 `| P-xxx |` 行（结构可能已变）')
+        A12_STAT['err'] += 1
+        return
+    bases = _a12_bases()
+    prefix_err = path_warn = 0
+    for pid, cell in act:
+        A12_STAT['rows'] += 1
+        hit = [p for p in A12_PREFIXES if cell.startswith(p)]
+        if not hit:
+            prefix_err += 1
+            err('A12-a', '%s 落点前缀非法（只允许 脚本:/断言:/规范:/提示）：%s'
+                % (pid, (cell or '(空)')[:40]))
+            continue
+        if hit[0].startswith('提示'):
+            continue
+        toks = [t for t in A12_PATH_RE.findall(cell) if len(t) > 3]
+        if not toks:
+            path_warn += 1
+            warn('A12-b', '%s 落点未含可校验路径：%s' % (pid, cell[:50]))
+            continue
+        for t in toks:
+            # ★ 只剥「显式 ./」前缀，不能用 lstrip('./') —— 它按字符集剥，
+            #   会把 `.codebuddy/…` 削成 `codebuddy/…`（实测 2 行假红）
+            while t.startswith('./'):
+                t = t[2:]
+            t = t.replace('/', os.sep)
+            if not any(os.path.isfile(os.path.join(b, t)) for b in bases):
+                path_warn += 1
+                warn('A12-b', '%s 落点路径未找到：%s' % (pid, t.replace(os.sep, '/')))
+    A12_STAT['err'] += prefix_err
+    A12_STAT['warn'] += path_warn
+    if prefix_err == 0:
+        ok('A12-a', '活跃模式落点前缀合法（%d 行）' % len(act))
+
+
+def _a12_active_iteration():
+    p = os.path.join(SKILL_ROOT, 'runtime', 'ACTIVE')
+    txt = read(p)
+    if not txt:
+        return ''
+    first = txt.replace('\ufeff', '').splitlines()
+    line = first[0].strip() if first else ''
+    return '' if line.lower() in ('', 'none', 'null') else line
+
+
+def _a12d(all_ids):
+    """d 当前迭代 04/05 文档的 `[模式: P-xxx]` 计数。"""
+    iid = _a12_active_iteration()
+    if not iid:
+        A12_STAT['marks'] = 'SKIP'
+        skip('A12-d', '无活跃迭代（runtime/ACTIVE 为空/none）⇒ 04/05 模式计数不适用')
+        return
+    cfg = _a10_load_manifest()
+    docs = (cfg.get('paths.docs_iterations') or 'docs/iterations').strip().replace('\\', '/')
+    idir = os.path.join(_a12_project_root(), docs.replace('/', os.sep), iid)
+    if not os.path.isdir(idir):
+        A12_STAT['marks'] = 'SKIP'
+        skip('A12-d', '当前迭代目录不存在：%s' % os.path.join(docs, iid).replace('\\', '/'))
+        return
+    f04, f05 = [], []
+    for sub in sorted(os.listdir(idir)):
+        d = os.path.join(idir, sub)
+        if not os.path.isdir(d):
+            continue
+        if sub.startswith('04-'):
+            f04 += [os.path.join(d, f) for f in sorted(os.listdir(d)) if f.endswith('.md')]
+        elif sub.startswith('05-'):
+            f05 += [os.path.join(d, f) for f in sorted(os.listdir(d)) if f.endswith('.md')]
+    known = set(all_ids)
+    n04 = n05 = 0
+    unknown = []
+    for files, tag in ((f04, '04'), (f05, '05')):
+        n = 0
+        for fp in files:
+            for pid in A12_MARK_RE.findall(read(fp)):
+                n += 1
+                if pid not in known:
+                    unknown.append('%s@%s' % (pid, tag))
+        if tag == '04':
+            n04 = n
+        else:
+            n05 = n
+    for u in sorted(set(unknown)):
+        A12_STAT['unknown'] += 1
+        warn('A12-d', '引用了模式库中不存在的编号：%s（活跃∪已蒸馏均无）' % u)
+    if not f04 and not f05:
+        A12_STAT['marks'] = 'SKIP'
+        skip('A12-d', '当前迭代尚无 04/05 文档（%s）⇒ 计数不适用' % iid)
+        return
+    if not f05:
+        A12_STAT['marks'] = 'OK'
+        ok('A12-d', '04 已回填 %d 条 [模式: P-xxx]（05 未开始，暂不判 ≥%d）' % (n04, A12_MIN_MARKS))
+        return
+    total = n04 + n05
+    A12_STAT['marks'] = 'OK' if total >= A12_MIN_MARKS else 'LOW'
+    if total < A12_MIN_MARKS:
+        warn('A12-d', '%s 的 04+05 仅 %d 条 [模式: P-xxx]（判据 ≥%d）：04=%d / 05=%d'
+             % (iid, total, A12_MIN_MARKS, n04, n05))
+    else:
+        ok('A12-d', '%s 的 04+05 共 %d 条 [模式: P-xxx]（04=%d / 05=%d）' % (iid, total, n04, n05))
+
+
+def a12_patternlib():
+    act, allids = _a12_zones()
+    _a12a(act)
+    if act is not None and len(act) > A12_ACTIVE_MAX:
+        A12_STAT['warn'] += 1
+        warn('A12-c', '活跃条目 %d > 阈值 %d ⇒ 需蒸馏（机器红灯 = runtime/check-distill.mjs 退出码 3）'
+             % (len(act), A12_ACTIVE_MAX))
+    _a12d(allids)
+    ok('A12', '结论：行=%d 落点ERR=%d 落点WARN=%d 模式标记=%s 未知编号=%d'
+       % (A12_STAT['rows'], A12_STAT['err'], A12_STAT['warn'],
+          A12_STAT['marks'], A12_STAT['unknown']))
+
+
 def a10_check():
     _a10b()
     _a10e()
@@ -1326,7 +1536,8 @@ def main():
 
     for name, fn in (('A1', a1_orphan), ('A2', a2_step_ids), ('A3', a3_doc_names),
                      ('A4', a4_refs), ('A4b', a4b_var_typos), ('A8', a8_wait_points),
-                     ('A10', a10_check), ('A11', a11_page_tables), ('A5', a5_gov_docs)):
+                     ('A10', a10_check), ('A11', a11_page_tables), ('A12', a12_patternlib),
+                     ('A5', a5_gov_docs)):
         try:
             fn()
         except Exception as e:

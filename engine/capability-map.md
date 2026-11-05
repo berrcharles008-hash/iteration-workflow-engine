@@ -108,7 +108,7 @@
 | 外部审查模型路由 | 多模型配置 + 降级（原则 13） | `cross-review-protocol.md` §八 · `scripts/review-models-configurator.py` · `scripts/review-gateway.py` | ✅ |
 | Spec 合规验证 | 04 Step 4.7 | `phase-04.md` §Step 4.7 | ✅ |
 | 代码审查矩阵 | 层触发 + 铁律 | `project/code-review-rules.md` · `phase-04.md` §Step 5 | ✅ |
-| 一致性审计 A1~A11 | 引擎自审（A10-b/c/d/e · A10-f 实现符号耦合自 2026-10-25 实检；A11 页面两表自 2026-11-01） | `scripts/audit-engine.py` · `consistency-checklist.md` | ✅ |
+| 一致性审计 A1~A12 | 引擎自审（A10-b/c/d/e · A10-f 实现符号耦合自 2026-10-25 实检；A11 页面两表自 2026-11-01；A12 模式库义务自 2026-11-05） | `scripts/audit-engine.py` · `consistency-checklist.md` | ✅ |
 | 03 两表完整性机检（**M1/M2 执行面，非新机制**） | 有前端页面改动的 03 缺 §2.3.1/§2.3.2 ⇒ 判红；极简豁免 / 存量只 WARN | `scripts/check-03-page-tables.py` · `phase-03.md` 通过条件 · A11 | ✅ |
 | 占位符扫描与归零 | 五类 schema 分类 + 未归类归零 + CSV 指标 | `scripts/scan-placeholders.py` · `template-injection.md` §2.4 | ✅ |
 | 模板覆盖校验 | R1~R5/W1~W5 | `scripts/validate-template-coverage.py` | ✅ |
