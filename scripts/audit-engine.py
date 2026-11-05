@@ -1429,6 +1429,34 @@ def _a12_active_iteration():
     return '' if line.lower() in ('', 'none', 'null') else line
 
 
+def _a12_mode_col_missing(f04):
+    """04 任务清单的「任务表」列头是否缺「模式」列。返回 (missing, 证据)。
+
+    为什么单独判列头（2026-11-05 实测）：B4 把 04 任务表固定为 5 列（含「模式」），
+    但第 2 个迭代 `2026-11-05-002` 实际写成 `| # | 任务 | 方案行 | 状态 |` 四列
+    ⇒ `[模式: P-xxx]` 必然为 0。原判据只在「05 已产出」时才判 ≥3，于是
+    「04 已完成、05 未出报告」这段窗口里 0 条回填是**完全静默**的（实测报 OK）。
+    ⇒ 列头缺列必须独立报警，不得因 05 未产出而豁免。
+
+    口径：只认表头含「状态」的表（任务表），元信息表（`| 项 | 值 |`）不参与判定。
+    """
+    cand = [f for f in f04 if '开发任务清单' in os.path.basename(f)]
+    for fp in (cand or f04):
+        lines = read(fp).splitlines()
+        for i in range(len(lines) - 1):
+            h, nxt = lines[i].strip(), lines[i + 1].strip()
+            if not (h.startswith('|') and nxt.startswith('|')):
+                continue
+            if not re.match(r'^\|[\s:\-|]+\|$', nxt):
+                continue
+            if '状态' not in h:
+                continue
+            if '模式' not in h:
+                return True, '%s 表头 `%s`' % (os.path.basename(fp), h)
+            break
+    return False, ''
+
+
 def _a12d(all_ids):
     """d 当前迭代 04/05 文档的 `[模式: P-xxx]` 计数。"""
     iid = _a12_active_iteration()
@@ -1473,17 +1501,26 @@ def _a12d(all_ids):
         A12_STAT['marks'] = 'SKIP'
         skip('A12-d', '当前迭代尚无 04/05 文档（%s）⇒ 计数不适用' % iid)
         return
+    # ★ 2026-11-05 新增：列头缺「模式」列 ⇒ 回填必然为 0，与 05 是否产出无关
+    col_missing, col_ev = _a12_mode_col_missing(f04)
+    if col_missing:
+        A12_STAT['marks'] = 'NOCOL'
+        A12_STAT['warn'] += 1
+        warn('A12-d', '04 任务表缺「模式」列：%s ⇒ 该表内 [模式: P-xxx] 必然为 0（不因 05 未产出而豁免）' % col_ev)
     if not f05:
+        if col_missing:
+            return
         A12_STAT['marks'] = 'OK'
         ok('A12-d', '04 已回填 %d 条 [模式: P-xxx]（05 未开始，暂不判 ≥%d）' % (n04, A12_MIN_MARKS))
         return
     total = n04 + n05
-    A12_STAT['marks'] = 'OK' if total >= A12_MIN_MARKS else 'LOW'
-    if total < A12_MIN_MARKS:
-        warn('A12-d', '%s 的 04+05 仅 %d 条 [模式: P-xxx]（判据 ≥%d）：04=%d / 05=%d'
-             % (iid, total, A12_MIN_MARKS, n04, n05))
-    else:
-        ok('A12-d', '%s 的 04+05 共 %d 条 [模式: P-xxx]（04=%d / 05=%d）' % (iid, total, n04, n05))
+    if not col_missing:
+        A12_STAT['marks'] = 'OK' if total >= A12_MIN_MARKS else 'LOW'
+        if total < A12_MIN_MARKS:
+            warn('A12-d', '%s 的 04+05 仅 %d 条 [模式: P-xxx]（判据 ≥%d）：04=%d / 05=%d'
+                 % (iid, total, A12_MIN_MARKS, n04, n05))
+        else:
+            ok('A12-d', '%s 的 04+05 共 %d 条 [模式: P-xxx]（04=%d / 05=%d）' % (iid, total, n04, n05))
 
 
 def a12_patternlib():
