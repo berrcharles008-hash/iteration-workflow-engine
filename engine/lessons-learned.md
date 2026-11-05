@@ -39,8 +39,8 @@ Step 4: 更新 Skill 文件
   ├── SKILL.md：添加检查步骤 / 关键原则
   └── engine/ 或 project/：更新对应引擎/配置文件
 
-Step 5: 写入迭代复盘日志
-  └── {{ITERATIONS_DIR}}/{迭代编号}/lessons-learned.md
+Step 5: 写入迭代复盘日志（★ 2026-11-05 落点订正，勿再新建 lessons-learned.md）
+  └── {{ITERATIONS_DIR}}/{迭代编号}/07-迭代回顾/07-迭代回顾报告.md 的「模式沉淀」小节
 ```
 
 ---
