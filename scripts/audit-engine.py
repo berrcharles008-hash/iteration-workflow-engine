@@ -23,6 +23,9 @@
     A12 模式库义务  （★ 2026-11-05 BATCH-B）a 活跃表「落点」前缀合法（ERR）；b 落点路径实存（WARN，双基准解析）；
                     c 活跃条目越阈值（WARN，红灯在 check-distill 退出码 3）；d 当前迭代 04/05 的
                     `[模式: P-xxx]` 合计 <3（WARN）且编号须存在于模式库全集
+    A13 05 渲染清单  委托 scripts/check-05-render-list.py（★ 2026-11-16）：页面型迭代的 05 是否含
+                    「平台渲染验收清单」且 8 项逐项有结论（全 ⬜ 判 ERR）；触发面 = §2.3 两表 **或**
+                    U3/U6 布局包（UI 重排类迭代旧口径整条绕过）；并断言 engine/phase-05.md 挂载点未删
 
 规范页：engine/consistency-checklist.md
 """
@@ -467,6 +470,49 @@ def a11_page_tables():
         err('A11', '03 页面两表不完整（%s）%s' % (A11_SCRIPT, detail))
     else:
         warn('A11', '机检脚本异常退出 rc=%d（不阻断）%s' % (p.returncode, etxt[:120]))
+
+
+# ── A13 05 渲染验收清单完整性（★ 2026-11-16）────────────────
+A13_SCRIPT = 'scripts/check-05-render-list.py'
+A13_MOUNT_DOC = 'engine/phase-05.md'
+
+
+def a13_render_list():
+    """委托 `check-05-render-list.py` 判「页面型迭代的 05 是否验了平台渲染且逐项有结论」。
+
+    为什么 subprocess 而不内联判据：同 A11（P-242 判据单源）——判据本体在脚本里，
+    05 期由同一条命令执行，审计只做「exit code → ERR/WARN」转译，不会出现两套口径。
+    触发面比 A11 宽（§2.3 两表 **或** U3/U6 布局包）：UI 重排类迭代常无两表，
+    2026-11 实测 11 个有布局包的页面型迭代里 5 个（45%）整条绕过渲染验收。
+    超时 / 解释器不可用一律降 WARN —— 环境性原因不该阻断收口。
+    """
+    sp = os.path.join(SKILL_ROOT, A13_SCRIPT.replace('/', os.sep))
+    if not os.path.exists(sp):
+        err('A13', '机检脚本缺失：%s' % A13_SCRIPT)
+        return
+    doc = os.path.join(SKILL_ROOT, A13_MOUNT_DOC.replace('/', os.sep))
+    try:
+        dtext = open(doc, encoding='utf-8').read()
+    except Exception:
+        dtext = ''
+    if 'check-05-render-list.py' not in dtext:
+        err('A13', '%s 未挂载 %s（挂载点被删 ⇒ 判据静默失联）' % (A13_MOUNT_DOC, A13_SCRIPT))
+        return
+    try:
+        p = subprocess.run([sys.executable, sp], cwd=SKILL_ROOT,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+    except Exception as e:                                    # noqa: BLE001
+        warn('A13', '机检脚本执行异常（不阻断）：%r' % (e,))
+        return
+    out = (p.stdout or b'').decode('utf-8', 'replace').strip()
+    etxt = (p.stderr or b'').decode('utf-8', 'replace').strip()
+    if p.returncode == 0:
+        ok('A13', '05 渲染验收清单：%s' % (out.splitlines()[0] if out else 'PASS'))
+    elif p.returncode == 1:
+        detail = ' ｜ '.join([l.strip() for l in out.splitlines()[1:4] if l.strip()])
+        err('A13', '05 渲染验收清单缺失/未填（%s）%s' % (A13_SCRIPT, detail))
+    else:
+        warn('A13', '机检脚本异常退出 rc=%d（不阻断）%s' % (p.returncode, etxt[:120]))
 
 
 # ── A5 治理文档时效 ─────────────────────────────────────────
@@ -1574,7 +1620,7 @@ def main():
     for name, fn in (('A1', a1_orphan), ('A2', a2_step_ids), ('A3', a3_doc_names),
                      ('A4', a4_refs), ('A4b', a4b_var_typos), ('A8', a8_wait_points),
                      ('A10', a10_check), ('A11', a11_page_tables), ('A12', a12_patternlib),
-                     ('A5', a5_gov_docs)):
+                     ('A13', a13_render_list), ('A5', a5_gov_docs)):
         try:
             fn()
         except Exception as e:

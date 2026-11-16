@@ -221,14 +221,19 @@ def check_templates():
         txt = '\n'.join(read_lines(p))
         if needle not in txt:
             errs.append('%s：未命中 `%s`' % (desc, needle))
-    # 05 模板的 8 项必勾（条目数只来自已发生缺陷，不得预扩展 ⇒ 数量本身是判据）
+    # 05 模板渲染清单：8 项列表页基线 + 4 项非列表形态（2026-11-16 扩面）
+    # ★ 判据由「n == 8」放宽为「n >= 8 且 4 条新增关键词在位」：
+    #   条目数随已发生缺陷增长属正常演进，硬计数会让每次扩条目都必须改本脚本
+    #   （判据单点化 ⇒ 忘改即假红）。防删减改由关键词断言承担。
     p05 = os.path.join(SKILL_ROOT, 'engine', 'templates', 'phase-05-测试验证报告.md')
     if not os.path.exists(p05):
         errs.append('05 模板缺失：engine/templates/phase-05-测试验证报告.md')
     else:
+        lines05 = read_lines(p05)
+        txt05 = '\n'.join(lines05)
         n = 0
         inside = False
-        for ln in read_lines(p05):
+        for ln in lines05:
             if ln.startswith('### 平台渲染验收清单'):
                 inside = True
                 continue
@@ -236,8 +241,12 @@ def check_templates():
                 break
             if inside and re.match(r'^\|\s*\d+\s*\|', ln.strip()):
                 n += 1
-        if n != 8:
-            errs.append('05 模板平台渲染清单项数 = %d（要求 8；条目须与已发生缺陷对应，不预扩展）' % n)
+        if n < 8:
+            errs.append('05 模板平台渲染清单项数 = %d（要求 ≥8：列表页基线 1~8 不得删减）' % n)
+        for kw in ('弹窗/抽屉容器有样式', '状态类有 less 定义',
+                   '抽屉/侧栏展开收起不塌陷', '表单 label 不折行'):
+            if kw not in txt05:
+                errs.append('05 模板缺非列表形态条目：%s（防删减）' % kw)
     return errs
 
 
@@ -347,7 +356,7 @@ def main():
                 for e in errs:
                     print('      - %s' % e)
             else:
-                print('[OK] 模板侧 %d 项断言全通过（04 条目 / 05 清单 8 项 / 05 标记 / 03 挂载点）'
+                print('[OK] 模板侧 %d 项断言全通过（04 条目 / 05 清单 ≥8 项含非列表形态 / 05 标记 / 03 挂载点）'
                       % (len(TEMPLATE_CHECKS) + 1))
         return 1 if errs else 0
 
