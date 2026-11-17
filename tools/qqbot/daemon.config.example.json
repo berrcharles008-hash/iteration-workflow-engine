@@ -75,6 +75,10 @@
     "workspaceHash": "",
     "logRoot": ""
   },
+  "autoResume": {
+    "enabled": true,
+    "intervalSec": 15
+  },
   "watcher": {
     "idleSeconds": 900,
     "autoQueue": true,

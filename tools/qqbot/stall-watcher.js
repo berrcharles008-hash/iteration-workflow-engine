@@ -98,6 +98,10 @@ const DEF = {
   autoResumeHeartbeat: '',  // 空 = .codebuddy/temp/auto-resume-waiter.json
   autoResumeFreshSec: 180,  // 心跳新鲜期（waiter 每 ~75s 调一次；超期 ⇒ 视为不在场）
   autoResumeHoldSec: 900,   // 被抑制信号的保留时长（waiter 失败后据此补发；超过即丢弃）
+  // ★2026-10-29：用 waiter 心跳的 target 给「上限暂停」补成员归因时的**时间邻近窗**（秒）。
+  //   暂停行本身不带 conv ⇒ 只能靠 waiter；但陈旧心跳会把上一位成员的名字安到这次暂停上
+  //   （错归因比无归因更坏）⇒ 只采信「心跳 ts 与信号 at 相差 ≤ 本窗」的那一条。
+  autoResumeAttrSec: 300,
   // ★ 启动静默（2026-10-14 实测教训）：附着时会回读尾部窗口，其中**历史**的平台信号/挂起态
   //   若当新事件处理 ⇒ 启动瞬间连发 4 张陈旧卡（filelimit/ratelimit/emfile/aborted）。
   //   口径：早于「启动时刻 - backfillQuietSec」的行只用于建映射（团队/成员/邮箱/活跃），
@@ -314,15 +318,18 @@ function createStallWatcher(o) {
 
   /**
    * ★ TOOL-AUTORESUME（2026-10-27）：读「自动续跑 waiter」心跳（`tools/qqbot/auto-resume-waiter.mjs` 每轮写）。
-   *   返回 {present, failed, conv, status, ts}；文件缺失/损坏/过期 ⇒ present=false（**fail-open**：卡照发，
-   *   宁可双通道也不能漏发）。2s 缓存防 /health 与 tick 重复读盘。
+   *   返回 {present, failed, conv, member, team, status, ts}；文件缺失/损坏/过期 ⇒ present=false
+   *   （**fail-open**：卡照发，宁可双通道也不能漏发）。2s 缓存防 /health 与 tick 重复读盘。
+   *   ★2026-10-29：新增 member/team —— 上限暂停行（`isMaxStepLimit`）**不带 conversationId**
+   *   （成员侧 reporter 行是残行，绑定写在另一条独立行），所以 signal 自身归因不到成员；
+   *   waiter 是唯一知道「这条暂停属于谁」的一方 ⇒ 补发卡片只能靠它的 target 归因。
    */
-  let waitCache = { at: -1, v: { present: false, failed: false, conv: '', status: '', ts: 0 } };
+  let waitCache = { at: -1, v: { present: false, failed: false, conv: '', member: '', team: '', status: '', ts: 0 } };
   function waiterState(now) {
     if (waitCache.at >= 0 && Math.abs(now - waitCache.at) < 2000) return waitCache.v;
     const f = cfg.autoResumeHeartbeat || process.env.AUTORESUME_HEARTBEAT
       || path.join(PROJ, '.codebuddy', 'temp', 'auto-resume-waiter.json');
-    let v = { present: false, failed: false, conv: '', status: '', ts: 0, file: f };
+    let v = { present: false, failed: false, conv: '', member: '', team: '', status: '', ts: 0, file: f };
     try {
       const b = JSON.parse(String(fs.readFileSync(f, 'utf8')).replace(/^\uFEFF/, ''));
       const ts = Number(b.ts) || 0;
@@ -333,6 +340,8 @@ function createStallWatcher(o) {
         failed: !!b.failed,
         status: String(b.status || ''),
         conv: (b.target && b.target.conv) || '',
+        member: (b.target && b.target.member) || '',
+        team: (b.target && b.target.team) || '',
       });
     } catch (e) { /* 缺失/损坏 ⇒ 不在场 */ }
     waitCache = { at: now, v: v };
@@ -597,6 +606,7 @@ function createStallWatcher(o) {
           if (!S.secondaryLogged['wait:' + kind] || now - S.secondaryLogged['wait:' + kind] > 600000) {
             S.secondaryLogged['wait:' + kind] = now;
             log('[STALL] 上限暂停卡已抑制（auto-resume waiter 在场 conv=' + shortConv(w.conv)
+              + (w.member ? ' member=' + w.member : '')
               + ' status=' + w.status + '）：' + sig.detail);
           }
           continue;
@@ -633,7 +643,18 @@ function createStallWatcher(o) {
         continue;
       }
       const skey = EVENT_KINDS[kind] ? (kind + ':' + Math.floor(sig.at / 60000)) : kind;   // 事件型 ⇒ 每次单独成卡
-      out.push({ subject: 'signal:' + skey, type: 'signal', key: skey, kind: kind, conv: sig.conv, detail: sig.detail, since: sig.at, minutes: (now - sig.at) / 60000 });
+      // ★2026-10-29 归因补全：上限暂停行（`isMaxStepLimit: true`）**不带 conversationId**（成员侧
+      //   reporter 行是残行，reporter→conv 绑定写在另一条独立行）⇒ `sig.conv` 恒空 ⇒ buildText 的
+      //   `if (a.conv)` 恒假 ⇒ 卡片永远只能说「有会话暂停」，说不出是谁（09:54:29 实测）。
+      //   waiter 是唯一知道归属的一方 ⇒ 用它的 target 补，但必须**时间邻近**（见 autoResumeAttrSec）。
+      let aConv = sig.conv, aMember = '', aTeam = '';
+      if (!aConv && EVENT_KINDS[kind]) {
+        const wa = waiterState(now);
+        if (wa.conv && wa.ts && Math.abs(wa.ts - sig.at) <= Math.max(0, Number(cfg.autoResumeAttrSec) || 300) * 1000) {
+          aConv = wa.conv; aMember = wa.member; aTeam = wa.team;
+        }
+      }
+      out.push({ subject: 'signal:' + skey, type: 'signal', key: skey, kind: kind, conv: aConv, member: aMember, team: aTeam, detail: sig.detail, since: sig.at, minutes: (now - sig.at) / 60000 });
       // ★ 事件型**只发一次**（发完即从保鲜表移除）：否则用户点「继续」后，信号仍在 30min 保鲜期内
       //   会按阶梯继续发「第 2/3 次」——实测节奏（15:31 触发 → 15:32 用户点继续）会立刻变成噪声。
       //   下一次真发生 = 新的日志行 ⇒ 重新入表 ⇒ 新卡。
@@ -865,7 +886,7 @@ function createStallWatcher(o) {
       ticks: ticks,
       lastLineAgoSec: S.lastLineAt ? Math.round((nowFn() - S.lastLineAt) / 1000) : null,
       // ★ TOOL-AUTORESUME：上限暂停卡是否被 waiter 接管（present=true ⇒ 不发卡）
-      waiter: (function () { const w = waiterState(nowFn()); return { present: w.present, failed: w.failed, status: w.status, conv: shortConv(w.conv) }; })(),
+      waiter: (function () { const w = waiterState(nowFn()); return { present: w.present, failed: w.failed, status: w.status, conv: shortConv(w.conv), member: w.member || '' }; })(),
     };
   }
 
@@ -1175,6 +1196,41 @@ function runSelftest() {
     w3.ingestLine(PAUSE, T);
     ok(w3.decide(w3.evaluate(T), T).some((a) => a.kind === 'steplimit'), '17e: 无 waiter 心跳 ⇒ 照发卡（fail-open）');
     ok(w3.status().waiter.present === false, '17f: /health.stall.waiter.present=false');
+
+    // ── 17g/17h/17i：上限暂停卡的**成员归因**（★2026-10-29 端到端验收缺陷）──
+    //   背景：`isMaxStepLimit` 行不带 conversationId（成员 reporter 是残行）⇒ sig.conv 恒空 ⇒
+    //   卡片只说「有会话暂停」说不出是谁。修法 = 用 waiter 心跳的 target 补，且必须时间邻近。
+    //   ★ 注意：上面那条 PAUSE 的时间戳是 15:31:03，而 T0=08:00 ⇒ 两者差 27000s，无法同时满足
+    //     「心跳新鲜(present)」与「心跳与信号邻近(归因)」⇒ 本组必须**动态生成与 T 对齐的暂停行**，
+    //     否则测的是恒不采信分支（假绿）。
+    const fmtTs = (t) => {
+      const d = new Date(t);
+      const p = (n, w2) => String(n).padStart(w2 || 2, '0');
+      return '[' + d.getFullYear() + '/' + p(d.getMonth() + 1) + '/' + p(d.getDate()) + ' '
+        + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) + '.' + p(d.getMilliseconds(), 3) + ']';
+    };
+    const mkPauseAt = (t) => fmtTs(t) + ' [Info] [AgentReporter] [b8f672f5966ea1a1b796833226bd840e]  [AgentReporter] Step 10 ended (messageId: x, isMaxStepLimit: true, isMaxTokenLimit: false, hasReactiveTool: false)';
+
+    // 17g/17h：心跳与信号时间邻近 + waiter 已失败 ⇒ 补发卡，且必须带 conv+member
+    T = T0;
+    try { fs.unlinkSync(hbFile); } catch (e) { /* 忽略 */ }
+    const w4 = mkHb();
+    T += 61000;
+    writeHb({ ts: T, onDuty: true, status: 'GUARD', failed: true, failedAt: T, target: { conv: M1, member: 'fe-attr', team: 'tt-attr' } });
+    w4.ingestLine(mkPauseAt(T), T);
+    const a4 = w4.decide(w4.evaluate(T), T).filter((a) => a.kind === 'steplimit');
+    ok(a4.length === 1 && a4[0].conv === M1 && a4[0].member === 'fe-attr', '17g: 心跳时间邻近 ⇒ 上限暂停卡归因到具体成员（conv+member）');
+    ok(a4.length === 1 && /fe-attr/.test(String(w4._buildText(a4[0], T))), '17h: 卡片文本出现成员名（修复前恒缺，用户看不出是哪个成员）');
+
+    // 17i：心跳过旧（超 autoResumeAttrSec）⇒ 不采信（错归因比无归因更坏）
+    T = T0;
+    try { fs.unlinkSync(hbFile); } catch (e) { /* 忽略 */ }
+    const w5 = mkHb();
+    T += 61000;
+    writeHb({ ts: T - 600000, onDuty: true, status: 'IDLE', failed: true, target: { conv: M1, member: 'stale-x', team: 'ttx' } });
+    w5.ingestLine(mkPauseAt(T), T);
+    const a5 = w5.decide(w5.evaluate(T), T).filter((a) => a.kind === 'steplimit');
+    ok(a5.length === 1 && !a5[0].member, '17i: 陈旧心跳不回填归因（不做错误成员归属）');
   }
 
   console.log('SELFTEST ' + pass + '/' + (pass + fails.length) + (fails.length ? ' FAIL: ' + fails.join(' | ') : ' OK'));
@@ -1199,7 +1255,9 @@ function runReplay(file, opts) {
     }
   }
   console.log('REPLAY ' + path.basename(file) + ' lines=' + lines.length + ' alerts=' + fired.length);
-  for (const f of fired) console.log('  ' + f.at + '  ' + f.head);
+  // ★2026-10-29：打印归因（member@conv）—— head 只取卡片首行，而归因在第二行（`涉及 …`），
+  //   不加这一列的话「卡片有没有带上是谁」在回放里永远看不出来（改前改后输出一模一样）。
+  for (const f of fired) console.log('  ' + f.at + '  ' + (f.member ? '[' + f.member + (f.conv ? '@' + f.conv : '') + '] ' : '[无归因] ') + f.head);
   console.log('status=' + JSON.stringify(w.status()));
   return 0;
 }

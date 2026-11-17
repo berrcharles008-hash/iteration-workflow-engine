@@ -4446,6 +4446,37 @@ if (require.main === module && !ASYNC_SELF_TESTS.some(Boolean)) {
     } else log('[STALL] watcher 关闭（stallWatcher.enabled=false）');
   } else log('[STALL] watcher 关闭（--no-stall）');
 
+  // ★ TOOL-AUTORESUME（2026-10-29）：常驻「上限暂停 → 自动续跑」检测（A'）。
+  //   为什么不再让 team 成员 waiter 每 75s 轮询：2026-10-28 实测它自己 max_turns=8 就先触顶
+  //   —— 观察者成了被救对象；且 75s 节拍 + 单槽 pause 导致同批 4 次暂停 0 注入。
+  //   ⇒ 检测放服务内常驻（tick 默认 15s，跨 lead 回合存活）；判定落「信号文件」，
+  //     waiter 成员只跑 `node auto-resume-waiter.mjs --wait-signal --timeout 300` 阻塞等
+  //     （一次工具调用覆盖 300s ⇒ 8 步预算可覆盖 40 分钟，注入仍由它 send_message 执行）。
+  if (!args.noAutoresume) {
+    const arcfg = Object.assign({ enabled: true, intervalSec: 15 }, cfg.autoResume || {});
+    if (arcfg.enabled !== false) {
+      let ARW = null;
+      let arBusy = false;
+      const arTick = async () => {
+        if (arBusy) return;                       // 上一轮未收口（大增量）⇒ 跳过，防堆叠
+        arBusy = true;
+        try {
+          if (!ARW) ARW = await import('./auto-resume-waiter.mjs');
+          const out = ARW.once();
+          if (out && out.status === 'INJECT') {
+            const id = ARW.appendSignal(out);
+            log('[AUTORESUME] signal #' + id + ' → ' + out.recipient
+              + ' conv=' + String((out.target && out.target.conv) || '').slice(0, 8)
+              + ' detectLag=' + ((out.quad && out.quad.detectLagSec) || 0) + 's');
+          }
+        } catch (e) { log('[AUTORESUME ERR] ' + (e && e.message)); }
+        finally { arBusy = false; }
+      };
+      setInterval(() => { arTick(); }, Math.max(5000, Number(arcfg.intervalSec) * 1000));
+      log('[AUTORESUME] 常驻检测启动 tick=' + arcfg.intervalSec + 's 信号=.codebuddy/temp/auto-resume-signal.json');
+    } else log('[AUTORESUME] 关闭（autoResume.enabled=false）');
+  } else log('[AUTORESUME] 关闭（--no-autoresume）');
+
   // ★ FIX-43（2026-10-11）：孤儿 job 进程回收 —— 定期巡检 + 启动后延迟扫描一次
   //   （清上次会话/异常退出残留；终态 job 的常驻 CLI 是纯泄漏，实测可狂烧 CPU 拖垮整机）
   ensureOrphanSweep();
