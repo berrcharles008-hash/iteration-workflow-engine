@@ -33,6 +33,13 @@ const kind = (payload && payload.kind) || 'gate';
 const command = (payload && payload.command) || '';
 const timeoutMs = (payload && payload.timeoutMs) || 600000;
 
+// ★ P1（2026-11-17）：端口读 daemon.config.json，回退 18765。
+//   原为硬编码 18765 ⇒ 同机第二个项目把通知投给了别人的服务（串号）。
+//   与 ask.js:238-239 / notify.qqbot.js:57-58 同一范式。
+const fsPort = require('fs');
+let svcPort = 18765;
+try { svcPort = JSON.parse(fsPort.readFileSync(path.join(__dirname, 'daemon.config.json'), 'utf8')).listenPort || 18765; } catch (e) { svcPort = 18765; }
+
 function fallback(reason) {
   console.log('[FALLBACK] ' + reason + ' -> direct send');
   const notify = path.join(__dirname, 'notify.qqbot.js');
@@ -45,7 +52,7 @@ function fallback(reason) {
 
 const body = JSON.stringify({ prompt, command, kind, timeoutMs });
 const req = http.request({
-  host: '127.0.0.1', port: 18765, path: '/request', method: 'POST',
+  host: '127.0.0.1', port: svcPort, path: '/request', method: 'POST',
   headers: { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) }
 }, (res) => {
   let d = ''; res.on('data', (c) => d += c);

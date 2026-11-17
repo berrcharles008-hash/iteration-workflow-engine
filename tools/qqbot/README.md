@@ -9,51 +9,84 @@
 ### 兼容性（安装前必读）
 - Windows + Node.js ≥ 16；npm 依赖仅 `ws ^8.18.0`：**必须先在项目根或本目录 `npm install ws`**。⚠ ws 缺失时服务会「静默半死」——进程存活、心跳照写（watchdog 不告警），但 18765 HTTP 与 QQ WebSocket 全灭，service.log 仅一行「确认模块跳过」；健壮化修复（FATAL 退出）落地前，请以「/health 可访问」为健康判据。
 - `headless` 接管依赖 PATH 中的 `codebuddy` CLI；`handoffPrompt`/`watcher.snoozeFile` 依赖 iteration-workflow skill 的标准 runtime 布局（`.codebuddy/skills/iteration-workflow/runtime`），未部署该 skill 的项目相应降级。
-- 端口占用：18765（服务 HTTP，仅回环）/ 18766（session-hub，可选）/ 19000（headless serve，可选）。
-- **单机单实例**：登录自启快捷方式为固定名（`CodeBuddyQQWatcher.lnk`），同机第二个项目执行 install 会**静默顶替**第一个的自启（叠加 18765 端口冲突）。
+- 端口：每项目 `daemon.config.json` 的 `listenPort`（0010 = 18765，仅回环）/ 18766（session-hub，可选）/ 19000（headless serve，宿主共享，可选）。
+- **多项目（P1 起，2026-11-17）**：**每个项目一个端口、一套脚本**，自启载体收敛到**宿主层一套**（`CodeBuddyQQHost`），宿主清单 `%LOCALAPPDATA%\codebuddy-qqbot\hosts.json` 每项目一条。
+  - 旧口径「单机单实例」只适用于 P0 及更早：那时载体是固定名（`CodeBuddyQQWatcher.lnk`），后装**静默顶替**先装。迁移见 §从单机单实例迁移。
+  - 脚本层隔离判据 = 进程命令行里的**绝对路径**，不再用 `*qqbot-service.js*` 通配；他项目进程只打印、绝不杀。
 - 无凭据（`qqbot.creds.json` 缺失或空 appId）时服务启动即 `[FATAL]` + exit(1)，watchdog 同样不告警——这是预期行为，先完成步骤 3 再启动。
+- ★ **启动门（fail-closed，P1）**：`QQ_BOT_APPID/SECRET/OPENID` 在 Process/User/Machine 任一级非空 ⇒ `start-service.ps1` **exit 3 拒绝启动**（宿主层 `start-all.ps1` 整批拒绝）；目标端口被**非本项目**进程 LISTEN ⇒ **exit 4**。逃生开关 `QQBOT_ALLOW_ENV_CREDS=1`。
 
-### 安装到新项目（推荐：一条命令）
+### 安装到新项目（P1 起：项目层一条命令 + 宿主层一条命令）
 ```powershell
-# 方式 A：本目录已在目标项目里（engine2project / 手工拷贝之后）—— 就地安装
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\qqbot\install-all.ps1
+# 1) 项目层（幂等，可反复跑）：复制工具包 / ws / 凭据 / 实例配置 / Stop hook / manifest
+#    P1 起默认只写宿主清单条目，不再注册 per-project 自启
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\qqbot\install-all.ps1 -Port 18875 -ServePort 19000 -WakeTaskName QQBot-WakeTimer-18875
 
-# 方式 B：从别的项目或引擎仓库直接装 —— bootstrap 模式，先复制再就地重跑
-powershell -NoProfile -ExecutionPolicy Bypass -File <源路径>\tools\qqbot\install-all.ps1 -ProjectRoot <新项目根>
+# 2) 宿主层（幂等）：部署宿主脚本 + 写清单 + 注册唯一一套载体 CodeBuddyQQHost
+powershell -NoProfile -ExecutionPolicy Bypass -File <项目根>\tools\qqbot\host\install-host.ps1 -ProjectRoot <项目根>
+
+# 3) 启动（宿主层逐个拉起清单里的实例）
+powershell -NoProfile -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\codebuddy-qqbot\start-all.ps1"
 ```
-`install-all.ps1` 按 9 步执行且**幂等**（可反复跑）：复制工具包 → 单机冲突检测 → `ws` 依赖 → 凭据 → 实例配置 → Stop hook → manifest `notifications.adapter` → 自启（服务 + 看门狗）→ `/health` 验证。
 
-常用参数：`-AppId/-Secret/-OpenId`（或 `-CredsSource <别处 qqbot.creds.json>`）写凭据；`-Port` 覆盖 `listenPort`；`-ResetConfig` 从模板重置实例配置（**与 `-Force` 分开**，避免为了越过冲突而误清 `handoffPrompt`）；`-NoService/-NoWatchdog/-NoHook/-NoManifest/-NoStart/-NoDeps` 跳过对应步骤；`-DryRun` 只打印计划；`-Force` 越过单机冲突（代价：原项目停止工作）。
+`install-all.ps1` 仍按 9 步执行且**幂等**：复制工具包 → 载体冲突探测（P1 起只告警）→ `ws` 依赖 → 凭据 → 实例配置 → Stop hook → manifest `notifications.adapter` → **写宿主清单条目** → `/health`。
 
-退出码：`0` 完成；`2` 完成但有手工待办（结尾列 TODO，最常见 = 缺凭据）；`1` 中止（单机冲突 / 环境缺失）。
+常用参数：`-AppId/-Secret/-OpenId`（或 `-CredsSource <别处 qqbot.creds.json>`）写凭据；`-Port` 覆盖 `listenPort`；`-ServePort` 覆盖 `headless.serve.port`；`-WakeTaskName` 覆盖 `commands.wake.taskName`（**必须每项目唯一**，否则两项目互相顶掉唤醒定时器）；`-ResetConfig` 从模板重置实例配置（**与 `-Force` 分开**）；`-NoService/-NoWatchdog/-NoHook/-NoManifest/-NoStart/-NoDeps/-NoHostEntry` 跳过对应步骤；`-LegacyAutostart` 走 P0 老行为（per-project 自启，rollback 依赖它）；`-DryRun` 只打印计划；`-Force` 只做两件事：覆盖本项目的清单条目 + 跳过载体冲突探测。
+
+退出码：`0` 完成；`2` 完成但有手工待办（结尾列 TODO，最常见 = 缺凭据）；`1` 环境缺失。
 
 **唯一无法自动化的一步 = `openid`**：需要手机 QQ 真给机器人发一条消息。先 `node qqbot-setup.js` 交互完成，或用 `-CredsSource` 复用同一机器人的凭据（openId 同值），再重跑脚本收尾。
 
-> ★ 单机单实例：自启载体（Startup `CodeBuddyQQWatcher.lnk` / 计划任务 `CodeBuddyQQWatchdog` / `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 下的 `CodeBuddyQQService`、`CodeBuddyQQWatchdog`）与端口 18765 都是全局唯一的，同机装第二个项目会顶替第一个。脚本在**任何写盘之前**做冲突检测并默认中止。
+> ★ **为什么要有宿主层**：P0 的载体是固定名 + 固定端口，同机第二个项目只能顶替第一个。P1 把「谁在开机时拉起谁」搬到宿主层：一套载体（`CodeBuddyQQHost`）读 `hosts.json`，逐项调各项目的 `start-service.ps1`。
 >
-> ★ 三条载体是**冗余**关系，不是替代：任意一条存活即可拉起服务，多条同时触发也不会重复启动（`start-service.ps1` / `start-watchdog.ps1` 都有进程级 skip）。加 Run 键的原因见 §故障史 2026-11-03。
+> ★ 宿主层三条载体仍是**冗余**关系而非替代：任意一条存活即可拉起全部实例，多条同时触发也不会重复启动（`start-service.ps1` / `start-watchdog.ps1` 都有 scoped 进程 skip）。加 Run 键的原因见 §故障史 2026-11-03。
 
-#### 手工等价步骤（9 步，无脚本时照做）
+#### 手工等价步骤（项目层 8 步 / 宿主层 3 步）
+项目层：
 1. 拷贝本目录到 `<新项目根>/tools/qqbot`（排除 `daemon.config.json` / `qqbot.creds.json` / `*.log` / `*.jsonl` / `runtime/` / `node_modules/`）
-2. 单机冲突检测：`Get-NetTCPConnection -LocalPort 18765 -State Listen`、`Get-ScheduledTask -TaskName CodeBuddyQQWatchdog`、`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\CodeBuddyQQWatcher.lnk`、`Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run -Name CodeBuddyQQService`（以及 `CodeBuddyQQWatchdog`）是否指向别的项目
+2. 选一个**未被占用**的 `listenPort`（0010 用 18765；同机第二个项目建议 18875 起），并确认没有别的项目进程 LISTEN 它
 3. `npm install ws`（项目根或本目录；缺失 = 服务「静默半死」）
 4. `node qqbot-setup.js` 初始化凭据（生成 `qqbot.creds.json`；**含 secret，绝不入库/提交**）
-5. `copy daemon.config.example.json daemon.config.json`，按需改端口/quietHours/handoffPrompt
+5. `copy daemon.config.example.json daemon.config.json`，改 `listenPort` / quietHours / handoffPrompt / `commands.wake.taskName`
 6. `.codebuddy/settings.json` 的 `hooks.Stop` 追加 `node tools/qqbot/notify.qqbot.js --kind done --fallback`
 7. `.codebuddy/skills/iteration-workflow/project/project.manifest.yaml` 改 `notifications.adapter: "qqbot"`（模板默认 `none` = QQ 通道静默关闭）
-8. `powershell -NoProfile -ExecutionPolicy Bypass -File install-service.ps1`（注册自启 + 停旧 + 立即启动）**和** `install-watchdog.ps1`（计划任务看门狗；漏装 = 服务死了没人拉起）。两者现在各注册**两条载体**（Startup lnk 或计划任务 + `HKCU\...\Run`），跑完可用 `Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run | Format-List CodeBuddy*` 自检
-9. 验证：`http://127.0.0.1:18765/health` 返回 200；service.log 无「确认模块跳过」；QQ 实发一条
+8. 验证：`http://127.0.0.1:<listenPort>/health` 返回 200；service.log 无「确认模块跳过」；QQ 实发一条
+
+宿主层：
+1. 部署：把 `tools/qqbot/host/*` 与 `tools/qqbot/_qqbot-common.ps1` 复制到 `%LOCALAPPDATA%\codebuddy-qqbot\`
+2. 清单：`hosts.example.json` → `hosts.json`，每项目一条（字段见文件内注释；`port` 全局唯一、`role` 目前只能是 `gateway`、同 `appId` 只能有一个 gateway）
+3. 载体：Startup `CodeBuddyQQHost.lnk` / Run `CodeBuddyQQHost` / 计划任务 `CodeBuddyQQHost` —— 三者都指向 `<host>\start-all.ps1`；**旧载体（`CodeBuddyQQWatcher.lnk`、Run `CodeBuddyQQService`/`CodeBuddyQQWatchdog`、任务 `CodeBuddyQQWatchdog`）**确认 `start-all` 能拉起后再删，且必须**逐名删**（`CodeBuddy*` 通配会连带删掉 session-hub / serve 载体）。
+
+#### 从单机单实例迁移（P0 → P1，六步顺序不可颠倒）
+> 详细命令与每步自检见当次迭代的 `04-宿主级命令清单.md`。顺序颠倒 = 生产拒启或自启链断。
+
+1. **先清 env**：删 User 级 `QQ_BOT_APPID/SECRET/OPENID`（否则第 2 步起服务被 fail-closed 拒启；本机 2026-11-17 实测确实存在 User 级值）
+2. 部署新脚本（含启动门）
+3. 重启 service **与 watchdog**，核对新 pid + `/health` 200
+4. `install-host.ps1 -NoCarrier` 部署宿主层 + 写清单
+5. `install-host.ps1` 注册宿主三载体，并**证明 `start-all.ps1` 真能拉起 0010**
+6. `install-host.ps1 -RetireLegacy` 删旧载体（先建后删）
+- 回滚：`rollback-host.ps1` 删宿主三载体 + 复用 `install-service.ps1 -NoStart` / `install-watchdog.ps1` 重建旧载体（5 分钟）。
 
 卸载顺序：先移除宿主 `.codebuddy/settings.json` 中对 `tools/qqbot/notify.qqbot.js` 的 hook 注册，再 `install-watchdog.ps1 -Uninstall`，最后删目录。
 
 ### 运维约定（sync 口径）
+- **宿主层（P1）**：`%LOCALAPPDATA%\codebuddy-qqbot\` 是**部署产物**，版本源在本目录 `host/`。改了 `host/*` 或 `_qqbot-common.ps1` 后重跑 `install-host.ps1` 即同步；两份副本漂移的表现是「宿主层还在用旧判据」。
+- 日常三类命令：`start-all.ps1`（拉起清单内全部 enabled 实例）/ `stop-all.ps1`（逐项停）/ `rollback-host.ps1`（回滚到 per-project 载体）。三者都支持 `-Only <项目路径片段>` 或 `-DryRun`（`start-all`/`stop-all`）。
+- **不要在宿主层之外手写载体**：载体名统一 `CodeBuddyQQHost`，清单是 `hosts.json`；手工加载体而漏清单 ⇒ 开机拉起 0 个实例且无任何报错。
 - 不随包文件（仅存在于项目实例）：`daemon.config.json`（实例配置，本目录 example 为模板）、`qqbot.creds.json`（凭据）、`DECOUPLING-PLAN.md`（0010 内部架构评估记录，**勿当操作指南**，其中 fail-open 规划与现行门禁口径不同）、`*.log`/`inbox.jsonl`/`runtime/`（运行时产物）。
 - 引擎侧新增/更新文件**不会**随日常 project2engine 自动下发——需要一次性 engine2project（0010 已禁用全量方向，用 `-SyncItems tools/qqbot` 限定范围）。
 
 ## 文件说明
 | 文件 | 作用 |
 |---|---|
-| `install-all.ps1` | **★ 新项目一键安装**（9 步幂等：复制 / 单机冲突检测 / ws / 凭据 / 配置 / hook / manifest / 自启 / health；`-DryRun` 可预演） |
+| `_qqbot-common.ps1` | **★ 多项目隔离判据单点**（配置 / 端口 / 进程归属三态 / env 凭据 / 实例 tag / 宿主清单 upsert）；只 dot-source，禁在别处复写 |
+| `host/start-all.ps1` | 宿主层：校验 `hosts.json` 后逐项拉起（退出码 0/1/2/3） |
+| `host/stop-all.ps1` | 宿主层：逐项调用各项目 `stop-service.ps1`（0/1/2） |
+| `host/install-host.ps1` | 宿主层：部署脚本 + 写清单 + 注册 `CodeBuddyQQHost` 三载体 + 基线；`-RetireLegacy` 逐名删旧载体（0/1/2） |
+| `host/rollback-host.ps1` | 宿主层回滚：删宿主载体 → 复用既有 installer 重建旧载体 → 验基线/health（0/1） |
+| `host/hosts.example.json` | 宿主清单样例（每项目一条） |
+| `install-all.ps1` | **★ 新项目一键安装**（9 步幂等：复制 / 载体冲突探测 / ws / 凭据 / 配置 / hook / manifest / **写宿主清单** / health；`-DryRun` 可预演） |
 | `qqbot-setup.js` | 凭据初始化向导（AppID/Secret + 手机发消息取 openid，**此步必须人工**） |
 | `qqbot-listen-once.js` | 仅监听获取 openid（底层） |
 | `notify.qqbot.ps1` | 发送通知（底层，PowerShell 版） |
@@ -68,7 +101,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File <源路径>\tools\qqbot\inst
 | `ask.js` | **等待式确认登记器**：`node ask.js --prompt "…"` → 推送 QQ 并输出 `#id=<n>`（agent 用它替代"停下来等输入"） |
 | `wait-answer.ps1` | **等待答案**：`-Id <n> -TimeoutSec 300` 轮询答案文件，拿到即打印答案 JSON（授权答复 exit 0；**有答复但无授权**（`defer-ide`/`cancel`/`timeout`）→ **exit 4**）；分片超时 → `wait-timeout`（exit 2） |
 | `notify-watcher.ps1` | （legacy，已被合并服务取代）IDE 自动推送兜底：轮询会话历史目录，写入静止即推 QQ |
-| `install-watcher.ps1` | （legacy，**默认拒绝执行**）注册 watcher 自启并立即启动；与 `install-service.ps1` 争抢同一快捷方式名 `CodeBuddyQQWatcher.lnk`，跑它会把自启降级成 legacy ⇒ 入站回复死（见 §故障史 2026-10-22）。改用 `install-service.ps1`；确需 legacy 加 `-Force` |
+| `install-watcher.ps1` | **（DEPRECATED · P1 起已无迁移后的用途）** legacy，**默认拒绝执行**。注册 watcher 自启并立即启动；与 `install-service.ps1` 争抢同一快捷方式名 `CodeBuddyQQWatcher.lnk`，跑它会把自启降级成 legacy ⇒ 入站回复死（见 §故障史 2026-10-22）。P1 迁移后宿主层接管开机拉起，本脚本仅 `rollback-host.ps1` 的 legacy 重建路径间接等价可用 `install-watchdog.ps1` 代替 |
 | `watcher.log` | watcher 运行日志（发现路径 / 每次 PUSH 结果） |
 | `qqbot-daemon.js` | 常驻确认 daemon（方案 C/B）：WebSocket 监听 + 本地 HTTP 注册口（方案 B） |
 | `request-confirm.js` | 向 daemon 注册一条待确认项（方案 B 的 genie/进程侧调用） |

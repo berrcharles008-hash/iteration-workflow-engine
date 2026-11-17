@@ -16,10 +16,27 @@ param(
   # Override daemon.config.json listenPort. 0 = keep template default (18765).
   [int]$Port = 0,
 
+  # P1 (2026-11-17) multi-project parameters, contract in 03 tech plan 4.2.
+  # ServePort: write headless.serve.port. 0 = leave untouched. It is NOT part of the
+  #   uniqueness gate: 19000 is shared by tools/session-hub (start-serve.ps1:15) and a
+  #   conflict only costs the headless takeover fallback (D-9).
+  [int]$ServePort = 0,
+  # WakeTaskName: write commands.wake.taskName. Default (empty) = keep the existing value
+  #   so an already-installed project keeps its task and its history (D-10). Set
+  #   'QQBot-WakeTimer-<port>' for a fresh project, otherwise two projects overwrite each
+  #   other's wake timer and one /Delete removes the other's (03 tech plan 2.7).
+  [string]$WakeTaskName = '',
+  # NoHostEntry: do not touch <hostDir>\hosts.json (host layer managed elsewhere).
+  [switch]$NoHostEntry,
+  # LegacyAutostart: keep the old per-project autostart registration (install-service +
+  #   install-watchdog) instead of writing a host manifest entry (D-7).
+  [switch]$LegacyAutostart,
+
   [int]$HealthWaitSec = 60,
 
-  # Take over from another qqbot instance on this host (port / autostart carriers).
-  # WARNING: per-project instances are singletons -- the other project STOPS working.
+  # P1 (D-6): -Force no longer means "take over the host". It only (a) overwrites this
+  # project's hosts.json entry and (b) skips the carrier conflict probe. The old
+  # singleton warning is obsolete: the host layer holds one entry per project.
   [switch]$Force,
 
   # Overwrite an existing daemon.config.json with a fresh copy of the example (backup kept).
@@ -36,10 +53,9 @@ param(
 
   # Distribution-only mode: copy the toolkit into <ProjectRoot>\tools\qqbot, then stop.
   # Entry point for the skill installer (scripts/install.ps1 -WithQqbot), which must never
-  # trigger host-level steps. Everything after the copy is per-HOST and single-instance
-  # (Startup shortcut name, scheduled task CodeBuddyQQWatchdog, port 18765) -- a second
-  # project installing silently takes over the first one, so the user must run the full
-  # sequence explicitly in their own project.
+  # trigger host-level steps. Since P1 (2026-11-17) the host-level surface is owned by
+  # tools/qqbot/host/install-host.ps1 (one carrier set + hosts.json), so the steps after the
+  # copy are per-PROJECT again -- but an unattended install must still not register anything.
   [switch]$CopyOnly,
 
   [switch]$DryRun
@@ -70,6 +86,31 @@ function Skip([string]$m) { Say "  [SKIP] $m" 'DarkGray'; $script:SkipCount++ }
 function Warn([string]$m) { Say "  [WARN] $m" 'Yellow' }
 function Manual([string]$m) { Say "  [TODO] $m" 'Yellow'; $script:ManualItems += $m }
 
+# Rewrite the FIRST "valueKey": <old> that appears after the line holding "anchorKey".
+# Why line-based instead of ConvertFrom-Json -> ConvertTo-Json: a full round-trip
+# reformats the whole 150-line instance config, which makes a one-value change
+# unreviewable. Returns $false when the anchor is missing -- callers MUST treat that as
+# "not written" (a silent no-op here would leave the port/task name at the old value).
+function Set-JsonScalarAfter([string]$path, [string]$anchorKey, [string]$valueKey, [string]$newValue) {
+  $lines = @(Get-Content -LiteralPath $path -Encoding UTF8)
+  $ai = -1
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    if ($lines[$i] -match ('"' + [regex]::Escape($anchorKey) + '"\s*:')) { $ai = $i; break }
+  }
+  if ($ai -lt 0) { return $false }
+  $pat = '^(\s*"' + [regex]::Escape($valueKey) + '"\s*:\s*)(\d+|"[^"]*")(\s*,?\s*)$'
+  for ($j = $ai; $j -lt $lines.Count; $j++) {
+    $m = [regex]::Match($lines[$j], $pat)
+    if ($m.Success) {
+      $rendered = if ($newValue -match '^\d+$') { $newValue } else { '"' + $newValue + '"' }
+      $lines[$j] = $m.Groups[1].Value + $rendered + $m.Groups[3].Value
+      [IO.File]::WriteAllLines($path, $lines, (New-Object System.Text.UTF8Encoding($false)))
+      return $true
+    }
+  }
+  return $false
+}
+
 $script:OkCount = 0
 $script:SkipCount = 0
 $script:ManualItems = @()
@@ -86,6 +127,11 @@ if (-not $ProjectRoot) {
 }
 $targetQq = Join-Path $proj 'tools\qqbot'
 $bootstrap = ($selfDir.TrimEnd('\') -ne $targetQq.TrimEnd('\'))
+
+# Shared rules (process scope / port / env creds / host manifest). Dot-sourced from the
+# SOURCE side so bootstrap mode has it before the copy happens.
+$commonPs1 = Join-Path $selfDir '_qqbot-common.ps1'
+if (Test-Path -LiteralPath $commonPs1) { . $commonPs1 }
 
 Say '============================================================' 'Cyan'
 Say ' tools/qqbot one-command installer (install-all.ps1)' 'Cyan'
@@ -176,6 +222,10 @@ if ($bootstrap) {
   if ($OpenId) { $childArgs += @('-OpenId', "`"$OpenId`"") }
   if ($CredsSource) { $childArgs += @('-CredsSource', "`"$CredsSource`"") }
   if ($Port -gt 0) { $childArgs += @('-Port', "$Port") }
+  if ($ServePort -gt 0) { $childArgs += @('-ServePort', "$ServePort") }
+  if ($WakeTaskName) { $childArgs += @('-WakeTaskName', "`"$WakeTaskName`"") }
+  if ($NoHostEntry) { $childArgs += '-NoHostEntry' }
+  if ($LegacyAutostart) { $childArgs += '-LegacyAutostart' }
   if ($Force) { $childArgs += '-Force' }
   if ($ResetConfig) { $childArgs += '-ResetConfig' }
   if ($NoDeps) { $childArgs += '-NoDeps' }
@@ -252,7 +302,7 @@ function Test-HostConflict([int]$port, [bool]$portOnly) {
     Skip "no scheduled task $taskName yet"
   }
 
-  # ★ TOOL-SELFHEAL-2 (2026-11-03): the HKCU Run key is now a third carrier, so it MUST join the
+  # * TOOL-SELFHEAL-2 (2026-11-03): the HKCU Run key is now a third carrier, so it MUST join the
   #   singleton probe. Without this, a second project silently hijacks the first one by overwriting
   #   the Run value while the .lnk / task probes above both report "no conflict".
   $runKeyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
@@ -269,15 +319,6 @@ function Test-HostConflict([int]$port, [bool]$portOnly) {
     }
   }
   return $bad
-}
-
-function Abort-Conflict {
-  Say ''
-  Say 'FATAL: another qqbot instance owns this host (per-project autostart + port are singletons).' 'Red'
-  Say '       Options: (a) install on a different machine;' 'Red'
-  Say '                (b) stop/uninstall the other instance first;' 'Red'
-  Say '                (c) re-run with -Force to take over (the other project stops working).' 'Red'
-  exit 1
 }
 
 # -- 1 preflight ----------------------------------------------------
@@ -297,14 +338,20 @@ if (-not (Test-Path -LiteralPath $svcJs)) { Say "FATAL: incomplete toolkit, miss
 if (-not (Test-Path -LiteralPath $example)) { Say "FATAL: incomplete toolkit, missing $example" 'Red'; exit 1 }
 Ok 'toolkit files present'
 
-# -- 2 single-host conflict check (must run before any write) --------
-Step '2/9 single-host conflict check (port / autostart carriers)'
-$prePort = if ($Port -gt 0) { $Port } else { 18765 }
-if (Test-HostConflict -port $prePort -portOnly $false) {
-  if (-not $Force) { Abort-Conflict }
-  Warn 'continuing anyway (-Force) -- the previous owner will stop working'
+# -- 2 carrier conflict check (informational since P1) --------------
+# P1 (2026-11-17, D-6): carriers are no longer per-project singletons -- the host layer
+# owns them and hosts.json holds one entry per project. So a conflicting carrier is a
+# WARN, not an abort; only the PORT stays a hard gate (checked at launch, exit 4).
+Step '2/9 carrier conflict check (informational) / port'
+$prePort = if ($Port -gt 0) { $Port } else { Get-QqbotListenPort $targetQq }
+if ($Force) {
+  Skip 'carrier conflict check skipped (-Force): manifest entry will be overwritten'
+} elseif (Test-HostConflict -port $prePort -portOnly $false) {
+  Warn 'legacy carriers point at another project. P1 does not abort here (D-6).'
+  Warn 'The port is still enforced at start-service.ps1 (exit 4) and the host layer owns'
+  Warn 'the carriers after install-host.ps1 -- do not run -RetireLegacy until start-all works.'
 } else {
-  Ok 'no conflicting instance on this host'
+  Ok 'no conflicting carrier on this host'
 }
 
 # -- 3 ws dependency ------------------------------------------------
@@ -406,7 +453,7 @@ if (-not $cfgExisted) {
   Skip 'daemon.config.json exists (kept; use -ResetConfig to reset from example)'
 }
 
-$effPort = 18765
+$effPort = Get-QqbotListenPort $targetQq
 if (Test-Path -LiteralPath $cfgPath) {
   try {
     $cfgObj = Get-Content -LiteralPath $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -427,6 +474,34 @@ if ($Port -gt 0) {
     $effPort = $Port
   }
 }
+# P1: headless serve port (D-9, registered only -- 19000 is shared) and wake task name
+# (D-10, must be unique per project or two projects overwrite each other's timer).
+if ($ServePort -gt 0) {
+  if ($ServePort -gt 65535) { Say "FATAL: -ServePort out of range: $ServePort" 'Red'; exit 1 }
+  if (-not (Test-Path -LiteralPath $cfgPath)) {
+    Skip 'servePort override deferred (config not created in dry-run)'
+  } elseif ($DryRun) {
+    Say "  [dry] would set headless.serve.port -> $ServePort in daemon.config.json"
+  } elseif (Set-JsonScalarAfter $cfgPath 'serve' 'port' "$ServePort") {
+    Ok "headless.serve.port set to $ServePort"
+  } else {
+    Warn 'anchor "serve" / "port" not found in daemon.config.json'
+    Manual "set headless.serve.port=$ServePort manually"
+  }
+}
+if ($WakeTaskName) {
+  if (-not (Test-Path -LiteralPath $cfgPath)) {
+    Skip 'wake task name deferred (config not created in dry-run)'
+  } elseif ($DryRun) {
+    Say "  [dry] would set commands.wake.taskName -> $WakeTaskName in daemon.config.json"
+  } elseif (Set-JsonScalarAfter $cfgPath 'wake' 'taskName' $WakeTaskName) {
+    Ok "commands.wake.taskName set to $WakeTaskName"
+  } else {
+    Warn 'anchor "wake" / "taskName" not found in daemon.config.json'
+    Manual "set commands.wake.taskName=$WakeTaskName manually"
+  }
+}
+
 if ($cfgExisted -and -not $ResetConfig) {
   # Not a blocker: the example defaults are runnable. Only headless handoff carries a
   # real cross-project risk (an inherited handoffPrompt may point at another project).
@@ -539,16 +614,22 @@ if ($NoManifest) {
   }
 }
 
-# -- 7 autostart registration --------------------------------------
-Step '8/9 autostart (service + watchdog)'
+# -- 7 autostart: host manifest by default (D-7) --------------------
+# Why the default flipped (2026-11-17): per-project carriers are singletons, so a second
+# project used to silently hijack the first one's logon autostart. The host layer now owns
+# exactly one carrier set and reads hosts.json; this script only registers the project in
+# that manifest and tells the user to run start-all.ps1.
+Step '8/9 autostart / host manifest entry'
 if ($credMissing) {
-  Skip 'deferred: no credentials yet -> registering autostart would just fail at every logon'
+  Skip 'deferred: no credentials yet -> autostart or a manifest entry would just fail at every logon'
   Manual 'complete step 3 (qqbot-setup.js), then re-run this script'
-} else {
+} elseif ($LegacyAutostart) {
+  # Old behaviour, kept because rollback-host.ps1 rebuilds carriers through these two
+  # installers and because a project may not want the host layer at all.
   if ($NoService) {
     Skip 'service autostart skipped (-NoService)'
   } elseif ($DryRun) {
-    Say '  [dry] would run install-service.ps1 (Startup shortcut + stop old + start)'
+    Say '  [dry] would run install-service.ps1 (Startup shortcut + Run key + stop old + start)'
   } else {
     $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$(Join-Path $targetQq 'install-service.ps1')`"")
     if ($NoStart) { $a += '-NoStart' }
@@ -559,12 +640,61 @@ if ($credMissing) {
   if ($NoWatchdog) {
     Skip 'watchdog autostart skipped (-NoWatchdog)'
   } elseif ($DryRun) {
-    Say '  [dry] would run install-watchdog.ps1 (scheduled task + start)'
+    Say '  [dry] would run install-watchdog.ps1 (scheduled task + Run key + start)'
   } else {
     $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$(Join-Path $targetQq 'install-watchdog.ps1')`"")
     if ($NoStart) { $a += '-NoStart' }
     & powershell.exe @a
     if ($LASTEXITCODE -eq 0) { Ok 'watchdog autostart registered' } else { Warn "install-watchdog.ps1 exit $LASTEXITCODE"; Manual 'run install-watchdog.ps1 manually' }
+  }
+} else {
+  $hostDir = Get-QqbotHostDir
+  if ($NoHostEntry) {
+    Skip 'host manifest entry skipped (-NoHostEntry)'
+  } elseif (-not $hostDir) {
+    Warn 'LOCALAPPDATA is empty -> cannot locate the host directory'
+    Manual 'add the entry to hosts.json manually (see tools/qqbot/host/hosts.example.json)'
+  } else {
+    $cfgForEntry = Get-QqbotConfig $targetQq
+    $entryAppId = ''
+    if (Test-Path -LiteralPath $credsPath) {
+      try {
+        $entryAppId = [string]((Get-Content -LiteralPath $credsPath -Raw -Encoding UTF8 | ConvertFrom-Json).appId)
+      } catch { $entryAppId = '' }
+    }
+    $entrySimulateKey = ''
+    if ($cfgForEntry -and $cfgForEntry.hub) { $entrySimulateKey = [string]$cfgForEntry.hub.simulateKey }
+    $entryServePort = 0
+    if ($cfgForEntry -and $cfgForEntry.headless -and $cfgForEntry.headless.serve) {
+      $entryServePort = [int]$cfgForEntry.headless.serve.port
+    }
+    $entry = [pscustomobject][ordered]@{
+      project       = $proj
+      port          = $effPort
+      servePort     = $entryServePort
+      appId         = $entryAppId
+      role          = 'gateway'
+      simulateKey   = $entrySimulateKey
+      enabled       = $true
+      startWatchdog = $true
+    }
+    if ($DryRun) {
+      Say ("  [dry] would upsert {0}\hosts.json: project={1} port={2} servePort={3} appId={4}" -f $hostDir, $proj, $effPort, $entryServePort, $entryAppId)
+    } else {
+      $up = Update-QqbotHostEntry $hostDir $entry
+      if ($up.Ok) {
+        $verb = if ($up.Replaced) { 'entry refreshed' } else { 'entry added' }
+        Ok ("host manifest {0}; {1} instance(s) in {2}" -f $verb, $up.Count, $up.Path)
+      } else {
+        Warn ('host manifest write failed: ' + $up.Error)
+        Manual "upsert $hostDir\hosts.json for $proj manually"
+      }
+    }
+    if (-not $entrySimulateKey) {
+      Warn 'simulateKey is empty in daemon.config.json -> the host layer will warn on every start'
+    }
+    Say ("  next   : powershell -NoProfile -ExecutionPolicy Bypass -File `"$hostDir\start-all.ps1`"") 'Yellow'
+    Say '           (starts every enabled instance in the manifest; nothing was launched here)' 'Yellow'
   }
 }
 
@@ -572,8 +702,8 @@ if ($credMissing) {
 Step '9/9 health check (GET /health)'
 if ($DryRun) {
   Say "  [dry] would poll http://127.0.0.1:$effPort/health for ${HealthWaitSec}s"
-} elseif ($credMissing -or $NoStart -or $NoService) {
-  Skip 'skipped (nothing launched in this run)'
+} elseif ($credMissing -or $NoStart -or $NoService -or (-not $LegacyAutostart)) {
+  Skip 'skipped (nothing launched in this run; the host layer starts instances via start-all.ps1)'
 } else {
   $up = $false
   $deadline = (Get-Date).AddSeconds($HealthWaitSec)

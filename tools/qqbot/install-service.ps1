@@ -1,6 +1,6 @@
 param(
-  # ★ FIX-25：默认 0 = 不传 --idle，由 daemon.config.json 的 watcher.idleSeconds(90) 单一来源决定
-  #   （旧默认 30 会覆盖配置 ⇒ 出现「配置 90、实际 30」的漂移）
+  # FIX-25: default 0 = do NOT pass --idle, so watcher.idleSeconds(90) in daemon.config.json
+  #   stays the single source (the old default 30 silently overrode it: 90 vs 30).
   [int]$IdleSeconds = 0,
   [switch]$KeepLegacy,
   [switch]$NoStart
@@ -19,11 +19,21 @@ $workDir = Join-Path $proj 'tools\qqbot'
 $startup = [System.Environment]::GetFolderPath('Startup')
 $lnk = Join-Path $startup 'CodeBuddyQQWatcher.lnk'
 
+. (Join-Path $workDir '_qqbot-common.ps1')
+$port = Get-QqbotListenPort $workDir
+
 if (-not (Test-Path $startPs1)) { Write-Host "missing: $startPs1"; exit 1 }
 
 if (-not $KeepLegacy) {
-  $legacy = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-              Where-Object { $_.CommandLine -like '*notify-watcher.ps1*' -or $_.CommandLine -like '*qqbot-daemon.js*' })
+  # P1 (2026-11-17): scoped match. The old globals also killed ANOTHER project's legacy
+  # watcher. -AnyProcess is required here because notify-watcher.ps1 runs under
+  # powershell.exe, so a node*-only filter would silently find nothing.
+  $legacy = @()
+  foreach ($sn in @('notify-watcher.ps1', 'qqbot-daemon.js')) {
+    $lr = Get-QqbotProcs $workDir $sn -AnyProcess
+    $legacy += $lr.Scoped
+    foreach ($d in $lr.UnscopedDetail) { Write-Host ('  [not this project, not touched] ' + $d) }
+  }
   foreach ($p in $legacy) {
     try {
       Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop
@@ -44,7 +54,7 @@ $sc.Description = 'CodeBuddy QQ service (merged: idle watcher + QQ confirm)'
 $sc.Save()
 Write-Host "autostart registered (overwrote same-name shortcut): $lnk"
 
-# ★ TOOL-SELFHEAL-2 (2026-11-03): third autostart carrier = HKCU\...\Run value.
+# * TOOL-SELFHEAL-2 (2026-11-03): third autostart carrier = HKCU\...\Run value.
 #   Why (measured on THIS host): three separate incidents (10-22 / 10-29 / 11-03) wiped BOTH the
 #   Startup-folder shortcuts AND the scheduled tasks. The same sweeps left all 11 entries under
 #   HKCU\...\Run untouched (OneDrive / BaiduNetdisk / Cleaner One Pro / WorkBuddy / 360 sesvc / ...).
@@ -71,11 +81,14 @@ try {
 }
 
 if (-not $NoStart) {
-  # ★ FIX-34 收尾（2026-09-19）：先停**当前合并服务**（node + qqbot-service.js），
-  #   否则 start-service.ps1 的 guard 判定「already running」⇒ skip start ⇒ 旧代码继续跑
-  #   （FIX-33 事故遗留缺口：install 报成功但服务从未真正换代码）。
-  $svcRunning = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-                  Where-Object { $_.Name -like 'node*' -and $_.CommandLine -like '*qqbot-service.js*' })
+  # FIX-34 (2026-09-19): stop the CURRENT merged service first, otherwise the
+  #   start-service.ps1 guard reports 'already running', skips the start and the old
+  #   code keeps running (the FIX-33 gap: install reported success, service unchanged).
+  # P1 (2026-11-17): scoped -- only this project's service is stopped, so installing here
+  # no longer takes down another instance's bot.
+  $svcProbe = Get-QqbotProcs $workDir 'qqbot-service.js'
+  $svcRunning = @($svcProbe.Scoped)
+  foreach ($d in $svcProbe.UnscopedDetail) { Write-Host ('  [not this project, not touched] ' + $d) }
   foreach ($p in $svcRunning) {
     try {
       Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop
@@ -92,5 +105,5 @@ if (-not $NoStart) {
   Write-Host 'service launch requested'
 }
 Write-Host "log: $workDir\service.log"
-Write-Host "health: http://127.0.0.1:18765/health"
+Write-Host "health: http://127.0.0.1:$port/health"
 Write-Host "uninstall autostart: delete the shortcut above"

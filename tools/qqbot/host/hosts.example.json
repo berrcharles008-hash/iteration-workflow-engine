@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "instances": [
+    {
+      "project": "E:\\SJYL\\your-project-root",
+      "port": 18765,
+      "servePort": 19000,
+      "appId": "your-app-id",
+      "role": "gateway",
+      "simulateKey": "",
+      "enabled": true,
+      "startWatchdog": true
+    },
+    {
+      "project": "E:\\SJYL\\another-project-root",
+      "port": 18875,
+      "servePort": 19000,
+      "appId": "another-app-id",
+      "role": "gateway",
+      "simulateKey": "",
+      "enabled": true,
+      "startWatchdog": true
+    }
+  ]
+}

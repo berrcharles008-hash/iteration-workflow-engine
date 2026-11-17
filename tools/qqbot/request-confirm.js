@@ -64,7 +64,11 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
   }
   const isBypass = /tools[\\/]gate[\\/]open-bypass\.js/i.test(String(args.command || ''));
   const kind = (args.kind != null) ? String(args.kind) : (isBypass ? 'gate' : '');
-  const port = args.port || 18765;
+  // ★ P1（2026-11-17）：--port 仍优先；缺省时读本项目 daemon.config.json 的 listenPort，
+  //   回退 18765。原硬编码 ⇒ 同机第二个项目把确认项登记到了别人的服务。
+  let cfgPort = 18765;
+  try { cfgPort = JSON.parse(fs.readFileSync(path.join(__dirname, 'daemon.config.json'), 'utf8')).listenPort || 18765; } catch (e) { cfgPort = 18765; }
+  const port = args.port || cfgPort;
   const q = new URL('http://localhost');
   if (args.key) q.searchParams.set('key', args.key);
   const body = JSON.stringify({ prompt: args.prompt || '', command: args.command || '', timeoutMs: args.timeoutMs, kind });
