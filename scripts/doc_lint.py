@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 """迭代文档版式自检（Doc Lint）
 
-规则 SSOT: engine/doc-style-guide.md（八条硬规则 D1~D8）
+规则 SSOT: engine/doc-style-guide.md（十五条硬规则 D1~D15；D9~D13 早于 D14/D15 实现，
+          2026-11-16 一并补登记 —— 此前 RULES 只到 D8，新规则同等"游离在元组外"）
 
 用法:
     python scripts/doc_lint.py <文件或目录> [...]
@@ -59,7 +60,8 @@ FN_REF_RE = re.compile(r'\[\^([^\]]+)\](?!:)')              # D11 脚注引用
 FN_DEF_RE = re.compile(r'^\s*\[\^([^\]]+)\]:', re.M)        # D11 脚注定义
 ASCII_ART_RE = re.compile('[\u2500-\u257F\u2190-\u21FF\u25B2\u25BC\u21C4]')   # D13 制表符/箭头图
 
-RULES = ('D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8')
+RULES = ('D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8',
+         'D9', 'D10', 'D11', 'D12', 'D13', 'D14', 'D15')
 
 
 class Finding(object):
@@ -148,6 +150,156 @@ def is_iter_doc(path):
 
 def is_separator_row(cells):
     return bool(cells) and all((not c) or SEP_CELL_RE.match(c) for c in cells)
+
+
+# ── D14/D15 验收断言（★ 2026-11-16 VERIF2 · 03 §2.4-E）───────────────────
+# 为什么独立成函数而不并进 check_file 的行循环：
+#   check_file 的行循环是「单行无状态」的（只有围栏状态），而 D14/D15 需要
+#   ① 小节归属（heading 栈）；② 同迭代**跨文件**比对（05 的 AC-n ↔ 03 的验收断言小节）。
+AC_RULE_FROM = '2026-11-16'      # 迭代目录日期前缀早于该日 ⇒ 整条规则 SKIP（存量 95 份豁免）
+AC_TOKEN_RE = re.compile(r'AC-\d+')
+AC_HEAD_RE = re.compile(r'^#{2,4}\s')
+AC_SECTION_KEY = '验收断言'
+AC_ITER_DIR_RE = re.compile(r'^\d{4}-\d{2}-\d{2}-')      # 迭代目录名形态
+
+
+def _norm_iter_path(path):
+    """归一为 `/x/y/` 形态，使相对路径与绝对路径都能命中 ITER_DIR_MARKERS。"""
+    return '/' + path.replace('\\', '/').strip('/')
+
+
+def _iter_date_prefix(path):
+    """从路径里取 `docs/iterations/<YYYY-MM-DD>-.../` 的日期前缀（取不到返回 ''）。"""
+    m = re.search(r'/(\d{4}-\d{2}-\d{2})-', _norm_iter_path(path) + '/')
+    return m.group(1) if m else ''
+
+
+def _iter_dir_of(path):
+    """上溯到迭代目录（`docs/iterations/<迭代ID>`）；不在迭代目录内返回 ''。
+
+    ★ 判据是**目录名本身**以日期开头，不能对整条路径做 `/(\\d{4}-\\d{2}-\\d{2})-` 搜索 ——
+      后者的迭代段在祖先路径里恒命中，会让 `…/<迭代ID>/03-技术方案` 自己就被当成迭代目录
+      （实测 2026-11-16：D14 因此把 03 主文档判成"缺小节"）。
+    """
+    d = os.path.dirname(os.path.abspath(path)).replace('\\', '/')
+    while d:
+        if AC_ITER_DIR_RE.match(os.path.basename(d)):
+            return d
+        nd = os.path.dirname(d)
+        if nd == d:
+            return ''
+        d = nd
+    return ''
+
+
+def _find_iter_doc(iter_dir, prefix, hint):
+    """在迭代目录的 `<prefix>*` 子目录里找 .md：优先文件名含 `hint` 的，否则取第一个。
+
+    ★ 为什么必须给 hint：`03-技术方案/` 里通常还有 `03-启动交接卡.md`，按字典序
+      「启」(U+542F) < 「技」(U+6280) ⇒ 不给 hint 会拿到交接卡，D14 判错文件。
+    """
+    try:
+        subs = sorted(os.listdir(iter_dir))
+    except OSError:
+        return ''
+    for s in subs:
+        sp = os.path.join(iter_dir, s)
+        if not s.startswith(prefix) or not os.path.isdir(sp):
+            continue
+        try:
+            names = sorted(n for n in os.listdir(sp) if n.lower().endswith('.md'))
+        except OSError:
+            continue
+        for fn in names:
+            if hint in fn:
+                return os.path.join(sp, fn)
+        if names:
+            return os.path.join(sp, names[0])
+    return ''
+
+
+def _scan_ac(path):
+    """返回 (验收断言小节内 AC 表格数据行数, 小节内 AC 集合, 全文 AC 集合, 是否有该小节)。
+
+    ★ 不用全文子串判小节（VERIF2 四件套 L-5）：`'## 验收断言' in text` 会被目录里那行
+      `- [5. 验收断言](#5-验收断言ac-表)` 命中 ⇒ D14 恒绿。故必须围栏跳过 + heading 栈 +
+      表格数据行复用 `TABLE_ROW_RE` / `is_separator_row` / `split_cells`。
+    """
+    rows, sec_tok, all_tok, has_sec = 0, set(), set(), False
+    try:
+        with open(path, 'r', encoding='utf-8', errors='replace') as fh:
+            lines = fh.read().split('\n')
+    except OSError:
+        return rows, sec_tok, all_tok, has_sec
+    in_ac = in_code = False
+    for ln in lines:
+        if FENCE_RE.match(ln):
+            in_code = not in_code
+            continue
+        if in_code:
+            continue
+        toks = AC_TOKEN_RE.findall(ln)
+        all_tok.update(toks)
+        if in_ac:
+            sec_tok.update(toks)
+        if AC_HEAD_RE.match(ln):
+            in_ac = AC_SECTION_KEY in ln.lstrip('#').strip()
+            if in_ac:
+                has_sec = True
+            continue
+        if in_ac and TABLE_ROW_RE.match(ln):
+            cells = split_cells(ln)
+            if (not is_separator_row(cells)) and toks:
+                rows += 1
+    return rows, sec_tok, all_tok, has_sec
+
+
+def check_ac_rules(path):
+    """D14（03 侧）/ D15（05 侧）；返回 Finding 列表。
+
+    ★ 只对「真实产出文档」生效 —— 复用 `is_produced_doc` 而不是 `is_iter_doc`：后者会把
+      `engine/templates/phase-0*.md` 模板一并纳入（模板里本来就没有验收断言数据行）。
+    ★ 存量豁免：迭代目录日期 < `AC_RULE_FROM` ⇒ 整条不判（95 份历史 03 不受影响）。
+    ★ D15 不设「05 必须引用」：05 完全不写 AC 引用只 WARN，设 ERROR 会逼出凑数写法。
+    """
+    out = []
+    if not is_produced_doc(_norm_iter_path(path)):
+        return out
+    d = _iter_date_prefix(path)
+    if not d or d < AC_RULE_FROM:
+        return out
+    iter_dir = _iter_dir_of(path)
+    if not iter_dir:
+        return out
+    doc03 = _find_iter_doc(iter_dir, '03-', '技术方案')
+    rows03, sec03, _all03, has03 = (_scan_ac(doc03) if doc03 else (0, set(), set(), False))
+    seg = os.path.basename(os.path.dirname(os.path.abspath(path)))
+    me = os.path.abspath(path).replace('\\', '/').lower()
+    main03 = os.path.abspath(doc03).replace('\\', '/').lower() if doc03 else ''
+
+    if seg.startswith('03-'):
+        if me != main03:
+            return out      # 03 目录下的非主文档（如 03-启动交接卡.md）不承担 D14
+        if not has03:
+            out.append(Finding('ERROR', 'D14', 0,
+                               '03 缺「%s」小节（##~#### 标题含该词）' % AC_SECTION_KEY))
+        elif rows03 < 1:
+            out.append(Finding('ERROR', 'D14', 0,
+                               '03「%s」小节内无含 AC-n 的表格数据行' % AC_SECTION_KEY))
+        return out
+
+    if seg.startswith('05-'):
+        if not has03:
+            return out          # 03 缺小节已由 D14 报红，此处不重复计红
+        _rows, _sec, mine, _has = _scan_ac(path)
+        if not mine:
+            out.append(Finding('WARN', 'D15', 0,
+                               '05 未引用任何 AC-n（非义务，仅提示）'))
+            return out
+        for t in sorted(mine - sec03):
+            out.append(Finding('ERROR', 'D15', 0,
+                               '05 引用了 03 验收断言小节里不存在的 %s' % t))
+    return out
 
 
 def check_file(path, max_per_rule=8):
@@ -283,6 +435,9 @@ def check_file(path, max_per_rule=8):
 
         if '## 结论摘要' not in '\n'.join(raw[:SUMMARY_HEAD_LINES]):
             findings.append(Finding('ERROR', 'D8', 0, '正文前 %d 行内缺 "## 结论摘要" 小节' % SUMMARY_HEAD_LINES))
+
+    # D14 / D15 验收断言（跨文件判据，独立函数；见 check_ac_rules 的注释）
+    findings.extend(check_ac_rules(path))
 
     # 过滤豁免 + 每规则截断
     findings = [f for f in findings if f.rule not in allowed]

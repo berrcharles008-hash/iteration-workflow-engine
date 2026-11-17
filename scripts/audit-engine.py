@@ -20,9 +20,10 @@
     A10 通用性自检   a 项目 token / c 派生表对账 / d 落点存在性（★ 2026-10-24 批次 0；b/e 依赖批次 2 ⇒ 显式 SKIP）
     A11 页面两表    委托 scripts/check-03-page-tables.py（★ 2026-11-01 批 2）：有前端页面改动的 03 是否写了
                     §2.3.1 列定义表 / §2.3.2 检索条件表；并断言 engine/phase-03.md 的挂载点未被删
-    A12 模式库义务  （★ 2026-11-05 BATCH-B）a 活跃表「落点」前缀合法（ERR）；b 落点路径实存（WARN，双基准解析）；
-                    c 活跃条目越阈值（WARN，红灯在 check-distill 退出码 3）；d 当前迭代 04/05 的
-                    `[模式: P-xxx]` 合计 <3（WARN）且编号须存在于模式库全集
+    A12 模式库义务  （★ 2026-11-05 BATCH-B）a 活跃表「落点」前缀合法（ERR）；b1 落点无路径（WARN，机器无法判定）
+                    b2 落点路径双基准均不存在（ERR）；c 活跃条目越阈值（WARN，红灯在 check-distill 退出码 3）；
+                    d 当前迭代 04/05 的 `[模式: P-xxx]` 合计 <3（WARN）且编号须存在于模式库全集；
+                    e 落点时效：载体 mtime < 首次发现日期（WARN，2026-11-17 起升 ERR，纯时间常量）
     A13 05 渲染清单  委托 scripts/check-05-render-list.py（★ 2026-11-16）：页面型迭代的 05 是否含
                     「平台渲染验收清单」且 8 项逐项有结论（全 ⬜ 判 ERR）；触发面 = §2.3 两表 **或**
                     U3/U6 布局包（UI 重排类迭代旧口径整条绕过）；并断言 engine/phase-05.md 挂载点未删
@@ -1370,11 +1371,20 @@ A12_ROW_RE = re.compile(r'^\|\s*(P-\d+)\s*\|')
 A12_PREFIXES = ('脚本:', '断言:', '规范:', '提示')
 # 路径形态：只认「带扩展名的段」；不含中文，避免把叙述文字吃进来
 A12_PATH_RE = re.compile(
-    r'[A-Za-z0-9_.\-/]+\.(?:md|py|mjs|js|cs|json|yaml|yml|ps1|sh|sql)')
+    r'[A-Za-z0-9_.\-/]+\.(?:md|py|mjs|js|cs|json|yaml|yml|ps1|sh|sql|ts|vue)')
 A12_MARK_RE = re.compile(r'\[模式:\s*(P-\d+)\s*\]')
 A12_ACTIVE_MAX = 15          # 与 runtime/check-distill.mjs 的 ACTIVE_MAX 同源（SSOT = engine/lessons-learned.md §七）
 A12_MIN_MARKS = 3            # T2 判据：04 + 05 合计 ≥3
-A12_STAT = {'rows': 0, 'err': 0, 'warn': 0, 'marks': 'SKIP', 'unknown': 0}
+# ★ A12-e 落点时效（2026-11-16 · VERIF2）：
+#   为什么用纯时间常量而不是台账文件：升级由时钟自动完成，任何人不需要做任何动作，
+#   也不需要新增一份要靠人维护的台账（03 §8 D-2 裁决）。日期写进代码是唯一一次性的写入。
+#   ★ 前缀必须是 A12E_ 不能是 A3_ —— 引擎已有 A3 维度（产出物名，见本文件 `:15` 与
+#     consistency-checklist.md），`A3_ERR_FROM` 会造成维度命名空间混淆。
+A12E_ERR_FROM = '2026-11-17'
+# 「首次发现」列的日期前缀（`lessons-learned.md:38` 表头第 5 列）
+A12_DATE_PREFIX_RE = re.compile(r'^(\d{4}-\d{2}-\d{2})')
+A12_STAT = {'rows': 0, 'err': 0, 'warn': 0, 'marks': 'SKIP', 'unknown': 0,
+            'mtime_err': 0, 'mtime_warn': 0}
 
 
 def _a12_project_root():
@@ -1399,7 +1409,12 @@ def _a12_bases():
 
 
 def _a12_zones():
-    """返回 (active_rows, all_ids)。active_rows = [(编号, 落点单元格原文), ...]。"""
+    """返回 (active_rows, all_ids)。
+
+    active_rows = [(编号, 落点单元格原文, 首次发现单元格原文), ...]。
+    ★ 返回元数恒为 2（act, all_ids）—— 只扩**行内元组**，两个解包点（`a12_patternlib`
+      与本文件 `_a12a`）同步按三元素解包；漏改任一处会当场 ValueError。
+    """
     p = os.path.join(SKILL_ROOT, A12_LESSONS_REL.replace('/', os.sep))
     text = read(p)
     if not text:
@@ -1419,12 +1434,40 @@ def _a12_zones():
         allids.append(m.group(1))
         if zone == 'active':
             cells = [c.strip() for c in line.split('|')[1:-1]]
-            act.append((m.group(1), cells[-1] if cells else ''))
+            # 第 3 位「首次发现」供 A12-e 判落点时效（表头列序见 lessons-learned.md:38）
+            act.append((m.group(1), cells[-1] if cells else '',
+                        cells[4] if len(cells) > 4 else ''))
     return act, allids
 
 
+def _a12_resolve(cell, bases):
+    """从落点单元格解析出**首个实际存在**的载体绝对路径（找不到返回 ''）。
+
+    为什么取「首个存在者」：多路径落点（形如 `断言: a.cs:1 / b.cs:2`）的口径未在 03
+    写死，本实现取首个存在者，口径见 runtime/VERIF2-四件套.md §④「不确定项②」。
+    """
+    for t in A12_PATH_RE.findall(cell):
+        if len(t) <= 3:
+            continue
+        # ★ 只剥「显式 ./」前缀，不能用 lstrip('./') —— 它按字符集剥，
+        #   会把 `.codebuddy/…` 削成 `codebuddy/…`（实测 2 行假红）
+        while t.startswith('./'):
+            t = t[2:]
+        rel = t.replace('/', os.sep)
+        for b in bases:
+            fp = os.path.join(b, rel)
+            if os.path.isfile(fp):
+                return fp
+    return ''
+
+
 def _a12a(act):
-    """a 前缀合法性（ERR） + b 路径实存（WARN）。"""
+    """a 前缀合法性（ERR） + b1 无法判定（WARN） + b2 解析到但不存在（ERR）。
+
+    ★ b 拆两级的依据（VERIF2 · 03 §2.4-B）：原单级只 WARN ⇒ 坏 `.ts` 落点永远红不了
+      （01 §1.2 目标 2 不可达）；但直接升 ERR 会让"落点写的是人读描述、无扩展名"这类
+      **机器本来就判不了**的行立刻红 ⇒ 拆级：b1 = 判不了（WARN），b2 = 判得出来且是错的（ERR）。
+    """
     if act is None:
         err('A12-a', '模式库不可读：%s' % A12_LESSONS_REL)
         A12_STAT['err'] += 1
@@ -1434,8 +1477,8 @@ def _a12a(act):
         A12_STAT['err'] += 1
         return
     bases = _a12_bases()
-    prefix_err = path_warn = 0
-    for pid, cell in act:
+    prefix_err = path_warn = path_err = 0
+    for pid, cell, _found in act:
         A12_STAT['rows'] += 1
         hit = [p for p in A12_PREFIXES if cell.startswith(p)]
         if not hit:
@@ -1448,21 +1491,75 @@ def _a12a(act):
         toks = [t for t in A12_PATH_RE.findall(cell) if len(t) > 3]
         if not toks:
             path_warn += 1
-            warn('A12-b', '%s 落点未含可校验路径：%s' % (pid, cell[:50]))
+            warn('A12-b1', '%s 落点未含可校验路径（机器无法判定，非错）：%s' % (pid, cell[:50]))
             continue
-        for t in toks:
-            # ★ 只剥「显式 ./」前缀，不能用 lstrip('./') —— 它按字符集剥，
-            #   会把 `.codebuddy/…` 削成 `codebuddy/…`（实测 2 行假红）
-            while t.startswith('./'):
-                t = t[2:]
-            t = t.replace('/', os.sep)
-            if not any(os.path.isfile(os.path.join(b, t)) for b in bases):
-                path_warn += 1
-                warn('A12-b', '%s 落点路径未找到：%s' % (pid, t.replace(os.sep, '/')))
-    A12_STAT['err'] += prefix_err
+        if _a12_resolve(cell, bases):
+            continue
+        path_err += 1
+        err('A12-b2', '%s 落点路径未找到（双基准均不存在）：%s'
+            % (pid, toks[0].replace(os.sep, '/')))
+    A12_STAT['err'] += prefix_err + path_err
     A12_STAT['warn'] += path_warn
     if prefix_err == 0:
         ok('A12-a', '活跃模式落点前缀合法（%d 行）' % len(act))
+
+
+def _file_date(p):
+    """取文件 mtime 的日期串（YYYY-MM-DD）；OSError 兜底返回 ''。
+
+    为什么单独抽：A5-c（本文件 `:551-555`）有同形写法但**未包 try** —— 文件在扫描与
+    取值之间消失会直接抛，故此处不可照抄。
+    """
+    try:
+        return date.fromtimestamp(os.path.getmtime(p)).isoformat()
+    except OSError:
+        return ''
+
+
+def _a12e(act):
+    """e 落点时效：载体文件 mtime 早于「首次发现」登记日期 ⇒ 事后贴标。
+
+    ★ 不重复计红的边界：
+      · 落点找不到 ⇒ b2 已报 ERR，本维 return（同一缺陷只算一次）；
+      · `提示` 前缀与非法前缀 ⇒ 由 a 维处理，本维只看 脚本:/断言:/规范:；
+      · 首次发现无日期前缀 ⇒ WARN「跳过」，不误红（02 #3）。
+    ★ 级别由 `A12E_ERR_FROM` 这个纯时间常量决定（2026-11-17 起对**全部**活跃行升 ERR，
+      含存量行 —— 存量违例恰恰最该被清，见 03 §2.4-C）。
+    """
+    if not act:
+        return          # a 维已报结构异常，此处不重复
+    bases = _a12_bases()
+    m = A12_DATE_PREFIX_RE.match(_a12_active_iteration() or '')
+    hard = bool(m) and m.group(1) >= A12E_ERR_FROM
+    n_err = n_warn = n_ok = 0
+    for pid, cell, found in act:
+        if not cell.startswith(('脚本:', '断言:', '规范:')):
+            continue
+        dm = A12_DATE_PREFIX_RE.match(found or '')
+        if not dm:
+            n_warn += 1
+            warn('A12-e', '%s 首次发现无日期前缀，跳过时效判定：%s'
+                 % (pid, (found or '(空)')[:40]))
+            continue
+        reg = dm.group(1)
+        fp = _a12_resolve(cell, bases)
+        if not fp:
+            continue                # b2 已报，不重复
+        fd = _file_date(fp)
+        if not fd or fd >= reg:
+            n_ok += 1
+            continue
+        msg = '%s 载体 mtime %s < 登记日期 %s（疑似事后贴标）：%s' % (pid, fd, reg, cell[:60])
+        if hard:
+            n_err += 1
+            err('A12-e', msg)
+        else:
+            n_warn += 1
+            warn('A12-e', msg)
+    A12_STAT['mtime_err'] += n_err
+    A12_STAT['mtime_warn'] += n_warn
+    if not n_err and not n_warn:
+        ok('A12-e', '落点时效一致（%d 行有载体且 mtime ≥ 登记日期）' % n_ok)
 
 
 def _a12_active_iteration():
@@ -1577,8 +1674,10 @@ def a12_patternlib():
         warn('A12-c', '活跃条目 %d > 阈值 %d ⇒ 需蒸馏（机器红灯 = runtime/check-distill.mjs 退出码 3）'
              % (len(act), A12_ACTIVE_MAX))
     _a12d(allids)
-    ok('A12', '结论：行=%d 落点ERR=%d 落点WARN=%d 模式标记=%s 未知编号=%d'
+    _a12e(act)
+    ok('A12', '结论：行=%d 落点ERR=%d 落点WARN=%d 时效ERR=%d 时效WARN=%d 模式标记=%s 未知编号=%d'
        % (A12_STAT['rows'], A12_STAT['err'], A12_STAT['warn'],
+          A12_STAT['mtime_err'], A12_STAT['mtime_warn'],
           A12_STAT['marks'], A12_STAT['unknown']))
 
 
