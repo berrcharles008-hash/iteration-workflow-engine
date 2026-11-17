@@ -15,6 +15,7 @@ config:
     - .codebuddy/specs/
   # 活文档知识库根目录（L1/L2/L3 自动生成）
   # 读取路径: {kb_dir}/{l1_file}, {kb_dir}/{l2_dir}/, {kb_dir}/{l3_file}
+  # ★ L2 可按中心分区（manifest `centers` 段）：有 ⇒ {kb_dir}/{center}/L2-modules/；无 ⇒ {kb_dir}/L2-modules/（向后兼容）；L1/L3 一律留根
   kb_dir: docs/knowledge-base/
   l1_file: L1-overview.md
   l2_dir: L2-modules/

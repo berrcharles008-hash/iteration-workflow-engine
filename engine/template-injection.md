@@ -108,9 +108,9 @@ Step B / Step C / Step D（读取 engine/ 或 project/ 文件时）
 | ①a 短名别名 | 5 | `KB_DIR` `SPECS_DIR` `ITERATIONS_DIR` `PROJECT_ROOT` `frontend_framework` | 别名→展平名，**必须解析**（未解析 = ERR） |
 | ①b 路径式 | 10 | `database.type` `paths.frontend_root` `sql_conventions.language` `sql_conventions.dml_wrapper` `deploy.stage1.frontend_target` `build.frontend.dev_command` `frontend_layers.net.base_class` `frontend_layers.page.dir` `backend_layers.bll.dir` `backend_layers.bll.base_class` | `.`→`_` + upper 查展平表，**必须解析**（未解析 = ERR） |
 | ② 运行时 | 5 | `ITERATION_ID` `DOC_01_REQUIREMENT` `DOC_02_REVIEW` `DOC_03_TECHNICAL` `DOC_04_TASK_LIST` | 允许保留（Step B/C 确定） |
-| ③ 脚本渲染 | 23 | `IDE_DIR` `ALL_FRONTEND_ROOTS` `ALL_BACKEND_ROOTS` `ALL_BACKEND_SLNS` `HAS_MULTI_PROJECTS` `GENERATED_AT` `MODULE_NAME` `MODULE_FILE_MATRIX` `ROOT_DIRS` `FRONTEND_MODULE_ROWS` `FRONTEND_FILE_ROWS` `FRONTEND_COMPONENT_ROWS` `BACKEND_MODULE_ROWS` `BACKEND_FILE_ROWS` `BACKEND_CLASS_ROWS` `BACKEND_METHOD_ROWS` `TARGET_DIR` `TARGET_FILE` `TARGET_PATH` `INTERFACE_FILE` `MENU_FILE` `ROUTER_FILE` `WEBAPI_FILE` | 允许保留（脚本/派生逻辑渲染） |
+| ③ 脚本渲染 | 26 | `IDE_DIR` `ALL_FRONTEND_ROOTS` `ALL_BACKEND_ROOTS` `ALL_BACKEND_SLNS` `HAS_MULTI_PROJECTS` `GENERATED_AT` `MODULE_NAME` `MODULE_FILE_MATRIX` `ROOT_DIRS` `FRONTEND_MODULE_ROWS` `FRONTEND_FILE_ROWS` `FRONTEND_COMPONENT_ROWS` `BACKEND_MODULE_ROWS` `BACKEND_FILE_ROWS` `BACKEND_CLASS_ROWS` `BACKEND_METHOD_ROWS` `L1_CENTER_COL` `L1_CENTER_SEP` `L1_CENTER_SUMMARY` `TARGET_DIR` `TARGET_FILE` `TARGET_PATH` `INTERFACE_FILE` `MENU_FILE` `ROUTER_FILE` `WEBAPI_FILE` | 允许保留（脚本/派生逻辑渲染） |
 | ④ 内容槽 | 8 | `key` `<project.xxx>` `<paths.xxx>` `<frontend.xxx>` `<backend.xxx>` `<database.xxx>` `<sql_conventions.xxx>` `<deploy.xxx>` | 文档示例，**必须写成 `<...>`** |
-| **合计** | **51** | — | — |
+| **合计** | **54** | — | — |
 
 > **④ 为何单列白名单**：`engine/` 里还有大量中文占位符（如 `<方案文档路径>`）供人读，不属于本 schema。
 > 占位符正则只匹配 ASCII 标识符，中文天然不参与判定；④ 白名单的作用是让

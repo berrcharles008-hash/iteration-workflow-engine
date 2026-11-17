@@ -119,6 +119,165 @@ def _extract_subblock(parent_block, key):
     return ''
 
 
+
+def _yaml_scalar(raw):
+    """Strip quotes / inline comments from one scalar YAML value. Never raises."""
+    if raw is None:
+        return ""
+    val = str(raw).strip()
+    qm = re.match(r'^(["\'])(.*?)\1', val)
+    if qm:
+        return qm.group(2).strip()
+    if '#' in val:
+        val = val.split('#')[0].strip()
+    return val
+
+
+def _yaml_inline_list(raw):
+    """Parse ``["a", "b"]`` / ``[a, b]`` into ['a', 'b']; invalid -> []."""
+    if raw is None:
+        return []
+    m = re.match(r'^\[(.*)\]$', str(raw).strip(), re.DOTALL)
+    if not m:
+        return []
+    items = []
+    for part in m.group(1).split(','):
+        s = _yaml_scalar(part)
+        if s:
+            items.append(s)
+    return items
+
+
+def _slice_list_block(block, key):
+    """Slice the YAML *list* sub-block of ``key`` out of a parent block.
+
+    ``_extract_subblock`` only understands mapping children; a list value
+    (``frontend_projects:`` followed by ``- key: ...`` items) is swallowed or
+    missed. This helper returns the raw lines whose indent is deeper than the
+    key line. Absent key -> returns the block unchanged (caller may already
+    pass the isolated sub-block).
+    """
+    lines = (block or "").split("\n")
+    out = []
+    inside = False
+    base = 0
+    found = False
+    for ln in lines:
+        if not inside:
+            mt = re.match(r'^([ \t]*)' + re.escape(key) + r'[ \t]*:[ \t]*$', ln)
+            if mt:
+                base = len(mt.group(1))
+                inside = True
+                found = True
+            continue
+        if not ln.strip():
+            out.append(ln)
+            continue
+        ind = len(ln) - len(ln.lstrip())
+        if ind <= base:
+            break
+        out.append(ln)
+    if not found:
+        return block or ""
+    return "\n".join(out)
+
+
+def _parse_frontend_projects(block):
+    """Parse ``paths.frontend_projects`` list by line scanning (no PyYAML).
+
+    Expected shape (as measured in project.manifest.yaml)::
+
+        frontend_projects:
+          - key: "ecic_critical_illness_center"
+            src: "front-end/ecic_critical_illness_center/src"
+            center: ""
+
+    Returns [{"key": str, "src": str, "center": str}] with ``src`` still the
+    raw relative string (load_manifest resolves it to a Path). Any parse
+    failure degrades to [] -- never raises.
+    """
+    block = _slice_list_block(block, "frontend_projects")
+    items = []
+    cur = None
+    for line in (block or "").split("\n"):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if re.match(r'^[ \t]*-[ \t]*$', line):
+            cur = {}
+            items.append(cur)
+            continue
+        m_item = re.match(r'^[ \t]*-[ \t]+([A-Za-z_][\w-]*)[ \t]*:[ \t]*(.*)$', line)
+        if m_item:
+            cur = {}
+            items.append(cur)
+            cur[m_item.group(1)] = _yaml_scalar(m_item.group(2))
+            continue
+        m_kv = re.match(r'^[ \t]+([A-Za-z_][\w-]*)[ \t]*:[ \t]*(.*)$', line)
+        if m_kv and cur is not None:
+            cur[m_kv.group(1)] = _yaml_scalar(m_kv.group(2))
+
+    projects = []
+    for it in items:
+        src = (it.get("src") or "").strip()
+        if not src:
+            continue
+        key = (it.get("key") or "").strip() or Path(src).name
+        projects.append({
+            "key": key,
+            "src": src,
+            "center": (it.get("center") or "").strip(),
+        })
+    return projects
+
+
+def _parse_centers(block):
+    """Parse the root-level ``centers`` section.
+
+    Returns {"order": [...], "aliases": {...}, "tokens": {...}} or None when
+    the section is absent (caller then degrades to a single partition).
+    Line scanning only: order failure -> [], aliases/tokens failure -> {}.
+    NOTE: _extract_subblock('aliases') also swallows the following
+    ``tokens:`` sub-tree (same indent level), so container keys and
+    ``[...]`` values are filtered out on purpose.
+    """
+    if not (block or "").strip():
+        return None
+
+    order = _yaml_inline_list(_extract_yaml_value(block, "order"))
+
+    aliases = {}
+    for line in _extract_subblock(block, "aliases").split("\n"):
+        m = re.match(r'^[ \t]+([A-Za-z_][\w-]*)[ \t]*:[ \t]*(.*)$', line)
+        if not m:
+            continue
+        key, raw = m.group(1), m.group(2).strip()
+        if key in ("order", "aliases", "tokens") or raw.startswith("["):
+            continue
+        val = _yaml_scalar(raw)
+        if val:
+            aliases[key] = val
+
+    tokens = {}
+    for line in _extract_subblock(block, "tokens").split("\n"):
+        m = re.match(r'^[ \t]+([A-Za-z_][\w-]*)[ \t]*:[ \t]*(.*)$', line)
+        if not m:
+            continue
+        key = m.group(1)
+        if key in ("order", "aliases", "tokens"):
+            continue
+        tokens[key] = [t for t in _yaml_inline_list(m.group(2)) if t]
+
+    if not order:
+        order = list(tokens.keys())
+    for k in tokens.keys():
+        if k not in order:
+            order.append(k)
+
+    if not order and not aliases and not tokens:
+        return None
+    return {"order": order, "aliases": aliases, "tokens": tokens}
+
+
 def load_manifest():
     global PROJECT_ROOT
 
@@ -141,6 +300,12 @@ def load_manifest():
     backend_root = _extract_yaml_value(paths_block, "backend_root")
     specs_dir = _extract_yaml_value(paths_block, "specs_dir")
     kb_dir = _extract_yaml_value(paths_block, "kb_dir") or "docs/knowledge-base"
+
+    # T1-2: multi-frontend scan surface + center partitions (both optional).
+    # NOTE: pass the whole ``paths`` block -- ``frontend_projects`` is a YAML
+    # *list* and _extract_subblock only understands mapping children.
+    fe_projects_raw = _parse_frontend_projects(paths_block)
+    centers_raw = _parse_centers(_extract_yaml_block(raw, "centers"))
 
     fe_block = _extract_yaml_block(raw, "frontend_layers")
     fe_page_sub = _extract_subblock(fe_block, "page")
@@ -171,6 +336,17 @@ def load_manifest():
             return None
         return ws / rel_path
 
+    frontend_projects = []
+    for item in fe_projects_raw:
+        src_path = resolve(item["src"])
+        if src_path is None:
+            continue
+        frontend_projects.append({
+            "key": item["key"],
+            "src": src_path,
+            "center": item["center"],
+        })
+
     return {
         "workspace_root": ws,
         "frontend_root": resolve(frontend_root),
@@ -185,18 +361,9 @@ def load_manifest():
         "be_interface_dir": resolve(be_interface_dir) if be_interface_dir else None,
         "be_bll_dir": resolve(be_bll_dir) if be_bll_dir else None,
         "be_webapi_dir": resolve(be_webapi_dir) if be_webapi_dir else None,
+        "frontend_projects": frontend_projects,
+        "centers": centers_raw,
     }
-
-
-# --- Term mapping tables (PascalCase reverse-lookup) ---
-#
-# ★ 2026-10-25（迭代 `2026-10-25-002` · G07 / C-4 / C-8）：三段词表**外置**到
-#   `project/kb-terms.yaml`。此前 41 / 27 / 43 条写死在源码里 ⇒ 换项目必须改引擎源码。
-#   消费点（L3 映射遍历，见 `_compute_l3_mappings`）**零改动** —— 仍是同名字典/集合查表。
-#
-# 失效形态（缺文件 / 空段）：降级为 `{}` / `{}` / `set()` ⇒ 所有类名落「未映射」清单，
-#   **不报错、不中断生成**（产物仍可读，只是人工补录面变大）。
-# 迁移完整性基线（04 期实测）：business 41 / tech 27 / noise 43；`Adapter` 在 tech 与 noise **双列**。
 
 def load_terms():
     """读取三段术语表；**永不抛**（缺文件 ⇒ 空表降级）。"""
@@ -316,32 +483,117 @@ def scan_cs_files(directory):
     return results
 
 
-def scan_vue_files(directory):
-    """Scan .vue files: extract component names. Skips node_modules/dist."""
+def _fe_file_type(file_path, ext=None):
+    """Map a frontend file to its KB ``type`` value (downstream filter-safe).
+
+    .vue -> Page (M{n}Module) / Component ; .js -> JS ; .ts -> TS ; .less -> Less
+    """
+    suffix = (ext or file_path.suffix or "").lower()
+    if suffix == ".vue":
+        return "Page" if re.match(r'M\d+Module', file_path.stem) else "Component"
+    if suffix == ".js":
+        return "JS"
+    if suffix == ".ts":
+        return "TS"
+    if suffix == ".less":
+        return "Less"
+    return suffix.lstrip(".").upper() or "File"
+
+
+def scan_fe_files(projects, exts=(".vue", ".ts", ".less")):
+    """Scan several frontend projects into one flat file list.
+
+    Args:
+      projects: [{"key": str, "src": Path|str, "center": str}] from manifest.
+      exts:     extensions to collect (default excludes .js on purpose;
+                scan_js_files passes (".js",) explicitly).
+
+    Returns [{"path","name","type","project","center"}].
+    ``path`` is always PROJECT_ROOT-relative with '/' separators (same rule as
+    scan_vue_files), NOT relative to each project src -- L2/root_dirs and the
+    fingerprint all key off that form.
+
+    Skips build artifacts (_is_build_artifact) and ``*.d.ts`` by FILE NAME
+    (a .d.ts file's suffix is still .ts, so an extension test cannot work).
+    """
     results = []
-    if not directory or not directory.exists():
+    ext_list = tuple(e.lower() for e in (exts or ()) if e)
+    if not ext_list:
         return results
-    for vue_file in sorted(directory.rglob("*.vue")):
-        if _is_build_artifact(vue_file):
+
+    for proj in projects or []:
+        if not isinstance(proj, dict):
             continue
-        rel_path = str(vue_file.relative_to(PROJECT_ROOT)).replace("\\", "/")
-        name = vue_file.stem
-        comp_type = "Page" if re.match(r'M\d+Module', name) else "Component"
-        results.append({"path": rel_path, "name": name, "type": comp_type})
+        src = proj.get("src")
+        if not src:
+            continue
+        try:
+            src_path = Path(src)
+        except Exception:
+            continue
+        if not src_path.exists() or not src_path.is_dir():
+            continue
+        key = proj.get("key") or src_path.name
+        center = (proj.get("center") or "").strip()
+        for ext in ext_list:
+            for fe_file in sorted(src_path.rglob("*" + ext)):
+                if not fe_file.is_file():
+                    continue
+                if fe_file.name.lower().endswith(".d.ts"):
+                    continue
+                if _is_build_artifact(fe_file):
+                    continue
+                try:
+                    rel_path = str(fe_file.relative_to(PROJECT_ROOT)).replace("\\", "/")
+                except Exception:
+                    rel_path = str(fe_file).replace("\\", "/")
+                results.append({
+                    "path": rel_path,
+                    "name": fe_file.stem,
+                    "type": _fe_file_type(fe_file, ext),
+                    "project": key,
+                    "center": center,
+                })
+    return results
+
+
+def scan_vue_files(directory):
+    """Scan .vue files: extract component names. Skips node_modules/dist.
+
+    Thin wrapper over scan_fe_files (single project = the given directory);
+    the returned dict shape stays {"path","name","type"} -- extra keys are
+    stripped so every pre-existing consumer sees the same objects as before.
+    """
+    results = []
+    if not directory:
+        return results
+    src = Path(directory)
+    if not src.exists():
+        return results
+    for item in scan_fe_files([{"key": src.name, "src": src, "center": ""}],
+                              exts=(".vue",)):
+        results.append({"path": item["path"], "name": item["name"], "type": item["type"]})
     return results
 
 
 def scan_js_files(directory):
-    """Scan .js files (frontend bll/store layer). Skips node_modules/dist."""
+    """Scan .js files (frontend bll/store layer). Skips node_modules/dist.
+
+    Thin wrapper over scan_fe_files; ``exts=(".js",)`` is mandatory -- the
+    default ext set does not contain .js.
+    """
     results = []
-    if not directory or not directory.exists():
+    if not directory:
         return results
-    for js_file in sorted(directory.rglob("*.js")):
-        if _is_build_artifact(js_file):
-            continue
-        rel_path = str(js_file.relative_to(PROJECT_ROOT)).replace("\\", "/")
-        results.append({"path": rel_path, "name": js_file.stem, "type": "JS"})
+    src = Path(directory)
+    if not src.exists():
+        return results
+    for item in scan_fe_files([{"key": src.name, "src": src, "center": ""}],
+                              exts=(".js",)):
+        results.append({"path": item["path"], "name": item["name"], "type": "JS"})
     return results
+
+
 
 
 def _backend_extra_dirs(config):
@@ -369,6 +621,184 @@ def _backend_extra_dirs(config):
 
 
 # --- Auto-generated flag check ---
+
+
+def _norm_center_key(value):
+    """Normalize a center key / token: lowercase, drop '_' and '-'."""
+    if not value:
+        return ""
+    return re.sub(r'[_-]', '', str(value).strip().lower())
+
+
+def _resolve_center_key(centers, key):
+    """Alias / normalization -> canonical center key; unknown -> None."""
+    if not centers or not key:
+        return None
+    key = str(key).strip()
+    aliases = centers.get("aliases") or {}
+    known = list(centers.get("order") or [])
+    for k in (centers.get("tokens") or {}).keys():
+        if k not in known:
+            known.append(k)
+    for k in aliases.keys():
+        if k not in known:
+            known.append(k)
+
+    if key in aliases:
+        return aliases[key] or key
+    if key in known:
+        return key
+    nk = _norm_center_key(key)
+    for cand in known:
+        if _norm_center_key(cand) == nk:
+            return aliases.get(cand, cand)
+    for cand, tgt in aliases.items():
+        if _norm_center_key(cand) == nk:
+            return tgt
+    return None
+
+
+def _classify_center(rel_path, project, centers, classes=None):
+    """Five-level center classification; first hit wins.
+
+    Levels: project binding > path segments > file name > class names > "common".
+
+    Args:
+      rel_path: PROJECT_ROOT-relative path (either separator accepted).
+      project:  dict with a "center" field, or a plain str binding, or None
+                (backend files / unbound frontend files).
+      centers:  config["centers"]. **None => returns "project" (degraded)**.
+      classes:  class names, used only for backend ``.cs`` files (may be None).
+
+    Returns:
+      A canonical key from ``centers.order``; no hit => ``"common"``.
+      Degraded mode returns the literal ``"project"`` -- that value is a
+      LOGICAL label used for grouping and for the center column only; it is
+      never joined into a filesystem path (no ``kb/project/`` ever appears).
+
+    Matching: values are normalized (lowercase, '_' and '-' removed) and a
+    token hits when it is a substring of a normalized dir segment / file name
+    / stem / class name. Within one level, ``centers.order`` decides the
+    winner (earlier key wins on token conflicts).
+    """
+    if not centers:
+        return "project"
+
+    # --- Level 1: explicit project binding ---
+    binding = ""
+    if isinstance(project, dict):
+        binding = project.get("center") or ""
+    elif isinstance(project, str):
+        binding = project
+    binding = str(binding).strip()
+    if binding:
+        return _resolve_center_key(centers, binding) or binding
+
+    norm_path = str(rel_path or "").replace("\\", "/").strip().strip("/")
+    if not norm_path:
+        return "common"
+    parts = [p for p in norm_path.split("/") if p]
+    dir_parts = parts[:-1]
+    file_name = parts[-1] if parts else ""
+    stem = Path(file_name).stem if file_name else ""
+
+    order = list(centers.get("order") or [])
+    tokens_map = centers.get("tokens") or {}
+    for key in tokens_map.keys():
+        if key not in order:
+            order.append(key)
+    ordered = []
+    for key in order:
+        toks = [_norm_center_key(t) for t in (tokens_map.get(key) or []) if str(t).strip()]
+        if toks:
+            ordered.append((key, toks))
+
+    norm_dirs = [_norm_center_key(p) for p in dir_parts]
+    norm_file = _norm_center_key(file_name)
+    norm_stem = _norm_center_key(stem)
+    norm_classes = [_norm_center_key(c) for c in (classes or []) if c]
+
+    def _hit(norm_value, norm_tokens):
+        return any(t and t in norm_value for t in norm_tokens)
+
+    # --- Level 2: directory segments ---
+    for key, toks in ordered:
+        if any(_hit(seg, toks) for seg in norm_dirs):
+            return key
+
+    # --- Level 3: file name / stem ---
+    for key, toks in ordered:
+        if _hit(norm_file, toks) or _hit(norm_stem, toks):
+            return key
+
+    # --- Level 4: class names (backend .cs only) ---
+    if norm_classes and norm_path.lower().endswith(".cs"):
+        for key, toks in ordered:
+            if any(_hit(cn, toks) for cn in norm_classes):
+                return key
+
+    # --- Level 5: fallback ---
+    return "common"
+
+
+def scan_all_sources(config):
+    """One scan pass -> one flat source list for the whole knowledge base.
+
+    Frontend: ``scan_fe_files(config["frontend_projects"])`` -- all projects,
+    all of .vue/.ts/.less (falls back to the legacy page/bll scan with the
+    same item keys when the manifest declares no frontend_projects).
+    Backend: the pre-existing surface -- scan_cs_files(be_bll_dir) plus every
+    dir from _backend_extra_dirs(config).
+
+    Every element carries ``center`` (from _classify_center) and ``kind``
+    ("fe"/"be"). Frontend items keep {"path","name","type","project"};
+    backend items keep {"path","classes","methods","namespace"}.
+    ``center == "project"`` (degraded mode) is a logical label only.
+    """
+    centers = config.get("centers")
+    sources = []
+
+    # --- Frontend ---
+    projects = config.get("frontend_projects") or []
+    if projects:
+        for item in scan_fe_files(projects):
+            entry = dict(item)
+            entry["center"] = _classify_center(entry["path"], entry.get("center"), centers)
+            entry["kind"] = "fe"
+            sources.append(entry)
+    else:
+        legacy = list(scan_vue_files(config.get("fe_page_dir")))
+        legacy.extend(scan_js_files(config.get("fe_bll_dir")))
+        for item in legacy:
+            entry = dict(item)
+            entry["project"] = ""
+            entry["center"] = _classify_center(entry["path"], None, centers)
+            entry["kind"] = "fe"
+            sources.append(entry)
+
+    # --- Backend: whole backend_root (100% coverage) ---
+    # The legacy surface (BLL + Inf + Web/Api) misses 17 .cs files living in
+    # Web/* and Console/*, which would cap AC-1 at 1306/1323.
+    be_root = config.get("backend_root")
+    if be_root and Path(be_root).exists():
+        be_raw = list(scan_cs_files(Path(be_root)))
+    else:
+        be_raw = list(scan_cs_files(config.get("be_bll_dir")))
+        for scan_dir in _backend_extra_dirs(config):
+            be_raw.extend(scan_cs_files(scan_dir))
+    seen = set()
+    for fd in be_raw:
+        if fd["path"] in seen:
+            continue
+        seen.add(fd["path"])
+        entry = dict(fd)
+        entry["center"] = _classify_center(
+            entry["path"], None, centers,
+            [c["name"] for c in (fd.get("classes") or [])])
+        entry["kind"] = "be"
+        sources.append(entry)
+
+    return sources
 
 def _is_auto_generated(file_path):
     """Check if a file's frontmatter has auto-generated: true."""
@@ -433,51 +863,56 @@ def _scan_l1_modules(config):
     """Scan front-end pages and back-end *Mgr classes for L1.
 
     Returns (fe_modules, be_modules). Shared by generate_l1 and stale check.
-    """
-    # Frontend modules: recursive scan under {page_dir}.
-    #
-    # FIX-10: originally this only globbed "{page_dir}/*Module.vue" (flat,
-    # one module = one file). Projects that nest pages as
-    # "pages/pivas/m1_order_receive/drug_list.vue" produced 0 modules.
-    # Now we reuse the same module key resolution as L2 (_fe_module_match),
-    # so L1 and L2 can never disagree about the module list.
-    fe_modules = []
-    fe_page_dir = config.get("fe_page_dir")
-    if fe_page_dir and fe_page_dir.exists():
-        fe_re = _build_fe_name_regex(config.get("fe_page_pattern"))
-        groups = {}
-        for vue_file in sorted(fe_page_dir.rglob("*.vue")):
-            if _is_build_artifact(vue_file):
-                continue
-            rel_path = str(vue_file.relative_to(PROJECT_ROOT)).replace("\\", "/")
-            key = _fe_module_match(rel_path, vue_file.stem, fe_re,
-                                   config.get("fe_module_map")) or "Shared"
-            grp = groups.setdefault(key, {
-                "name": key, "dir": None, "main_file": None, "file_count": 0,
-                "_vue": []})
-            grp["file_count"] += 1
-            grp["_vue"].append(vue_file)
 
-        # Pick the representative .vue per group (see _pick_main_vue) instead
-        # of "first in scan order" -- a group may hold auxiliary components.
-        for grp in groups.values():
-            main = _pick_main_vue(grp["_vue"])
-            del grp["_vue"]
-            grp["main_file"] = main.name
-            grp["dir"] = str(main.parent.relative_to(
-                PROJECT_ROOT)).replace("\\", "/")
-            # Legacy layout: a sibling dir named after the module
-            # (e.g. m3/ next to M3Module.vue) also counts.
-            sibling_dir = main.parent / grp["name"].lower()
-            if sibling_dir.exists():
-                grp["file_count"] += sum(
-                    1 for _ in sibling_dir.rglob("*") if _.is_file())
-        fe_modules = list(groups.values())
-        # Sort by M-number (M3 < M4 < ... < M11)
-        def _m_sort_key(item):
-            m = re.match(r'M(\d+)', item["name"])
-            return (0, int(m.group(1)), "") if m else (1, 0, item["name"])
-        fe_modules.sort(key=_m_sort_key)
+    T2-1: the frontend surface is no longer ``fe_page_dir.rglob("*.vue")`` --
+    it consumes ``scan_all_sources(config)`` so that every project listed in
+    ``frontend_projects`` (not just the first) and every ``.ts`` / ``.less``
+    (plus ``.js`` from the BLL layer) reach L1.  Module keys still come from
+    ``_fe_module_match`` so L1 and L2 can never disagree on the module list.
+
+    Each module dict additionally carries ``center`` (partition key, from the
+    same classification the L2 grouping uses).  The rest of the shape is
+    unchanged on purpose: ``_detect_stale_l1`` only reads ``name``.
+    """
+    centers = config.get("centers")
+    sources = scan_all_sources(config)
+    src_center = {s["path"]: s.get("center") for s in sources}
+
+    # --- Frontend modules: one flat scan, grouped by module key ---
+    fe_re = _build_fe_name_regex(config.get("fe_page_pattern"))
+    groups = {}
+    for item in sources:
+        if item.get("kind") != "fe":
+            continue
+        key = _fe_module_match(item["path"], item["name"], fe_re,
+                               config.get("fe_module_map")) or "Shared"
+        grp = groups.setdefault(key, {
+            "name": key, "dir": None, "main_file": None, "file_count": 0,
+            "center": None, "_files": []})
+        grp["file_count"] += 1
+        grp["_files"].append(item)
+
+    for grp in groups.values():
+        files = grp.pop("_files")
+        main = _pick_main_vue([Path(f["path"]) for f in files])
+        main_rel = str(main).replace("\\", "/")
+        main_item = next((f for f in files if f["path"] == main_rel), files[0])
+        grp["main_file"] = main_item["path"].rsplit("/", 1)[-1]
+        grp["dir"] = "/".join(main_item["path"].split("/")[:-1]) or "."
+        grp["center"] = (main_item.get("center")
+                         or src_center.get(main_item["path"])
+                         or _classify_center(main_item["path"], None, centers))
+        sibling_dir = (PROJECT_ROOT / grp["dir"] / grp["name"].lower()
+                       if PROJECT_ROOT else None)
+        if sibling_dir is not None and sibling_dir.is_dir():
+            grp["file_count"] += sum(
+                1 for _ in sibling_dir.rglob("*") if _.is_file())
+    fe_modules = list(groups.values())
+
+    def _m_sort_key(item):
+        m = re.match(r'M(\d+)', item["name"])
+        return (0, int(m.group(1)), "") if m else (1, 0, item["name"])
+    fe_modules.sort(key=_m_sort_key)
 
     # Backend modules: *Mgr classes under BLL (group by class name prefix)
     be_modules = []
@@ -498,14 +933,17 @@ def _scan_l1_modules(config):
                 if mod_name not in module_groups:
                     module_groups[mod_name] = {
                         "name": mod_name, "mgr_class": mgr_name,
-                        "files": [], "namespace": ""
+                        "files": [], "namespace": "", "center": None
                     }
                 ns_match = re.search(r'namespace\s+([\w.]+)', content)
                 if ns_match and not module_groups[mod_name]["namespace"]:
                     module_groups[mod_name]["namespace"] = ns_match.group(1)
-                module_groups[mod_name]["files"].append(
-                    str(cs.relative_to(PROJECT_ROOT)).replace("\\", "/")
-                )
+                rel = str(cs.relative_to(PROJECT_ROOT)).replace("\\", "/")
+                if module_groups[mod_name]["center"] is None:
+                    module_groups[mod_name]["center"] = (
+                        src_center.get(rel)
+                        or _classify_center(rel, None, centers))
+                module_groups[mod_name]["files"].append(rel)
         be_modules = list(module_groups.values())
         for mod in be_modules:
             mod["file_count"] = len(mod["files"])
@@ -541,6 +979,41 @@ def _detect_stale_l1(config, l1_path):
     if reasons:
         return True, ", ".join(reasons)
     return False, ""
+
+
+def _l1_center_summary(fe_modules, be_modules, centers):
+    """Per-partition module/file totals for L1 (T2-1).
+
+    Degraded mode (``centers is None``) returns "" so the template line it
+    replaces stays an empty line -> byte-identical output.
+    """
+    if not centers:
+        return ""
+    keys = list(centers.get("order") or [])
+    for mods in (fe_modules, be_modules):
+        for m in mods:
+            c = m.get("center")
+            if c and c not in keys:
+                keys.append(c)
+    rows = []
+    tot_mod = tot_fe = tot_be = 0
+    for key in keys:
+        fe = [m for m in fe_modules if m.get("center") == key]
+        be = [m for m in be_modules if m.get("center") == key]
+        n_fe = sum(int(m.get("file_count") or 0) for m in fe)
+        n_be = sum(int(m.get("file_count") or 0) for m in be)
+        mods = len(fe) + len(be)
+        tot_mod += mods
+        tot_fe += n_fe
+        tot_be += n_be
+        rows.append(f"| {key} | {len(fe)} | {n_fe} | {len(be)} | {n_be} "
+                    f"| {mods} | {n_fe + n_be} |\n")
+    rows.append(f"| **合计** | | | | | {tot_mod} | {tot_fe + tot_be} |\n")
+    return ("**分区汇总**（按模块归属统计；分区取自 manifest `centers`。"
+            "注意：模块粒度由文件名/目录命名约定决定，未拆分子模块的项目其前端会整体落 `common`）\n\n"
+            "| 分区 | 前端模块 | 前端文件 | 后端模块 | 后端文件 | 合计模块 | 合计文件 |\n"
+            "|------|---------|---------|---------|---------|---------|---------|\n"
+            + "".join(rows) + "\n")
 
 
 def generate_l1(config, check_only=False, force=False):
@@ -599,14 +1072,19 @@ def generate_l1(config, check_only=False, force=False):
             return rows
         return "| " + " | ".join(["-"] * ncols) + " |"
 
+    centers = config.get("centers")
+    has_center = bool(centers)
+    # T2-1: 中心列通过「行尾追加」条件化 -> 退化模式与改前逐字节一致
     fe_rows = _rows_or_empty("".join(
-        f"| {i} | {m['name']} | {m['dir']} | {m['main_file']} | {m['file_count']} |\n"
+        f"| {i} | {m['name']} | {m['dir']} | {m['main_file']} | {m['file_count']} |"
+        + (f" {m.get('center') or '-'} |\n" if has_center else "\n")
         for i, m in enumerate(fe_modules, 1)
-    ), 5)
+    ), 6 if has_center else 5)
     be_rows = _rows_or_empty("".join(
-        f"| {i} | {m['name']} | {m['dir']} | {m.get('namespace', '')} | {m['file_count']} |\n"
+        f"| {i} | {m['name']} | {m['dir']} | {m.get('namespace', '')} | {m['file_count']} |"
+        + (f" {m.get('center') or '-'} |\n" if has_center else "\n")
         for i, m in enumerate(be_modules, 1)
-    ), 5)
+    ), 6 if has_center else 5)
     fe_names = [m["name"] for m in fe_modules]
     be_names = [m["name"] for m in be_modules]
 
@@ -630,6 +1108,11 @@ def generate_l1(config, check_only=False, force=False):
     output = output.replace("{{FRONTEND_MODULE_ROWS}}", fe_rows)
     output = output.replace("{{BACKEND_MODULE_ROWS}}", be_rows)
     output = output.replace("{{MODULE_FILE_MATRIX}}", matrix_rows)
+    # T2-1: 中心列 + 分区汇总（退化模式三者为空串 -> 输出不变）
+    output = output.replace("{{L1_CENTER_COL}}", " | 中心" if has_center else "")
+    output = output.replace("{{L1_CENTER_SEP}}", "|--------" if has_center else "")
+    output = output.replace("{{L1_CENTER_SUMMARY}}",
+                            _l1_center_summary(fe_modules, be_modules, centers))
 
     l1_path.parent.mkdir(parents=True, exist_ok=True)
     l1_path.write_text(output, encoding="utf-8")
@@ -757,17 +1240,29 @@ def _fe_module_match(file_path, name, fe_re=None, module_map=None):
     Note (migration): the explicit map comes from
     ``frontend_layers.page.module_map`` and makes module detection
     deterministic (no reliance on legacy ``m{n}_`` dir prefixes).
+
+    Note (T1-5): map keys may now be composite ``parent/child`` two-segment
+    paths. They are tried BEFORE single-segment keys (more specific first);
+    maps without any '/' key take the original code path verbatim.
     """
     if fe_re is None:
         fe_re = re.compile(r'M\d+Module$')
 
-    # Priority 0 (NEW): explicit dir -> module map from manifest.
-    # Deterministic: relies on configuration, not on path naming conventions.
-    # NOTE: local var ``norm`` is used by this branch only; the branches
-    # below keep using ``file_path`` verbatim (zero side effects).
+    # Priority 0: explicit dir -> module map from manifest.
     if module_map:
         norm = str(file_path).replace("\\", "/")
-        for part in norm.split("/"):
+        segs = norm.split("/")
+        # 0a: composite "parent/child" keys (skipped when none exist, so
+        #     legacy single-segment maps behave exactly as before).
+        if any("/" in str(k).strip("/") for k in module_map.keys()):
+            for i in range(len(segs) - 1):
+                if not segs[i] or not segs[i + 1]:
+                    continue
+                pair = segs[i] + "/" + segs[i + 1]
+                if pair in module_map:
+                    return module_map[pair]
+        # 0b: single-segment keys (original behaviour)
+        for part in segs:
             if part in module_map:
                 return module_map[part]
 
@@ -782,18 +1277,62 @@ def _fe_module_match(file_path, name, fe_re=None, module_map=None):
     return None
 
 
-def _build_l2_groups(config):
+def _build_l2_groups(config, center=None, sources=None):
     """Scan code and group files into L2 modules.
+
+    Args:
+      center:  partition key (a ``centers.order`` entry or an alias). None =>
+               no partition (pre-change behaviour).
+      sources: output of ``scan_all_sources(config)``. When given it
+               **short-circuits** the legacy scan below -- that scan only
+               covers fe_page_dir/.vue and fe_bll_dir/.js, so the extra
+               frontend projects and every .ts/.less would never reach L2.
 
     Returns dict: {module_map, fe_mod_map, all_mods}.
     Shared by generate_l2 and stale detection (check mode).
+
+    Scope note: because ``sources`` is filtered by center first, the Infra
+    and Shared buckets only ever contain files of THIS partition -- they are
+    never merged across partitions.
     """
-    be_cs_bll = scan_cs_files(config.get("be_bll_dir"))
-    be_all = list(be_cs_bll)
-    for scan_dir in _backend_extra_dirs(config):
-        be_all.extend(scan_cs_files(scan_dir))
-    fe_vue = scan_vue_files(config.get("fe_page_dir"))
-    fe_js = scan_js_files(config.get("fe_bll_dir"))
+    center_key = _resolve_center_key(config.get("centers"), center) if center else None
+    if sources is None and center_key is not None:
+        sources = scan_all_sources(config)
+
+    if sources is not None:
+        # --- Unified-source mode: consume the flat list, filtered by center ---
+        bll_prefix = None
+        be_bll_dir = config.get("be_bll_dir")
+        if be_bll_dir is not None and PROJECT_ROOT is not None:
+            try:
+                bll_prefix = str(Path(be_bll_dir).relative_to(PROJECT_ROOT)
+                                 ).replace("\\", "/").rstrip("/") + "/"
+            except Exception:
+                bll_prefix = None
+
+        be_all = []
+        fe_all = []
+        for item in sources:
+            if center_key is not None and item.get("center") != center_key:
+                continue
+            if "classes" in item:
+                be_all.append(item)
+            else:
+                fe_all.append(item)
+
+        if bll_prefix is None:
+            be_cs_bll = list(be_all)
+        else:
+            be_cs_bll = [fd for fd in be_all if str(fd["path"]).startswith(bll_prefix)]
+    else:
+        # --- Legacy mode: unchanged scan surface (byte-identical output) ---
+        be_cs_bll = scan_cs_files(config.get("be_bll_dir"))
+        be_all = list(be_cs_bll)
+        for scan_dir in _backend_extra_dirs(config):
+            be_all.extend(scan_cs_files(scan_dir))
+        fe_vue = scan_vue_files(config.get("fe_page_dir"))
+        fe_js = scan_js_files(config.get("fe_bll_dir"))
+        fe_all = fe_vue + fe_js
 
     # --- Module anchors ---
     # Backend anchors: business modules extracted from any *Mgr class in BLL
@@ -840,7 +1379,7 @@ def _build_l2_groups(config):
     fe_re = _build_fe_name_regex(config.get("fe_page_pattern"))
     fe_mod_map = {}
     fe_shared = []
-    for v in fe_vue + fe_js:
+    for v in fe_all:
         key = _fe_module_match(v["path"], v["name"], fe_re, config.get("fe_module_map"))
         if key:
             fe_mod_map.setdefault(key, []).append(v)
@@ -870,7 +1409,8 @@ def _parse_l2_file_list(l2_file):
     paths = set()
     for m in re.finditer(r'^\| \d+ \| ([^|]+?) \|', content, re.MULTILINE):
         p = m.group(1).strip()
-        if p.endswith((".cs", ".vue", ".js")) and "/" in p:
+        # T2-5: .ts/.less 同属 L2 文件清单口径（与 scan_fe_files 默认 exts 对齐）
+        if p.endswith((".cs", ".vue", ".js", ".ts", ".less")) and "/" in p:
             paths.add(p)
     return paths
 
@@ -907,22 +1447,60 @@ def _detect_stale_l2(l2_dir, groups, only=None):
     return stale
 
 
-def generate_l2(config, check_only=False, force=False, module_filter=None):
+def generate_l2(config, check_only=False, force=False, module_filter=None, center=None):
+    """Generate L2 module wikis, optionally scoped to one center partition.
+
+    T2-3:
+      * ``config["centers"]`` absent (degraded single partition) -> ``l2_dir``
+        stays ``kb_dir/L2-modules`` and the L1 auto-generation block below is
+        untouched (AC-3: byte-identical to the pre-change run).
+      * centers present + ``center`` given -> only that partition is handled:
+        ``l2_dir`` becomes ``kb_dir/<center>/L2-modules``; the root-level
+        ``L1-overview.md`` is neither written nor auto-generated (hint only).
+    """
     kb_dir = config["kb_dir"]
-    l2_dir = kb_dir / "L2-modules"
+    centers = config.get("centers")
+
+    if centers is not None and not center:
+        # 全量运行：L2 只存在于分区目录 => 逐分区各跑一次（不写根级 L2）
+        all_ok = True
+        for _key in (centers.get("order") or []):
+            if not generate_l2(config, check_only=check_only, force=force,
+                               module_filter=module_filter, center=_key):
+                all_ok = False
+        return all_ok
+
+    center_key = None
+    if centers is not None and center:
+        center_key = _resolve_center_key(centers, center)
+        if not center_key:
+            safe_print(f"  [WARN] 未知分区 '{center}' ⇒ 退回根级 L2（可用: "
+                       + ", ".join(centers.get("order") or []) + "）")
+
+    if centers is None or not center_key:
+        l2_dir = kb_dir / "L2-modules"
+    else:
+        l2_dir = kb_dir / center_key / "L2-modules"
 
     # Ensure L1 exists first (skip auto-generation in check mode)
     l1_path = kb_dir / "L1-overview.md"
-    if not l1_path.exists():
-        if check_only:
-            safe_print("  [INFO] L1 不存在（check 模式下跳过自动生成）")
-        else:
-            safe_print("  [INFO] L1 不存在，先执行 L1 生成")
-            if not generate_l1(config, check_only=False, force=force):
-                return False
+    if center_key:
+        # Partition mode: root L1 is the global overview, not partition-owned.
+        if not l1_path.exists():
+            safe_print("  [INFO] 分区模式：不生成根级 L1-overview.md"
+                       "（如需全局概览请先跑 --level L1）")
+    else:
+        if not l1_path.exists():
+            if check_only:
+                safe_print("  [INFO] L1 不存在（check 模式下跳过自动生成）")
+            else:
+                safe_print("  [INFO] L1 不存在，先执行 L1 生成")
+                if not generate_l1(config, check_only=False, force=force):
+                    return False
 
-    # Scan and group files into modules
-    groups = _build_l2_groups(config)
+    # Scan and group files into modules (partition mode consumes one flat scan)
+    sources = scan_all_sources(config) if center_key else None
+    groups = _build_l2_groups(config, center=center_key, sources=sources)
     module_map = groups["module_map"]
     fe_mod_map = groups["fe_mod_map"]
     all_mods = groups["all_mods"]
@@ -958,7 +1536,6 @@ def generate_l2(config, check_only=False, force=False, module_filter=None):
         if mod_file.exists():
             auto = _is_auto_generated(mod_file)
             if not auto:
-                # Manually edited file: never overwritten (decision F)
                 safe_print(f"  [SKIP] L2/{mod_name}.md 已存在（人工编辑，不覆盖）")
                 continue
             if not force:
@@ -998,7 +1575,6 @@ def generate_l2(config, check_only=False, force=False, module_filter=None):
             for f in fe if f["type"] in ("Page", "Component")
         ), 3)
 
-        # root_dirs = backend dirs + frontend dirs (consumed by phase-03 step-1.2)
         fe_dirs = set(str(Path(f["path"]).parent).replace("\\", "/") for f in fe)
         all_root_dirs = sorted(set(be["root_dirs"]) | fe_dirs)
         root_dirs_str = "".join(f"  - {rd}\n" for rd in all_root_dirs)
@@ -1020,6 +1596,9 @@ def generate_l2(config, check_only=False, force=False, module_filter=None):
         _inc_written()
         generated += 1
 
+    if center_key:
+        scanned = len([s for s in (sources or []) if s.get("center") == center_key])
+        safe_print(f"  分区={center_key} 扫描={scanned} 文件 写入={generated} 个 L2")
     safe_print(f"  [OK] L2 生成: {l2_dir}（{generated} 个模块文件）")
     return True
 
@@ -1256,7 +1835,7 @@ def generate_l3(config, check_only=False, force=False):
 # The fingerprint records (mtime, size) per scanned file, so any content change
 # becomes visible to --check.
 
-FINGERPRINT_VERSION = 1
+FINGERPRINT_VERSION = 2   # v2: 3 个前端工程 + .ts/.less + backend_root 全量
 
 # ★ 本次运行实际写入的 KB 文件数 —— 指纹基线只在「确有写入 + 全量运行」时重建；
 #   否则一次空跑（全部 SKIP）会用当前代码状态覆盖基线，抹掉"待刷新"信号。
@@ -1278,28 +1857,56 @@ def _fingerprint_path():
 def _collect_fingerprint_files(config):
     """Files covered by the L1/L2/L3 scans (os.stat only -- no content read).
 
+    T2-6: the surface now equals ``scan_all_sources`` -- all
+    ``frontend_projects[].src`` (no longer just the first page dir) with
+    ``.vue/.ts/.less/.js`` and the whole ``backend_root`` (falls back to the
+    legacy BLL + extra dirs).  ``*.d.ts`` is excluded **by file name** (its
+    suffix is still ``.ts``, so an extension test cannot express it).
+
     Robustness: unreadable dirs (rglob) and paths outside the project root
     (relative_to) are skipped with a single warning instead of raising.
     """
     dirs = []
-    for key in ("fe_page_dir", "fe_bll_dir", "be_bll_dir"):
-        d = config.get(key)
-        if d and d.exists():
-            dirs.append(d)
-    dirs.extend(_backend_extra_dirs(config))
-    pats = (".vue", ".js", ".cs")
+    for proj in (config.get("frontend_projects") or []):
+        src = proj.get("src") if isinstance(proj, dict) else None
+        if not src:
+            continue
+        p = Path(src)
+        if p.exists() and p not in dirs:
+            dirs.append(p)
+    d = config.get("fe_bll_dir")
+    if d and d.exists() and Path(d) not in dirs:
+        dirs.append(Path(d))
+    if not dirs:
+        for key in ("fe_page_dir", "fe_bll_dir"):
+            d = config.get(key)
+            if d and d.exists() and Path(d) not in dirs:
+                dirs.append(Path(d))
+
+    be_root = config.get("backend_root")
+    if be_root and Path(be_root).exists():
+        dirs.append(Path(be_root))
+    else:
+        d = config.get("be_bll_dir")
+        if d and d.exists() and Path(d) not in dirs:
+            dirs.append(Path(d))
+        dirs.extend(_backend_extra_dirs(config))
+
+    pats = (".vue", ".ts", ".less", ".js", ".cs")
     seen = set()
     files = []
     warned = False
     for d in dirs:
         try:
-            candidates = sorted(d.rglob("*"))
+            candidates = sorted(Path(d).rglob("*"))
         except OSError as e:
             safe_print(f"  [WARN] 指纹采集跳过不可读目录 {d}: {e}")
             continue
         for f in candidates:
             try:
                 if not f.is_file() or f.suffix.lower() not in pats:
+                    continue
+                if f.name.lower().endswith(".d.ts"):
                     continue
                 if _is_build_artifact(f):
                     continue
@@ -1348,7 +1955,52 @@ def _load_fingerprint():
     return (files, "ok") if isinstance(files, dict) else (None, "invalid")
 
 
-def _save_fingerprint(config):
+def _fingerprint_scopes(config):
+    """rel path -> center key for every fingerprint-covered file (T2-8).
+
+    唯一判定口径：``_merge_center_fingerprint`` / ``_diff_fingerprint`` /
+    ``_report_fingerprint`` 全部只调用本函数。
+
+    Authoritative source = ``scan_all_sources()`` (与 L2 分组同一判定)。
+    扫描面覆盖不到但仍进指纹的文件（无任何类的 .cs、只声明 .vue/.ts/.less
+    的工程里的 .js）用 ``_classify_center`` 补齐 => 映射是全量的。
+    退化模式（无 ``centers``）返回 None => 不过滤。
+    """
+    centers = config.get("centers")
+    if centers is None:
+        return None
+    scopes = {}
+    for s in scan_all_sources(config):
+        scopes[s["path"]] = s.get("center")
+
+    binding_of = {}
+    for proj in (config.get("frontend_projects") or []):
+        src = proj.get("src") if isinstance(proj, dict) else None
+        if not src:
+            continue
+        try:
+            prefix = str(Path(src).relative_to(PROJECT_ROOT)).replace("\\", "/")
+        except Exception:
+            prefix = str(src).replace("\\", "/")
+        prefix = prefix.rstrip("/")
+        if prefix:
+            binding_of[prefix] = proj.get("center")
+
+    for rel, _f in _collect_fingerprint_files(config):
+        if rel in scopes:
+            continue
+        binding, best = None, -1
+        for prefix, c in binding_of.items():
+            if (rel == prefix or rel.startswith(prefix + "/")) and len(prefix) > best:
+                best, binding = len(prefix), c
+        scopes[rel] = _classify_center(rel, binding, centers)
+    return scopes
+
+
+def _save_fingerprint(config, center=None):
+    """Rebuild the whole baseline (center=None) or merge one partition (T2-7)."""
+    if center:
+        return _merge_center_fingerprint(config, center)
     p = _fingerprint_path()
     if not p:
         return False
@@ -1366,8 +2018,64 @@ def _save_fingerprint(config):
         return False
 
 
-def _diff_fingerprint(config):
+def _merge_center_fingerprint(config, center=None):
+    """Merge ONE partition into the existing baseline (T2-7).
+
+    Semantics: overwrite this partition's keys, **delete this partition's keys
+    that no longer exist** (so ``--center X --check`` can still report
+    ``-N 已删除``), leave every other partition untouched.
+
+    invalid 守卫: 基线缺失/损坏/版本不符时绝不落盘 —— 把局部状态合并到一个
+    陌生基线之上，等于替其它分区"销账"。
+    """
+    p = _fingerprint_path()
+    if not p:
+        return False
+    old, state = _load_fingerprint()
+    if state != "ok":
+        safe_print("  [FAIL] 指纹基线无效（缺失/损坏/版本不符）"
+                   " => 请先执行一次全量生成重建指纹基线")
+        return False
+
+    centers = config.get("centers")
+    center_key = _resolve_center_key(centers, center) if (centers and center) else None
+    scopes = _fingerprint_scopes(config)
+    if center_key is None or scopes is None:
+        in_scope = lambda rel: True
+    else:
+        in_scope = lambda rel: scopes.get(rel) == center_key
+
+    current = _compute_fingerprint(config)
+    merged = {k: v for k, v in (old or {}).items() if not in_scope(k)}
+    covered = 0
+    for k, v in current.items():
+        if in_scope(k):
+            merged[k] = v
+            covered += 1
+    dropped = sum(1 for k in (old or {}) if in_scope(k) and k not in current)
+
+    payload = {
+        "version": FINGERPRINT_VERSION,
+        "generated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "files": merged,
+    }
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        safe_print(f"  [WARN] 指纹写入失败: {e}")
+        return False
+    safe_print(f"  [OK] 指纹分区已合并: 分区={center_key or '(全部)'} "
+               f"覆盖={covered} 移除={dropped} 总键={len(merged)}")
+    return True
+
+
+def _diff_fingerprint(config, center=None):
     """Compare current files vs cached fingerprint.
+
+    ``center`` restricts the comparison to one partition using the **same**
+    predicate as ``_merge_center_fingerprint`` (``_fingerprint_scopes``), so a
+    partition-scoped check can never disagree with a partition-scoped merge.
 
     Returns (added, removed, changed, state). Malformed cache values are treated
     as "changed" (never raise -- --check must stay read-only and safe).
@@ -1376,7 +2084,15 @@ def _diff_fingerprint(config):
     cached, state = _load_fingerprint()
     if state != "ok":
         return None, None, None, state
-    cur_keys, old_keys = set(current), set(cached)
+
+    scopes = _fingerprint_scopes(config) if center else None
+    if center and scopes is not None:
+        center_key = _resolve_center_key(config.get("centers"), center) or center
+        cur_keys = {k for k in current if scopes.get(k) == center_key}
+        old_keys = {k for k in cached if scopes.get(k) == center_key}
+    else:
+        cur_keys, old_keys = set(current), set(cached)
+
     added = sorted(cur_keys - old_keys)
     removed = sorted(old_keys - cur_keys)
     changed = []
@@ -1390,9 +2106,9 @@ def _diff_fingerprint(config):
     return added, removed, changed, state
 
 
-def _report_fingerprint(config):
+def _report_fingerprint(config, center=None):
     """Print the fingerprint diff (check mode). Returns True when changed."""
-    added, removed, changed, state = _diff_fingerprint(config)
+    added, removed, changed, state = _diff_fingerprint(config, center=center)
     if state == "missing":
         safe_print("  [INFO] 文件指纹：无基线（首次全量生成后自动建立），跳过比对")
         return False
@@ -1404,7 +2120,8 @@ def _report_fingerprint(config):
     if total == 0:
         safe_print("  [INFO] 文件指纹：与上次全量刷新一致（mtime_ns + size 无变化）")
         return False
-    safe_print(f"  [INFO] 文件指纹：{total} 处变更"
+    scope = f"（分区 {center}）" if center else ""
+    safe_print(f"  [INFO] 文件指纹{scope}：{total} 处变更"
                f"（+{len(added)} 新增 / -{len(removed)} 删除 / ~{len(changed)} 修改）")
     for p in (removed + changed + added)[:5]:
         safe_print(f"         ~ {p}")
@@ -1427,6 +2144,52 @@ def safe_print(*args, **kwargs):
         print(*safe_args, **kwargs)
 
 
+def _report_partition_reconciliation(config):
+    """Per-partition file counts + partition-vs-total check (AC-6 / T2-10).
+
+    Returns True when every scanned source lands in a declared partition and
+    the partition counts add up to the full scan. Degraded mode (no
+    ``centers``) is a no-op.
+    """
+    centers = config.get("centers")
+    if not centers:
+        safe_print("  [INFO] 分区对账：manifest 未声明 centers（退化单分区）=> 跳过")
+        return True
+
+    counts = {}
+    for s in scan_all_sources(config):
+        c = s.get("center")
+        counts[c] = counts.get(c, 0) + 1
+
+    order = list(centers.get("order") or [])
+    keys = list(order)
+    for c in counts:
+        if c not in keys:
+            keys.append(c)
+
+    total = 0
+    unknown = []
+    for k in keys:
+        n = counts.get(k, 0)
+        total += n
+        if k not in order:
+            unknown.append(k)
+        safe_print(f"         分区={k} 文件={n}")
+    overall = sum(counts.values())
+    safe_print(f"         合计={total} 全量={overall}")
+
+    ok = True
+    if unknown:
+        safe_print(f"  [FAIL] 存在未声明的分区键: {unknown}")
+        ok = False
+    if total != overall:
+        safe_print("  [FAIL] 分区对账不一致")
+        ok = False
+    if ok:
+        safe_print("  [OK] 分区对账一致（每个文件唯一归属，合计 == 全量）")
+    return ok
+
+
 # --- Main ---
 
 def main():
@@ -1441,18 +2204,36 @@ def main():
                         help="Overwrite auto-generated: true files")
     parser.add_argument("--module", type=str, default=None,
                         help="Generate L2 for specific module only (fuzzy match)")
+    parser.add_argument("--center", type=str, default=None,
+                        help="Partition key/alias from manifest 'centers' "
+                             "(scoped L2 + scoped fingerprint)")
     args = parser.parse_args()
 
     safe_print("=" * 60)
     safe_print("gen-knowledge-base.py -- L1/L2/L3 knowledge base generator")
 
     config = load_manifest()
+    # T2-8: --center 一律先归一为 centers.order 的规范键（别名/大小写/下划线）
+    center_key = None
+    if args.center:
+        centers = config.get("centers")
+        if not centers:
+            safe_print(f"[FAIL] manifest 未声明 centers => --center '{args.center}' 不可用")
+            return 2
+        center_key = _resolve_center_key(centers, args.center)
+        if not center_key:
+            safe_print(f"[FAIL] 未知中心 '{args.center}'"
+                       f"（可用: {', '.join(centers.get('order') or [])}）")
+            return 2
+        args.center = center_key
     kb_dir = config["kb_dir"]
     safe_print(f"Project root: {PROJECT_ROOT}")
     safe_print(f"Output dir:  {kb_dir}")
     safe_print(f"Level: {args.level}, check={args.check}, force={args.force}")
     if args.module:
         safe_print(f"Module filter: {args.module}")
+    if center_key:
+        safe_print(f"Center filter: {center_key}")
     safe_print("=" * 60)
 
     if args.check:
@@ -1461,35 +2242,55 @@ def main():
         safe_print("\n[GENERATE] 生成知识库：")
 
     level = args.level
+    rc = 0
     if level in ("L1", "all"):
-        safe_print("\n--- L1: 项目模块总览 ---")
-        generate_l1(config, check_only=args.check, force=args.force)
-        if args.check:
-            _report_module_dir_coverage(config)
+        if center_key:
+            # AC-7: 分区刷新不改写、也不自动生成根级 L1-overview.md
+            safe_print("\n--- L1: 项目模块总览 ---")
+            safe_print("  [SKIP] 分区刷新不改写根级 L1-overview.md（AC-7）")
+        else:
+            safe_print("\n--- L1: 项目模块总览 ---")
+            generate_l1(config, check_only=args.check, force=args.force)
+            if args.check:
+                _report_module_dir_coverage(config)
 
     if level in ("L2", "all"):
         safe_print("\n--- L2: 模块级 Wiki ---")
         generate_l2(config, check_only=args.check, force=args.force,
-                    module_filter=args.module)
+                    module_filter=args.module, center=center_key)
+        # T2-10 (AC-6): 全量 --check 追加分区对账，不一致则退出码非 0
+        if (args.check and level == "all"
+                and not args.module and not center_key):
+            if not _report_partition_reconciliation(config):
+                rc = 1
 
     if level in ("L3", "all"):
-        safe_print("\n--- L3: 术语映射表 ---")
-        generate_l3(config, check_only=args.check, force=args.force)
+        if center_key:
+            safe_print("\n--- L3: 术语映射表 ---")
+            safe_print("  [SKIP] L3 仅全量重建（--center 分区刷新不重建术语映射）")
+        else:
+            safe_print("\n--- L3: 术语映射表 ---")
+            generate_l3(config, check_only=args.check, force=args.force)
 
     # ★ 文件指纹：检出"既有文件被改动"（集合比对之外的第二信号）
     #   check：仅报告（不写文件）；生成：仅在**确有写入**且为**全量**时重建基线。
     fp_changed = False
-    full_run = (args.level == "all") and not args.module
+    full_run = (args.level == "all") and not args.module and not center_key
     if args.check:
         safe_print("\n--- 文件指纹（mtime_ns + size 变更检测）---")
         if full_run:
             fp_changed = _report_fingerprint(config)
+        elif center_key:
+            fp_changed = _report_fingerprint(config, center=center_key)
         else:
             safe_print("  [INFO] 部分检查（--level / --module）⇒ 跳过指纹比对，避免越界提示")
     else:
         safe_print("\n--- 文件指纹 ---")
         if _WRITTEN_KB_FILES <= 0:
             safe_print("  [SKIP] 本次未写入任何知识库文件 ⇒ 指纹基线保持不变（不掩盖待刷新信号）")
+        elif center_key:
+            if _save_fingerprint(config, center=center_key):
+                safe_print(f"  [OK] 指纹分区已合并: 分区={center_key}")
         elif not full_run:
             safe_print("  [SKIP] 部分刷新（--level / --module）⇒ 指纹基线保持不变，待全量刷新重建")
         elif _save_fingerprint(config):
@@ -1510,7 +2311,7 @@ def main():
         safe_print("    ⇒ 该文件将整体失去自动刷新能力；分节保留人工内容当前不支持")
         safe_print("  - 建议人工补充 L2 业务语义段 + L3 未映射术语")
     safe_print("=" * 60)
-    return 0
+    return rc
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@
 | 子步骤 | 功能 | 优先数据源 | 回退路径 | 预估Token |
 |:------:|------|-----------|---------|:---:|
 | step-1.1 | **意图消歧**：匹配需求关键词→候选模块 | `{{KB_DIR}}/L1-overview.md`（读取 config→kb_dir/l1_file） | specs 4文件 → list_dir | ~2K |
-| step-1.2 | **模块定位**：锁定模块→精确文件清单（★多项目：遍历 `ALL_FRONTEND_ROOTS` + `ALL_BACKEND_ROOTS`） | `{{KB_DIR}}/L2-modules/{module}.md`（HTML注释解析 root_dirs；读取前 `--check` 校验新鲜度，过时先刷） | list_dir 扫描候选目录 | ~15K |
+| step-1.2 | **模块定位**：锁定模块→精确文件清单（★多项目：遍历 `ALL_FRONTEND_ROOTS` + `ALL_BACKEND_ROOTS`） | **★中心分区**（判据 = manifest 有无 `centers` 段）：有 ⇒ `{{KB_DIR}}/{center}/L2-modules/{module}.md`；无 ⇒ `{{KB_DIR}}/L2-modules/{module}.md`（向后兼容，路径与格式不变）（HTML注释解析 root_dirs；读取前 `--check` 校验新鲜度，过时先刷） | list_dir 扫描候选目录 | ~15K |
 | step-1.3 | **关键词搜索**：五维展开搜索命中行 | `search_content`（类名/方法名/表名/路由/业务术语） | — | 0（Agent侧预过滤） |
 | step-1.4 | **调用链追踪**：读取命中函数→展开调用链 | `read_file` 命中函数上下文 | — | ~10K |
 | step-1.5 | **验证确认**：读取最终改动点→确认方案 | `read_file` 最终修改目标文件 | — | ~5K |
@@ -34,7 +34,10 @@ Step 1.1: {{KB_DIR}}/L1-overview.md 存在？→ 读 L1 : 读 specs 4 文件
 Step 1.2: ★ 读取前新鲜度校验（防御性兜底，覆盖同迭代内 04 改动场景）：
            python scripts/gen-knowledge-base.py --check --level L2
            若目标模块被标记"过时/缺失"→ 先执行 --force --module {module} 刷新，再读取
-           {{KB_DIR}}/L2-modules/{module}.md 存在？→ 读 L2 : list_dir 扫描
+           ★ L2 根二选一（判据 = manifest 有无 centers 段）：
+             有 ⇒ {{KB_DIR}}/{center}/L2-modules/{module}.md
+             无 ⇒ {{KB_DIR}}/L2-modules/{module}.md（向后兼容，路径与格式不变）
+           上述 L2 文件存在？→ 读 L2 : list_dir 扫描
            L2 存在但 root_dirs 缺失？→ 输出警告 + 走回退路径
 Step 1.6: {{KB_DIR}}/L1-overview.md 不存在？→ 自动生成 : 跳过
            （自动生成逻辑等同 scripts/gen-knowledge-base.py --level L1）
@@ -58,6 +61,7 @@ Step 1.6 L1 自动生成时：
   遍历 ALL_BACKEND_ROOTS：
     扫描 {root}/{backend_layers.bll.dir}/*.cs
     → {{KB_DIR}}/L1-overview.md 后端模块表标注归属项目（路径前缀）
+  ★ L1 模块表含 center 列时（manifest 有 centers 段）→ 可直接读该列判定归属中心，免按路径前缀二次推断
   
   若某项目的分层结构与主 frontend_layers/backend_layers 不一致：
     检查 manifest.paths.project_overrides[{项目目录名}]
