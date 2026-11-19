@@ -82,6 +82,10 @@ runtime/*.state.yaml
 runtime/*.state.archived.yaml
 runtime/ACTIVE
 runtime/*.log
+# 回归/备份产物（2026-11-19）：state-apply 的 LOG/SNAPSHOTS 已改为跟随 STATE_APPLY_ROOT，
+# 隔离根演练写 runtime/state-apply-tests/，每次写入的 state 备份进 runtime/snapshots/
+runtime/state-apply-tests/
+runtime/snapshots/
 
 # Project-local lessons learned (not shared)
 project/lessons-learned.md
