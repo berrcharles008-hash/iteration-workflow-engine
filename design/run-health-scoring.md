@@ -418,7 +418,7 @@ curl.exe -sSL -m 600 -o LoopForge-main.zip "https://ghfast.top/https://github.co
 | S3 维度定稿（§4） | ✅ | 2026-11-19 | 5 评分维（30/25/20/15/10）+ 4 观测项；准入 75；R1/R2 封顶 59；剔除耗时/绕过/复用三项见 §4.1 |
 | S4 评分脚本 + 07 接入 | ✅ | 2026-11-19 | `runtime/metrics/score-run.mjs` + `score-config.json` + 07 §6.4；两迭代实测 **88 / 77**，5 条验收全过（见 §8 步骤 6 收口） |
 | S4 前向验证（原「历史回测」） | ☐ | | 历史 state 只剩 2 个 ⇒ 不可回算（§2 #8）；脚本已实现观察期闸门（`events[]` 存在的前 2 个迭代 `judged=false`），等新迭代落样本 |
-| 回流引擎仓库 | ☐ | | 仅 `engine/` 与 `scripts/` 的改动；`runtime/metrics/` 不回流 |
+| 回流引擎仓库 | ✅ | 2026-11-19 | `01509d2`（design 文档）+ `5b3785e`（`engine/phase-07.md`）。A6 复核后仅剩 `capability-map.md` / `evolution-safety.md` 两处，方向是**实例侧落后于仓库**（仓库为 11-19 session-hub 落点更正）⇒ 属部署同步，不是回流欠账。**同日晚已部署同步到位**：双端 SHA256 一致（`16710` / `52553` 字节），`audit-engine.py --src` 的 **A6 = 与源仓库一致**、A10-e OK、ERR 仍为既有基线 16 |
 
 ## 7. 为何不走正式迭代流程
 
