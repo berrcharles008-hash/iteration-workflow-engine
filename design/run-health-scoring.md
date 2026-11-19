@@ -422,6 +422,25 @@ curl.exe -sSL -m 600 -o LoopForge-main.zip "https://ghfast.top/https://github.co
 | S4 前向验证（原「历史回测」） | ☐ | | 历史 state 只剩 2 个 ⇒ 不可回算（§2 #8）；脚本已实现观察期闸门（`events[]` 存在的前 2 个迭代 `judged=false`），等新迭代落样本 |
 | 回流引擎仓库 | ✅ | 2026-11-19 | `01509d2`（design 文档）+ `5b3785e`（`engine/phase-07.md`）。A6 复核后仅剩 `capability-map.md` / `evolution-safety.md` 两处，方向是**实例侧落后于仓库**（仓库为 11-19 session-hub 落点更正）⇒ 属部署同步，不是回流欠账。**同日晚已部署同步到位**：双端 SHA256 一致（`16710` / `52553` 字节），`audit-engine.py --src` 的 **A6 = 与源仓库一致**、A10-e OK、ERR 仍为既有基线 16 |
 
+### 6.1 本轮改造与收益速览（2026-11-19 收口）
+
+> 本小节是**速览索引**（给接手人一屏看完"改了什么 / 收益到哪一档"），细则一律以 §8 各步骤收口表与 §9 论证方案为准，**不复制判据**。
+
+**改造 7 件**：① **M4 规则注入** = `engine/rules/manifest.json`（v1.1 `base_rules`+`stage_rules`+13 profiles）+ `scripts/inspect-context.py` + `scripts/build-stage-prompt.py`；② **M2 状态写入统一** = `state-apply.py` 的 `append-steps`/`rotate-team`/`resume` + 自动 `events[]` + 门禁 `isStateYamlDirectWrite`（置于 `isAlwaysAllow` 之前，否则命中 runtime/ 豁免成死代码）；③ **M1 产物内容合同** = `engine/templates/manifest.json`（7 产物 × full/lite）+ `validate-artifacts.py`（6 判据）+ `baseline-set`/`artifact-check`；④ **S2a/S2b 度量底座** = `runtime/metrics/` 四件（含派生窗尾裁剪、`cache_hit` 正名）；⑤ **S3 评分口径** = §4 五维 + 四观测项；⑥ **S4 评分脚本 + 07 §6.4** = `score-run.mjs` + `score-config.json`；⑦ **回流 + 部署同步** = `01509d2`/`5b3785e` + 两文件 SHA256 一致、A6 一致。
+
+**收益按 §9.2 三范式分档，不可混用**：
+
+| 档 | 项 | 证据 | 强度 |
+|:--|:--|:--|:--|
+| A 能力增量 | S2 度量 + S4 评分 | metrics 覆盖率 **0/2 → 2/2**（改前 `runtime/metrics` 不存在，07 归档③ 三条命令全不可用）；两迭代实测 **88 / 77**，对 §4.11 人工粗算 +1/+4 | ✅ **硬证据**（唯一干净对照） |
+| B 前后基线 | M4 规则注入 | 设计锚点 `SKILL.md` **12.4 KB** → `--stage 04` **0.9 KB / 26 行**、`--stage 00` **0.2 KB / 14 行**；两次跑同阶段输出逐字一致 | ⚠️ 结构证据（改前行为读取集未留档） |
+| B 前后基线 | M2 写入统一 | 手写 YAML **0 次**（Σversion 106 − 日志非测试行 106）；单次更新 2 step ≈105 s | ⚠️ 改前改后同为 0 ⇒ 无对照，仅护栏 |
+| C 反事实举证 | M1 内容合同 | 仅**人造探针**：复制 002 的 07 报告 ⇒ `reuse` rc=1、R1 封顶 59 | ⚠️ **不得**称「修了 N 例」 |
+
+**三条边界（说过头即失真）**：① 0003 仅 2 个迭代且 `state-apply.py` 自 2026-10-03 已在用 ⇒ M1/M2 在本项目**注定无法证明收益**，只能算防回归护栏；② T0 第 4 项（改前行为读取集）证据**永久失去**，M4 效率只能算「设计基线 vs 清单体积」；③ §9.4 明确 **T3（5 个迭代）之前「改造有效」是待验证假设**，§9.6 回滚条件仍有效。
+
+**引擎 vs 实例**：M1/M4 产物在分发面内（`install.ps1` 会带到各实例），S4 的 `score-run.mjs` 在 `runtime/metrics/` 按既有判据**不回流**；实测收益目前只落在 0003 —— 0010(PIVAS) 侧 `engine/templates/manifest.json` / `validate-artifacts.py` / `engine/rules/manifest.json` / `score-run.mjs` **四个关键路径全缺** ⇒ 引擎有了能力，另一实例尚未吃到。
+
 ## 7. 为何不走正式迭代流程
 
 改造对象就是 iteration-workflow 引擎本身。若开一个正规迭代：S2 改 `runtime/metrics/`、S4 改 `engine/phase-07.md`，而 04~06 阶段的门禁、自检、归档判据都依赖这些文件——等于边开车边换轮胎，05/06 阶段的基准会在改造中途漂移。
