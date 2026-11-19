@@ -285,6 +285,26 @@ self_evolve:
   patterns_deferred: 0   # 必须为 0；不允许推迟
 ```
 
+**6.4 运行健康度评分（S4 · 可选 · ★ 不阻断归档）**：
+
+> 时点：在 §6.2 ① 写入 07 完成条目**之后**（否则 07 产物无从判「阶段后回改」）。显式传 `--iteration`
+> ⇒ 不依赖 ACTIVE 是否已释放，放在 ② 前后皆可。
+
+```powershell
+$score = ".codebuddy/skills/iteration-workflow/runtime/metrics/score-run.mjs"
+if (Test-Path $score) { node $score --iteration "<迭代ID>" } else { Write-Output "SKIP(no metrics)" }
+```
+
+- **输出**：stdout 的「## 运行健康度」Markdown 段原样粘进 `07-迭代回顾/07-迭代回顾*.md` 末尾；
+  同笔落 `runtime/metrics/scores/<迭代ID>.json` + `scores.csv`（脚本只读，不改任何产物）。
+- **口径**：唯一事实源 `design/run-health-scoring.md` §4；权重/阈值在 `runtime/metrics/score-config.json`。
+  **禁止手工改分**——要改口径先改 §4 并取得用户拍板。
+- **三种非阻断态，一律照常归档**：`SKIP(no metrics)`（未装度量底座）/ 某维 `—`（取不到数，不写 0）/
+  `judged=false`（缺数权重 >30% 或处于观察期）。
+- ★ **为何不阻断**：R1 级阻断已由 §6.1 的 `artifact-check` 承担；评分是反馈信号，不是门禁（对标 §5「不自动回写」）。
+- ★ **同一迭代只追加一次**：追加段会让 07 报告 mtime 晚于 `completed_at` ⇒ 重算该迭代时 D4① 会把它计成
+  「阶段后回改」。要复算历史迭代用 `--no-write` 只看 stdout，不要再追加。
+
 **产出**：🟢 简单 = `07-迭代回顾/07-迭代回顾.md`（精简三段式）；🟡 中等 / 🔴 复杂 = `07-迭代回顾/07-迭代回顾报告.md`（均为独立文件）
 
 > **版式纪律**：产出文档须遵循 `engine/doc-style-guide.md`（模式条目用"编号 + 要点列表"，不塞表格）；生成后自检 `python scripts/doc_lint.py <文件>`（ERROR 必修）。
