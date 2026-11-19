@@ -1,0 +1,1322 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>session-hub · CLI 会话中心</title>
+<style>
+  :root{
+    --bg:#f4f6f9; --panel:#ffffff; --sb:#f7f8fa; --sb-hi:#eceef2; --sb-line:#e8eaee; --sb-tx:#4b5563; --sb-tx-hi:#1f2733;
+    --tx:#1f2733; --tx2:#66707e; --line:#e4e8ee; --acc:#2f6bff; --acc-bg:#eaf1ff;
+    --ok:#16a34a; --warn:#d97706; --bad:#dc2626; --muted:#8a93a1;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;font-family:system-ui,"Segoe UI","Microsoft YaHei",sans-serif;font-size:14px;color:var(--tx);background:var(--bg);display:flex;overflow:hidden}
+  button{font-family:inherit;font-size:12.5px;padding:3px 10px;border-radius:6px;border:1px solid var(--line);background:#fff;color:var(--tx);cursor:pointer}
+  button:hover{border-color:var(--acc);color:var(--acc)}
+  button.danger{color:var(--bad);border-color:#f3c1c1}
+  button.danger:hover{background:#fdf1f1}
+  button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
+  button.primary:hover{opacity:.9;color:#fff}
+  a{color:var(--acc);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .meta{color:var(--tx2);font-size:12px}
+  .pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11.5px;background:#eef1f5;color:var(--tx2)}
+  .pill.ok{background:#e7f6ec;color:var(--ok)}
+  .pill.warn{background:#fdf3e3;color:var(--warn)}
+  .pill.bad{background:#fdeaea;color:var(--bad)}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex:none}
+
+  /* ── 侧栏（浅色） ── */
+  #sidebar{width:284px;flex:none;background:var(--sb);border-right:1px solid var(--sb-line);color:var(--sb-tx);display:flex;flex-direction:column;overflow:hidden;transition:width .18s ease}
+  .sb-head{display:flex;align-items:center;gap:6px;padding:12px 12px 6px}
+  .sb-brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:15px;color:var(--sb-tx-hi);flex:1;min-width:0}
+  .sb-brand .logo{color:var(--acc);font-size:16px}
+  .sb-brand small{font-weight:400;color:var(--muted);font-size:11px}
+  .icon-btn{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border-radius:8px;border:none;background:transparent;color:#6b7280;cursor:pointer;flex:none}
+  .icon-btn:hover{background:var(--sb-hi);color:var(--tx)}
+  .icon-btn svg{width:16px;height:16px}
+  .sb-search{position:relative;margin:2px 12px 8px}
+  #sb_search{width:100%;padding:7px 26px 7px 30px;border-radius:8px;border:1px solid var(--sb-line);background:#fff;font-family:inherit;font-size:12.5px;color:var(--tx);outline:none}
+  #sb_search:focus{border-color:var(--acc)}
+  #sb_search::placeholder{color:#9aa1ac}
+  .sb-search .s-ico{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:#9aa1ac;display:flex;pointer-events:none}
+  .sb-search .s-ico svg{width:13px;height:13px}
+  #sb_sclear{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:18px;height:18px;border:none;background:transparent;color:#9aa1ac;cursor:pointer;font-size:14px;line-height:1;padding:0;display:none;border-radius:50%}
+  #sb_sclear:hover{color:var(--tx)}
+  #btn_new{display:flex;align-items:center;justify-content:center;gap:6px;margin:2px 12px 8px;padding:9px;border-radius:10px;border:none;background:#ebeef2;color:var(--tx);font-size:13px;font-weight:500;cursor:pointer}
+  #btn_new:hover{background:#e0e4ea}
+  #btn_new svg{width:15px;height:15px}
+  #sb_groups{flex:1;overflow-y:auto;overflow-x:hidden;padding:0 8px 10px}
+  .grp{margin-top:8px}
+  .grp-title{font-size:11.5px;font-weight:600;letter-spacing:.03em;color:#9aa1ac;padding:6px 8px;text-transform:uppercase;display:flex;justify-content:space-between;align-items:center}
+  .grp-title span:last-child{font-weight:400;color:#b6bcc6}
+  .grp-day{font-size:11px;font-weight:600;color:#8b93a0;padding:6px 8px 2px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none;border-radius:6px}
+  .grp-day:hover{background:var(--sb-hi)}
+  .grp-day span:last-child{font-weight:400;color:#b6bcc6}
+  .it{padding:7px 10px;border-radius:8px;cursor:pointer;display:flex;gap:8px;align-items:flex-start;margin-bottom:1px}
+  .it:hover{background:var(--sb-hi)}
+  .it.sel{background:var(--sb-hi)}
+  .it .t{flex:1;min-width:0}
+  .it .t .n{display:block;color:var(--sb-tx-hi);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .it .t .n .nt{color:#8b93a0;font-weight:400;font-size:11.5px;margin-right:5px}
+  .it .t .s{display:block;color:#9aa1ac;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+  .sb-foot{padding:8px 10px;border-top:1px solid var(--sb-line);font-size:12px;display:flex;align-items:center;gap:6px}
+  .sb-foot .icon-btn{margin-left:auto}
+
+  /* ── 侧栏折叠态：侧栏收起，左上角悬浮胶囊条（logo | 折叠 | 新建） ── */
+  body.sb-collapsed #sidebar{width:0;border-right-color:transparent}
+  #sb_float{position:fixed;top:10px;left:10px;z-index:85;display:none;align-items:center;gap:2px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:4px 6px;box-shadow:0 2px 10px rgba(16,24,40,.10)}
+  body.sb-collapsed #sb_float{display:flex}
+  body.legacy #sb_float{display:none}
+  #sb_float .logo{color:var(--acc);font-size:15px;padding:0 5px}
+  .f-sep{width:1px;height:16px;background:var(--line);margin:0 4px}
+
+  /* ── 主区 ── */
+  #main{flex:1;min-width:0;display:flex;flex-direction:column;height:100vh;position:relative}
+  #empty_state{flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);text-align:center}
+  #conv{flex:1;display:flex;flex-direction:column;min-height:0}
+  #cv_head{padding:10px 18px;background:var(--panel);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  #cv_head .nm{font-weight:600;font-size:15px;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #cv_msgs{flex:1;overflow-y:auto;overflow-x:hidden;padding:26px max(calc(50% - 420px), 22px) 18px}
+  #cv_inputbar{background:transparent;padding:6px 16px 14px;display:none;justify-content:center}
+  #cv_card{width:min(840px,94%);background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 4px 18px rgba(16,24,40,.06);padding:12px 14px 10px}
+  #cv_input{width:100%;border:none;outline:none;resize:none;font-family:inherit;font-size:14.5px;line-height:1.6;min-height:24px;max-height:200px;color:var(--tx);background:transparent}
+  #cv_input::placeholder{color:#9aa1ac}
+  .cv-foot{display:flex;align-items:center;gap:8px;margin-top:8px}
+  .cv-hint{color:#9aa1ac;font-size:11.5px;flex:1}
+
+  /* ── 新建会话视图（DeepSeek 式） ── */
+  #new_conv{flex:1;display:none;flex-direction:column;align-items:center;justify-content:center;padding:20px}
+  .nc-hi{font-size:24px;font-weight:600;color:var(--tx);margin-bottom:26px;display:flex;align-items:center;gap:10px}
+  .nc-hi .logo{color:var(--acc);font-size:22px}
+  #nc_box{width:min(840px,94%);background:#fff;border:1px solid var(--line);border-radius:16px;box-shadow:0 4px 18px rgba(16,24,40,.06);padding:14px 16px 12px}
+  #nc_input{width:100%;border:none;outline:none;resize:none;font-family:inherit;font-size:14.5px;line-height:1.6;min-height:56px;max-height:200px;color:var(--tx);background:transparent}
+  #nc_input::placeholder{color:#9aa1ac}
+  .nc-foot,.cv-foot{display:flex;align-items:center;justify-content:space-between;margin-top:10px}
+  .nc-hint,.cv-hint{color:#9aa1ac;font-size:11.5px}
+  /* ★ 2026-11-18：新建会话的模型选择（清单来自 CLI --help） */
+  .nc-tools{display:flex;align-items:center;gap:8px;margin-top:9px;flex-wrap:wrap}
+  .nc-tools select{font-size:12.5px;padding:3px 6px;border:1px solid var(--line);border-radius:7px;background:#fff;color:#414b5a;max-width:300px}
+  .nc-tools select:disabled{color:#9aa1ac;background:#f6f7f9}
+  .nc-tools .meta{font-size:11.5px;color:#9aa1ac}
+  #nc_send,#cv_send{width:34px;height:34px;border-radius:50%;border:none;background:var(--acc);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;flex:none}
+  #nc_send:hover,#cv_send:hover{opacity:.9}
+  #nc_send:disabled,#cv_send:disabled{opacity:.5;cursor:default}
+  #nc_send svg,#cv_send svg{width:16px;height:16px}
+
+  /* ── 消息（对齐各家模型网页版样式）── */
+  #cv_msgs .msg{display:flex;gap:12px;margin:0 0 24px}
+  #cv_msgs .msg.side{margin:0 0 14px 42px}
+  .ava{width:30px;height:30px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;margin-top:3px}
+  .ava.ai{background:linear-gradient(135deg,#5b8cff,#2f6bff);color:#fff;font-size:14px;box-shadow:0 1px 3px rgba(47,107,255,.30)}
+  .ava.me{background:#e3e8f0;color:#5b6472}
+  .mcol{min-width:0;flex:1}
+  .msg.user{justify-content:flex-end}
+  .msg.user .mcol{flex:none;max-width:78%;display:flex;flex-direction:column;align-items:flex-end}
+  .mhead{display:flex;gap:8px;align-items:baseline;margin:0 0 4px}
+  .mname{font-weight:600;font-size:12.5px;color:#414b5a}
+  .mtime{font-size:11px;color:#a6adba}
+  .mbody{font-size:14.5px;line-height:1.7;word-break:break-word}
+  .bubble{background:var(--acc-bg);border:1px solid #d5e2fd;border-radius:16px;border-bottom-right-radius:6px;padding:10px 14px}
+  .m-thought{font-size:12.5px;color:#7c8378;background:#f7f8f4;border:1px dashed #dde1d6;border-radius:10px;padding:6px 12px;max-width:720px}
+  .m-thought>summary{cursor:pointer;color:#969e92;font-size:12.5px;list-style:none}
+  .m-thought .t-body{margin-top:6px;font-style:italic;line-height:1.65}
+  .m-tool{font-size:12.5px;background:#f7f8fa;border:1px solid var(--line);border-radius:10px;padding:7px 12px;color:#4b5563;max-width:720px}
+  .m-tool>summary{cursor:pointer;display:flex;gap:7px;align-items:center;list-style:none}
+  .m-thought>summary::-webkit-details-marker,.m-tool>summary::-webkit-details-marker{display:none}
+  .m-thought>summary::before,.m-tool>summary::before{content:'▸';display:inline-block;margin-right:2px;color:#a6adba;font-size:11px;transition:transform .15s}
+  .m-thought[open]>summary::before,.m-tool[open]>summary::before{transform:rotate(90deg)}
+  .t-title{font-weight:600;color:#334155;word-break:break-all}
+  .t-pre{max-height:240px;overflow:auto;background:#0f172a;color:#dce6f5;border-radius:8px;padding:9px 12px;margin:8px 0 2px;font-size:12px;line-height:1.55;font-family:Consolas,'Courier New',monospace;white-space:pre-wrap;word-break:break-all}
+  .md-pre{background:#0f172a;color:#dce6f5;border-radius:10px;padding:12px 14px;overflow:auto;font-size:12.5px;font-family:Consolas,monospace;line-height:1.55;margin:8px 0}
+  .md-code{background:#eef1f6;border-radius:4px;padding:1px 6px;font-family:Consolas,monospace;font-size:13px;color:#b3305d}
+  .md-h{font-weight:600;font-size:15.5px;margin:10px 0 4px}
+  .md-li{margin:2px 0 2px 6px}
+  .need-approve{width:100%;margin:0 0 20px;padding:10px 14px;border-radius:12px;background:#fdf3e3;border:1px solid #f1d9a5;color:#8a5b0f;font-size:12.5px}
+  /* ★ 2026-11-19：会话已退出时的「继续对话」条（serve respawn 复活 worker） */
+  .resume-tip{width:100%;margin:8px 0 16px;padding:10px 14px;border-radius:12px;background:#eef4ff;border:1px solid #cddcf7;color:#2b4a7d;font-size:12.5px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  #btn_resume{background:var(--acc);color:#fff;border:none;border-radius:8px;padding:5px 12px;font-size:12.5px;cursor:pointer;flex:none}
+  #btn_resume:hover{opacity:.9}
+  #btn_resume:disabled{opacity:.6;cursor:default}
+  .resume-tip .meta{color:#6b7c99;font-size:11.5px}
+
+  /* ── 右键菜单 ── */
+  #ctx_menu{position:fixed;z-index:100;display:none;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 6px 24px rgba(16,24,40,.16);padding:4px;min-width:136px}
+  .ctx-it{display:flex;align-items:center;gap:8px;padding:7px 12px;border-radius:7px;font-size:13px;color:var(--tx);cursor:pointer;white-space:nowrap;user-select:none}
+  .ctx-it:hover{background:#f1f4f8}
+  .ctx-it.danger{color:var(--bad)}
+  .ctx-it.danger:hover{background:#fdf1f1}
+  .ctx-sep{height:1px;background:var(--line);margin:4px 6px}
+
+  /* ── 运维 legacy 视图 ── */
+  #legacy{display:none;position:fixed;inset:0;background:var(--bg);z-index:50;overflow:auto;padding:16px 22px}
+  body.legacy #sidebar,body.legacy #main{display:none}
+  body.legacy #legacy{display:block}
+  #legacy h1{font-size:18px;margin:0 0 4px}
+  #legacy h2{font-size:14px;border-bottom:1px solid #d6dbe2;padding-bottom:4px;margin:18px 0 6px}
+  #legacy table{border-collapse:collapse;width:100%;background:#fff;font-size:12.5px}
+  #legacy th,#legacy td{border:1px solid var(--line);padding:3px 7px;text-align:left;vertical-align:top;word-break:break-all}
+  #legacy th{background:#f0f2f5}
+  #legacy pre{background:#f6f7f9;padding:8px;white-space:pre-wrap;word-break:break-all;max-height:340px;overflow:auto;margin:4px 0}
+  #legacy ul{margin:4px 0;padding-left:20px}
+  .off{color:#999;background:#f4f4f4;padding:6px 8px;border:1px dashed #ccc}
+  .st-running{color:var(--ok);font-weight:bold}.st-done{color:#555}.st-failed,.st-killed,.st-timeout{color:var(--bad)}
+
+  /* ── 移动端适配（≤768px）：侧栏抽屉化 + 触控适配 ── */
+  #sb_mask{display:none}
+  @media (max-width:768px){
+    #main{height:100vh;height:100dvh}
+    #sidebar{position:fixed;left:0;top:0;bottom:0;width:min(84vw,320px);z-index:80;transform:translateX(-105%);transition:transform .2s ease}
+    body.sb-open #sidebar{transform:none;box-shadow:0 0 30px rgba(16,24,40,.28)}
+    body.sb-open #sb_mask{display:block;position:fixed;inset:0;background:rgba(15,23,42,.38);z-index:75}
+    body:not(.legacy) #sb_float{display:flex}      /* 浮动胶囊条常驻 = 抽屉入口 */
+    body.sb-open #sb_float{display:none}           /* 抽屉展开时隐藏，防压侧栏头部（z-index 85>80） */
+    body.sb-conv:not(.legacy) #sb_float{display:none} /* 会话视图隐藏（头部自有关闭），防压标题 */
+    body.legacy #sb_float{display:none}
+    .it{-webkit-touch-callout:none;user-select:none}
+    #sb_search,#nc_input,#cv_input{font-size:16px} /* 防 iOS 聚焦自动放大 */
+    #cv_head{padding:8px 12px;gap:6px}
+    #cv_head .nm{max-width:56vw}
+    #cv_msgs{padding:16px 14px 12px}
+    #cv_msgs .msg.side{margin-left:16px}
+    .msg.user .mcol{max-width:88%}
+    #legacy{padding:10px 12px}
+    #legacy table{min-width:640px}                 /* 运维表格横向滚动而非挤压 */
+  }
+</style>
+</head>
+<body>
+
+<div id="sb_mask" onclick="return toggleSb()"></div>
+
+<aside id="sidebar">
+  <div class="sb-head">
+    <div class="sb-brand"><span class="logo">◆</span><span class="brand-txt">session-hub <small>CLI 会话中心</small></span></div>
+    <button class="icon-btn" onclick="return toggleSb()" title="折叠侧栏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><line x1="9.5" y1="4" x2="9.5" y2="20"/></svg></button>
+  </div>
+  <!-- ★ 多项目（2026-11-18）：项目切换器；切换 = 跳到 /p/<id>/（服务端按前缀隔离 sessions/dialog/doc/takeover） -->
+  <div style="padding:0 10px 8px">
+    <select id="sb_proj" onchange="return switchProj()" title="切换项目（各项目数据完全隔离）"
+            style="width:100%;padding:5px 6px;border:1px solid #d4d7dd;border-radius:6px;background:#fff;font-size:13px">
+      <option value="">加载中…</option>
+    </select>
+  </div>
+  <div class="sb-search">
+    <span class="s-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg></span>
+    <input id="sb_search" type="text" placeholder="搜索历史对话…" autocomplete="off">
+    <button id="sb_sclear" title="清空" onclick="return clearFilter()">×</button>
+  </div>
+  <button id="btn_new" onclick="return newSession()" title="新建会话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8.5" x2="12" y2="15.5"/><line x1="8.5" y1="12" x2="15.5" y2="12"/></svg><span>新建会话</span></button>
+  <div id="sb_groups"><div class="grp" style="padding:8px;color:var(--muted)">加载中…</div></div>
+  <div class="sb-foot">
+    <span id="sb_serve" class="pill">…</span>
+    <button class="icon-btn" onclick="return openBoard()" title="迭代看板（hub 只读视图）" style="font-size:14px">📊</button>
+    <button class="icon-btn" id="btn_ops" onclick="return showLegacy(true)" title="运维面板（QQ / 会话 / 审计）" style="font-size:14px">⚙</button>
+  </div>
+</aside>
+
+<main id="main">
+  <div id="empty_state">
+    <div>
+      <div style="font-size:40px;margin-bottom:10px">💬</div>
+      <div>从左侧选择一个会话查看对话<br><span class="meta">CodeBuddy = 接管任务（可回复）· Claude Code = 本机历史（只读）</span></div>
+    </div>
+  </div>
+  <div id="new_conv">
+    <div class="nc-hi"><span class="logo">◆</span><span id="nc_greet">你好，想做什么？</span></div>
+    <div id="nc_box">
+      <textarea id="nc_input" rows="1" placeholder="描述任务，创建 CodeBuddy 会话并开始执行…"></textarea>
+      <div class="nc-tools">
+        <select id="nc_model" onchange="return saveModelPick()" title="本会话使用的模型（清单取自 CLI --help；默认 = ~/.codebuddy/settings.json）">
+          <option value="">默认模型</option>
+        </select>
+        <span id="nc_model_note" class="meta"></span>
+      </div>
+      <div class="nc-foot">
+        <span class="nc-hint">Enter 发送 · Shift+Enter 换行 · Esc 取消 · 创建即执行</span>
+        <button id="nc_send" onclick="return sendNewConv()" title="发送"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="6"/><polyline points="6,11.5 12,5.5 18,11.5"/></svg></button>
+      </div>
+    </div>
+  </div>
+  <div id="conv" style="display:none">
+    <div id="cv_head"></div>
+    <div id="cv_msgs"></div>
+    <div id="cv_inputbar">
+      <div id="cv_card">
+        <textarea id="cv_input" rows="1" placeholder="回复该会话（等价在 CLI 会话中输入）…"></textarea>
+        <div class="cv-foot">
+          <span class="cv-hint">Enter 发送 · Shift+Enter 换行</span>
+          <span class="meta" id="cv_msg"></span>
+          <button id="cv_send" onclick="return sendReply()" title="发送"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="6"/><polyline points="6,11.5 12,5.5 18,11.5"/></svg></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div id="sb_float">
+  <span class="logo">◆</span>
+  <span class="f-sep"></span>
+  <button class="icon-btn" onclick="return toggleSb()" title="展开侧栏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><line x1="14.5" y1="4" x2="14.5" y2="20"/></svg></button>
+  <button class="icon-btn" onclick="return newSession()" title="新建会话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8.5" x2="12" y2="15.5"/><line x1="8.5" y1="12" x2="15.5" y2="12"/></svg></button>
+</div>
+
+<div id="ctx_menu">
+  <div class="ctx-it" onclick="return ctxRename()">✏️ <span>重命名</span></div>
+  <div class="ctx-it" onclick="return ctxPin()">📌 <span id="ctx_pin_txt">置顶</span></div>
+  <div class="ctx-sep" id="ctx_sep"></div>
+  <div class="ctx-it danger" id="ctx_del" onclick="return ctxDelete()">🗑 <span>删除</span></div>
+</div>
+
+<div id="legacy">
+  <h1>运维面板 <button onclick="return showLegacy(false)" style="float:right">← 返回会话视图</button></h1>
+
+  <h2 id="qq_title">1 · QQ 服务（本项目 qqbot）</h2>
+  <div id="qq"><div class="off">加载中…（公网访问经隧道，约 1~3 秒；超过 8 秒会显示超时）</div></div>
+
+  <h2>2 · 对话 <small>（QQ 问答流：进行中 + 已结算）</small></h2>
+  <div id="dialog"><div class="off">加载中…</div></div>
+
+  <h2>3 · codebuddy Web UI</h2>
+  <div id="serve"><div class="off">探测中…</div></div>
+
+  <h2>会话清单 <small>（runner 启动的进程会话）</small>
+    <button onclick="refreshSessions()" style="float:right">立即刷新</button></h2>
+  <div id="sessions">加载中…</div>
+
+  <details class="spawn" style="margin-top:8px">
+    <summary>启动新会话（POST /spawn，需要 httpKey）</summary>
+    <form class="spawn" onsubmit="return doSpawn(event)" style="margin:8px 0">
+      工具 <select id="sp_tool">
+        <option value="codebuddy">codebuddy</option>
+        <option value="node">node</option>
+        <option value="msbuild">msbuild</option>
+        <option value="svn">svn</option>
+        <option value="custom" selected>custom</option>
+      </select>
+      命令 <input id="sp_cmd" size="70" placeholder="按空格分词（支持引号）">
+      <button type="submit">启动</button>
+    </form>
+    <div id="spawn_out" class="meta"></div>
+  </details>
+
+  <h2>审计 <small>（hub-audit.jsonl 最近 20 条）</small></h2>
+  <pre id="audit" style="max-height:160px">加载中…</pre>
+</div>
+
+<script>
+'use strict';
+/* ★ 多项目（2026-11-18）：项目上下文从 URL /p/<id>/ 解析；无前缀 ⇒ 服务端 default 项目 */
+var PROJ = (function () {
+  var m = /^\/p\/([A-Za-z0-9_-]{1,32})/.exec(location.pathname);
+  if (m) return m[1];
+  try { return new URLSearchParams(location.search).get('p') || ''; } catch (e) { return ''; }
+})();
+var PROJ_TAG = PROJ || 'default';       // localStorage 键前缀（置顶/重命名/折叠状态按项目隔离）
+var PROJ_NAME = '';                     // 由 loadProjects 填充（仅用于提示文案）
+var HUB = location.origin + (PROJ ? '/p/' + PROJ : '');
+function projLabel() { return PROJ_NAME ? (PROJ_NAME + ' · ' + PROJ_TAG) : PROJ_TAG; }
+function switchProj() {
+  var sel = document.getElementById('sb_proj');
+  if (!sel || !sel.value) return false;
+  location.href = '/p/' + encodeURIComponent(sel.value) + '/';
+  return false;
+}
+function loadProjects() {
+  fetch('/projects', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+    var sel = document.getElementById('sb_proj');
+    if (!sel || !d || !d.projects) return;
+    var cur = PROJ || d.default || '';
+    var L = [];
+    for (var i = 0; i < d.projects.length; i++) {
+      var p = d.projects[i];
+      L.push('<option value="' + esc(p.id) + '"' + (p.id === cur ? ' selected' : '') + '>' + esc(p.name) + ' · ' + esc(p.id) + (p.default ? '（缺省）' : '') + '</option>');
+    }
+    sel.innerHTML = L.join('');
+    // 侧栏标识 + 运维面板标题跟随当前项目（避免「以为在看 A 其实在看 B」）
+    var cur2 = null;
+    for (var j = 0; j < d.projects.length; j++) { if (d.projects[j].id === cur) { cur2 = d.projects[j]; break; } }
+    if (cur2) {
+      PROJ_NAME = cur2.name;
+      var bt = document.querySelector('.brand-txt small');
+      if (bt) bt.textContent = cur2.name + ' · ' + cur2.id;
+      var qt = document.getElementById('qq_title');
+      if (qt) qt.textContent = '1 · QQ 服务（' + cur2.name + ' · ' + cur2.qq + '）';
+      document.title = 'session-hub · ' + cur2.name;
+    }
+  }).catch(function () {});
+}
+var USER_ICON = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 19.5c.8-3.6 3.9-5.5 7.5-5.5s6.7 1.9 7.5 5.5"/></svg>';
+
+/* ═══ 公共 ═══ */
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function fmtDur(ms) {
+  if (ms < 0) return '-';
+  var s = Math.round(ms / 1000);
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm' + (s % 60) + 's';
+  return Math.floor(s / 3600) + 'h' + Math.floor((s % 3600) / 60) + 'm';
+}
+function pad2(n) { return (n < 10 ? '0' : '') + n; }
+/* ★ 2026-10-11：历史按天分桶 + 绝对时间显示（用户反馈多个同名会话看不出是哪一个，原「相对时间」无日期） */
+function dayKey(ms) {                          /* 本地时区日历日 YYYY-MM-DD */
+  var d = new Date(ms || 0);
+  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+}
+function dayLabel(ms) {                        /* 桶标题：今天 / 昨天 / MM-DD（跨年补 YYYY-） */
+  var now = Date.now();
+  if (dayKey(ms) === dayKey(now)) return '今天';
+  if (dayKey(ms) === dayKey(now - 86400000)) return '昨天';
+  var d = new Date(ms || 0), n = new Date(now);
+  return (d.getFullYear() === n.getFullYear() ? '' : d.getFullYear() + '-') + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+}
+/* 注：条目的 HH:mm 与完整时间复用既有 fmtLocal(v[, style])（下方，同为本地时区渲染） */
+/* ★ 2026-10-11：绝对时间一律按本地时区渲染（源为 ISO-UTC「...Z」串或 epoch ms 数字）
+   —— 此前直接对字符串 slice 取 HH:MM ⇒ 显示的是 UTC，比北京时间早 8 小时。
+   new Date() 对带 Z 的 ISO 串会自动换算本地时区；数字按 epoch ms 处理。 */
+function fmtLocal(v, style) {
+  if (v === null || v === undefined || v === '') return '';
+  var d = (typeof v === 'number') ? new Date(v) : new Date(String(v));
+  if (isNaN(d.getTime())) return String(v);
+  function p(n) { return (n < 10 ? '0' : '') + n; }
+  var hm = p(d.getHours()) + ':' + p(d.getMinutes());
+  if (style === 'hms') return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + hm + ':' + p(d.getSeconds());
+  if (style === 'full') return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + hm + ':' + p(d.getSeconds());
+  return hm;
+}
+function stColor(st) {
+  if (st === 'working' || st === 'running') return 'var(--ok)';
+  if (st === 'blocked') return 'var(--warn)';
+  if (st === 'done' || st === 'idle') return '#7c8595';
+  return 'var(--bad)';
+}
+function stPill(st) {
+  if (st === 'working') return '<span class="pill ok">working</span>';
+  if (st === 'blocked') return '<span class="pill warn">blocked·等审批</span>';
+  if (st === 'done') return '<span class="pill">done</span>';
+  return '<span class="pill">' + esc(st || '-') + '</span>';
+}
+function isStarting(it) {                  // ★ B 探针（2026-10-05）：starting 态 = broker/CLI 就绪握手期，本机常态 2~4 分钟无输出
+  return !!it && it.provider === 'codebuddy' && it.state === 'working'
+    && String(it.detail || '').indexOf('starting') === 0;
+}
+function getKey() {
+  /* ★ P2（2026-11-18）：httpKey 按项目分键 —— 两项目 key 互不通用（用 A 的 key 写 B ⇒ 403 bad-key） */
+  var sk = 'hubKey:' + PROJ_TAG;
+  var k = sessionStorage.getItem(sk);
+  /* 旧书签兼容：无 /p/ 前缀的页面（PROJ==''）才回落到单 key 时代的 'hubKey'。
+     有前缀的页面**不回落** —— 否则会拿别项目的 key 去写，只换来 403 且再也弹不出输入框。 */
+  if (!k && !PROJ) k = sessionStorage.getItem('hubKey');
+  if (!k) {
+    k = window.prompt('写操作需要【' + projLabel() + '】项目的 httpKey（hub.config.json → projects[].httpKey）：', '');
+    if (k) sessionStorage.setItem(sk, k);
+  }
+  return k || '';
+}
+/* 写操作拿到 403 时清缓存，避免存了错 key 后永远不再提示 */
+function keyRejected(r) {
+  if (!r || r.code !== 403) return false;
+  var why = (r.j && r.j.error) || '';
+  if (why !== 'bad-key' && why !== 'key-not-configured') return false;
+  sessionStorage.removeItem('hubKey:' + PROJ_TAG);
+  sessionStorage.removeItem('hubKey');
+  return true;
+}
+/* ★ 搭车 Story（2026-10-07）：迭代看板入口 —— docKey 与 httpKey 分离（只读视图），sessionStorage 不落盘 */
+function getDocKey() {
+  var sk = 'hubDocKey:' + PROJ_TAG;                 // ★ 多项目：docKey 按项目分别记忆（两项目 key 不通用）
+  var k = sessionStorage.getItem(sk);
+  if (!k) {
+    k = window.prompt('只读文档视图需要本项目 docKey（hub.config.json → projects[].doc.key）：', '');
+    if (k != null) sessionStorage.setItem(sk, k);
+  }
+  return k || '';
+}
+function openBoard() {
+  var k = getDocKey();
+  if (!k) return false;
+  fetch(HUB + '/doc/list?key=' + encodeURIComponent(k)).then(function (r) {
+    if (!r.ok) { sessionStorage.removeItem('hubDocKey:' + PROJ_TAG); alert('docKey 无效或未配置（HTTP ' + r.status + '），请重试'); return; }
+    window.open(HUB + '/doc?path=board.html&raw=1&key=' + encodeURIComponent(k), '_blank');
+  }).catch(function (e) { alert('连接 hub 失败：' + e); });
+  return false;
+}
+/* 极简 markdown（代码块/行内代码/粗体/标题/列表；先转义防注入） */
+function mdLite(s) {
+  var t = esc(s == null ? '' : String(s));
+  var blocks = [];
+  t = t.replace(/```([\s\S]*?)```/g, function (m, code) {
+    blocks.push('<pre class="md-pre">' + code.replace(/^\w*\n/, '') + '</pre>');
+    return '\u0000B' + (blocks.length - 1) + '\u0000';
+  });
+  t = t.replace(/`([^`\n]+)`/g, '<code class="md-code">$1</code>');
+  t = t.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
+  t = t.replace(/^#{1,4} (.+)$/gm, '<div class="md-h">$1</div>');
+  t = t.replace(/^- (.+)$/gm, '<div class="md-li">• $1</div>');
+  t = t.replace(/\n/g, '<br>');
+  t = t.replace(/\u0000B(\d+)\u0000/g, function (m, i) { return blocks[Number(i)]; });
+  return t;
+}
+
+/* ═══ v3：统一会话视图（provider 层）═══ */
+var ovData = null;                       // /takeover/overview 缓存
+var cur = null;                          // {provider, id, item}
+var ovBusy = false, txBusy = false, tickTimer = null;
+var sbFilter = '';                       // 侧栏搜索词
+var ctxFor = null;                       // 右键菜单目标 {provider,id}
+/* 置顶/重命名持久化（localStorage，本地单用户工具）★ 多项目：键加项目后缀，两项目置顶不串 */
+var LS_TAG = ':' + PROJ_TAG;
+var pins = {}, names = {};
+try { pins = JSON.parse(localStorage.getItem('hubPins' + LS_TAG) || localStorage.getItem('hubPins') || '{}') || {}; } catch (e) { pins = {}; }
+try { names = JSON.parse(localStorage.getItem('hubNames' + LS_TAG) || localStorage.getItem('hubNames') || '{}') || {}; } catch (e) { names = {}; }
+function savePins() { try { localStorage.setItem('hubPins' + LS_TAG, JSON.stringify(pins)); } catch (e) {} }
+function saveNames() { try { localStorage.setItem('hubNames' + LS_TAG, JSON.stringify(names)); } catch (e) {} }
+/* ★ 2026-10-11 第二轮：日期桶折叠状态（localStorage 记忆；键 = dayKey 如 '2026-10-11' 或 '__pin__'） */
+var collapsedDays = {};
+try { collapsedDays = JSON.parse(localStorage.getItem('hubCollapsedDays' + LS_TAG) || '{}') || {}; } catch (e) { collapsedDays = {}; }
+function toggleDay(k) {
+  if (!k) return;
+  if (collapsedDays[k]) delete collapsedDays[k]; else collapsedDays[k] = 1;
+  try { localStorage.setItem('hubCollapsedDays' + LS_TAG, JSON.stringify(collapsedDays)); } catch (e) {}
+  renderSidebar();
+}
+function dispName(x) {
+  if (!x) return '-';
+  var k = x.provider + ':' + x.id;
+  return names[k] || x.name || x.title || x.id || '';   // ★ 2026-10-11：job 名优先于意图截断的 title（与 CodeBuddy「智能体」列表命名对齐）
+}
+
+function findItem(provider, id) {
+  if (!ovData) return null;
+  for (var g = 0; g < ovData.groups.length; g++) {
+    var items = ovData.groups[g].items || [];
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].provider === provider && items[i].id === id) return items[i];
+    }
+  }
+  return null;
+}
+function pollOverview(force, done) {
+  if (ovBusy && !force) return;                // force=写操作后的强制对账，不受周期轮询飞行态影响
+  ovBusy = true;
+  fetch(HUB + '/takeover/overview').then(function (r) { return r.json(); })
+    .then(function (d) { ovData = d; renderSidebar(); syncHead(); })
+    .catch(function (e) {
+      document.getElementById('sb_groups').innerHTML = '<div class="grp" style="padding:8px;color:#ff9c9c">overview 失败: ' + esc(e.message) + '</div>';
+    })
+    .then(function () { ovBusy = false; if (done) { try { done(); } catch (e) {} } });
+}
+function itMatch(x, q) {
+  var hay = (x.name || '') + '\n' + (x.title || '') + '\n' + (x.id || '') + '\n' + (x.detail || '') + '\n' + (x.project || '') + '\n' + (x.state || '')
+    + '\n' + (x.model || '') + '\n' + (x.projName || '') + '\n' + (x.cwd || '');   // ★ 2026-11-19：型号/项目可搜（claude 条目）
+  return hay.toLowerCase().indexOf(q) !== -1;
+}
+/** ★ 2026-10-11：单条会话条目 HTML（从 renderSidebar 抽出，供「置顶」与「按天」两组复用）
+ *   命名行 = 时间 + 名称（用户建议：同一天多个同名会话（如 3×"qq-1 接管"）靠时间前缀区分；
+ *   时间原放 sub 尾部，被 "stopped · session ended…" 长文案挤掉截断 ⇒ 提到名称前） */
+function sbItemHtml(x) {
+  var pk2 = x.provider + ':' + x.id;
+  var selCls = (cur && cur.provider === x.provider && cur.id === x.id) ? ' sel' : '';
+  var when = x.updatedAt || x.mtimeMs || 0;
+  var tstr = when ? fmtLocal(when) : '';
+  var sub = '';
+  if (x.provider === 'codebuddy') {
+    if (isStarting(x)) sub = 'working · CLI 就绪中 ' + fmtDur(Date.now() - (x.startedAt || when)) + '（常态2~4分钟）';
+    else sub = (x.state || '') + ' · ' + (x.detail || '').slice(0, 40);
+  }
+  else {
+    // ★ 2026-11-19：claude 侧栏第二行 = 项目目录名 · 真实型号（原为不可读的 slug；缺值自动省略）
+    var bits = [];
+    if (x.projName || x.project) bits.push(String(x.projName || x.project).slice(0, 24));
+    if (x.model) bits.push(x.model);
+    sub = bits.join(' · ');
+  }
+  var nm = dispName(x);
+  var tip = nm + ' · ' + (when ? fmtLocal(when, 'full') + '（' + fmtDur(Date.now() - when) + '前）' : '') + (x.detail ? ' — ' + String(x.detail).slice(0, 80) : '')
+    + (x.provider === 'claude' && x.cwd ? ' · ' + x.cwd : '');
+  return '<div class="it' + selCls + '" data-p="' + esc(x.provider) + '" data-id="' + esc(x.id) + '" title="' + esc(tip) + '">'
+    + '<span class="dot" style="background:' + (x.provider === 'claude' ? '#7c8595' : stColor(x.state)) + ';margin-top:5px"></span>'
+    + '<span class="t"><span class="n">' + (pins[pk2] ? '📌 ' : '') + (tstr ? '<span class="nt">' + esc(tstr) + '</span>' : '') + esc(nm) + '</span>'
+    + '<span class="s">' + esc(sub) + '</span></span></div>';
+}
+function renderSidebar() {
+  var el = document.getElementById('sb_groups');
+  var sv = ovData && ovData.serve || {};
+  document.getElementById('sb_serve').textContent = sv.alive ? ('serve :' + sv.port) : 'serve 离线';
+  document.getElementById('sb_serve').className = 'pill ' + (sv.alive ? 'ok' : 'bad');
+  var q = sbFilter.trim().toLowerCase();
+  var L = [], total = 0;
+  for (var g = 0; g < ovData.groups.length; g++) {
+    var grp = ovData.groups[g];
+    var items = grp.items || [];
+    var shown = [];
+    for (var si = 0; si < items.length; si++) { if (!q || itMatch(items[si], q)) shown.push(items[si]); }
+    if (q && !shown.length) continue;                // 搜索时隐藏无匹配组
+    L.push('<div class="grp"><div class="grp-title"><span>' + esc(grp.label) + '</span><span>' + (q ? shown.length + '/' + items.length : items.length) + '</span></div>');
+    if (!shown.length) L.push('<div style="padding:2px 9px 8px;color:var(--muted);font-size:12px">（无会话）</div>');
+    // ★ 2026-10-11：置顶桶 + 按天分桶（替代原「pins 排序 + 相对时间」—— 用户反馈多个同名会话分不清）
+    //   第二轮：桶标题可点击折叠/展开（collapsedDays 记忆；搜索时强制展开，防命中结果被折叠隐藏）
+    var tsOf = function (x) { return x.updatedAt || x.mtimeMs || 0; };
+    var forceOpen = !!q;
+    var isCollapsed = function (k) { return !forceOpen && !!collapsedDays[k]; };
+    var dayHead = function (k, label, count) {
+      var col = isCollapsed(k);
+      return '<div class="grp-day" data-day="' + esc(k) + '"><span>' + (col ? '▸' : '▾') + ' ' + esc(label) + '</span><span>' + count + '</span></div>';
+    };
+    var pinList = [], rest = [];
+    for (var pi = 0; pi < shown.length; pi++) {
+      var pk1 = shown[pi].provider + ':' + shown[pi].id;
+      (pins[pk1] ? pinList : rest).push(shown[pi]);
+    }
+    pinList.sort(function (a, b) { return tsOf(b) - tsOf(a); });
+    rest.sort(function (a, b) { return tsOf(b) - tsOf(a); });
+    if (pinList.length) {
+      L.push(dayHead('__pin__', '📌 置顶', pinList.length));
+      if (!isCollapsed('__pin__')) for (var pj = 0; pj < pinList.length; pj++) L.push(sbItemHtml(pinList[pj]));
+    }
+    var buckets = [], bmap = {};
+    for (var ri = 0; ri < rest.length; ri++) {
+      var rk = dayKey(tsOf(rest[ri]));
+      if (!bmap[rk]) { bmap[rk] = { key: rk, label: dayLabel(tsOf(rest[ri])), items: [] }; buckets.push(bmap[rk]); }
+      bmap[rk].items.push(rest[ri]);
+    }
+    for (var bi = 0; bi < buckets.length; bi++) {
+      L.push(dayHead(buckets[bi].key, buckets[bi].label, buckets[bi].items.length));
+      if (!isCollapsed(buckets[bi].key)) for (var ij = 0; ij < buckets[bi].items.length; ij++) L.push(sbItemHtml(buckets[bi].items[ij]));
+    }
+    L.push('</div>');
+    total += shown.length;
+  }
+  if (q && !total) L.push('<div style="padding:16px 8px;color:var(--muted);font-size:12.5px;text-align:center">未找到匹配「' + esc(sbFilter.trim()) + '」的会话</div>');
+  el.innerHTML = L.join('');
+}
+function onFilter() {
+  sbFilter = document.getElementById('sb_search').value;
+  document.getElementById('sb_sclear').style.display = sbFilter ? 'block' : 'none';
+  renderSidebar();
+}
+function clearFilter() {
+  sbFilter = '';
+  document.getElementById('sb_search').value = '';
+  document.getElementById('sb_sclear').style.display = 'none';
+  renderSidebar();
+  return false;
+}
+document.getElementById('sb_search').addEventListener('keydown', function (ev) {
+  if (ev.key === 'Escape') { clearFilter(); this.blur(); }
+});
+document.getElementById('sb_search').addEventListener('input', onFilter);
+document.getElementById('sb_groups').addEventListener('click', function (ev) {
+  var dh = ev.target && ev.target.closest ? ev.target.closest('.grp-day') : null;   // ★ 2026-10-11 第二轮：日期桶折叠
+  if (dh) { toggleDay(dh.getAttribute('data-day')); return; }
+  var it = ev.target && ev.target.closest ? ev.target.closest('.it') : null;
+  if (it) selectSession(it.getAttribute('data-p'), it.getAttribute('data-id'));
+});
+document.getElementById('sb_groups').addEventListener('contextmenu', function (ev) {
+  var it = ev.target && ev.target.closest ? ev.target.closest('.it') : null;
+  if (!it) return;
+  ev.preventDefault();
+  openCtx(ev, it.getAttribute('data-p'), it.getAttribute('data-id'));
+});
+document.addEventListener('click', closeCtx);
+document.addEventListener('contextmenu', function (ev) {
+  if (!(ev.target && ev.target.closest && ev.target.closest('.it'))) closeCtx();
+});
+document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') closeCtx(); });
+
+/* 触屏长按 = 右键菜单（iOS Safari 长按不触发 contextmenu 事件） */
+var lpTimer = null;
+document.getElementById('sb_groups').addEventListener('touchstart', function (ev) {
+  var it = ev.target && ev.target.closest ? ev.target.closest('.it') : null;
+  if (!it || ev.touches.length !== 1) return;
+  var t = ev.touches[0], p = it.getAttribute('data-p'), id = it.getAttribute('data-id');
+  lpTimer = setTimeout(function () {
+    lpTimer = null;
+    openCtx({ clientX: t.clientX, clientY: t.clientY }, p, id);
+    try { if (navigator.vibrate) navigator.vibrate(10); } catch (e) {}
+  }, 500);
+}, { passive: true });
+['touchend', 'touchmove', 'touchcancel'].forEach(function (n) {
+  document.getElementById('sb_groups').addEventListener(n, function () { if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } }, { passive: true });
+});
+
+function showView(v) {                    // 'empty' | 'new' | 'conv'
+  sbCloseIfMobile();                      // 移动端：切换视图即收起抽屉
+  document.body.classList.toggle('sb-conv', v === 'conv');   // 移动端会话视图隐藏浮动胶囊条
+  document.getElementById('empty_state').style.display = v === 'empty' ? 'flex' : 'none';
+  document.getElementById('new_conv').style.display = v === 'new' ? 'flex' : 'none';
+  document.getElementById('conv').style.display = v === 'conv' ? 'flex' : 'none';
+}
+function selectSession(provider, id) {
+  cur = { provider: provider, id: id, item: findItem(provider, id) };
+  renderSidebar();
+  showView('conv');
+  document.getElementById('cv_msgs').innerHTML = '<div style="color:var(--muted);padding:16px">加载中…</div>';
+  syncHead();
+  loadTranscript(true);
+}
+function syncHead() {
+  if (!cur) return;
+  var it = cur.item = findItem(cur.provider, cur.id);
+  var head = document.getElementById('cv_head');
+  var bar = document.getElementById('cv_inputbar');
+  if (!it) {
+    head.innerHTML = '<span class="nm">' + esc(cur.id) + '</span> <span class="pill bad">记录不存在</span>'
+      + '<button style="margin-left:auto" onclick="return closeConv()">关闭</button>';
+    bar.style.display = 'none';
+    return;
+  }
+  var ops = '';
+  if (it.provider === 'codebuddy') {
+    var canReply = (it.state === 'working' || it.state === 'blocked');
+    if (canReply) ops += '<button onclick="return stopJob()">停止</button>';
+    ops += '<button class="danger" onclick="return deleteJob()">删除记录</button>';
+    ops += '<button onclick="return openTkWeb()">Web UI 打开</button>';
+  }
+  // ★ 2026-11-19：claude 头部 = 只读徽标 + 真实型号 + 归属路径/来源（原先只有"只读回放"一句）
+  var metaTxt = isStarting(it) ? 'CLI 就绪中…（本机常态 2~4 分钟，期间无输出属正常）' : (it.detail || '').slice(0, 90);
+  if (it.provider === 'claude') {
+    metaTxt = [it.projName, it.cwd, it.entrypoint ? ('来自 ' + it.entrypoint) : ''].filter(Boolean).join(' · ')
+      || '全局只读（该会话未记录 cwd）';
+  }
+  head.innerHTML = '<span class="nm" title="' + esc(dispName(it)) + '">' + esc(dispName(it)) + '</span>'
+    + (it.provider === 'claude'
+      ? '<span class="pill">Claude Code · 只读回放</span>' + (it.model ? '<span class="pill">' + esc(it.model) + '</span>' : '')
+      : stPill(it.state))
+    + (it.provider === 'codebuddy' && it.live ? '<span class="pill ok">live</span>' : '')
+    + '<span class="meta">' + esc(metaTxt) + '</span>'
+    + '<span style="margin-left:auto;display:flex;gap:6px">' + ops + '<button onclick="return closeConv()">关闭</button></span>';
+  if (it.provider === 'codebuddy' && it.needs) {
+    head.innerHTML += '';
+  }
+  var canReply = (it.provider === 'codebuddy' && (it.state === 'working' || it.state === 'blocked'));
+  bar.style.display = canReply ? 'flex' : 'none';
+  // 等审批提示条（needs 字段，实证自 state.json）
+  var msgs = document.getElementById('cv_msgs');
+  var old = document.getElementById('approve_tip');
+  if (it.provider === 'codebuddy' && it.needs) {
+    if (!old) {
+      var tip = document.createElement('div');
+      tip.id = 'approve_tip'; tip.className = 'need-approve';
+      tip.innerHTML = '⏳ 等待审批：' + esc(it.needs) + ' —— 可在右栏上方「Web UI 打开」处理，或在下方回复框指示跳过。';
+      msgs.insertBefore(tip, msgs.firstChild);
+    } else { old.innerHTML = '⏳ 等待审批：' + esc(it.needs) + ' —— 可在右栏上方「Web UI 打开」处理，或在下方回复框指示跳过。'; }
+  } else if (old) old.remove();
+}
+function closeConv() {
+  cur = null;
+  showView('empty');
+  renderSidebar();
+  return false;
+}
+function loadTranscript(immediate) {
+  if (!cur || txBusy) return;
+  var c = cur;
+  txBusy = true;
+  fetch(HUB + '/takeover/transcript?provider=' + encodeURIComponent(c.provider) + '&id=' + encodeURIComponent(c.id))
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      if (!cur || cur.id !== c.id) return;
+      if (j && j.error) {
+        document.getElementById('cv_msgs').innerHTML = '<div style="color:var(--bad);padding:16px">' + esc(j.error) + (j.hint ? ' — ' + esc(j.hint) : '') + '</div>';
+      } else {
+        renderTranscript((j.data && j.data.updates) || []);
+      }
+    })
+    .catch(function () {})
+    .then(function () { txBusy = false; });
+}
+/* ★ 2026-11-19：继续对话 —— 调 hub /takeover/respawn 复活已退出会话的 worker。
+   成功即把本地条目置 working（消除 5s 轮询空窗，立即重绘出输入框），再异步对账 overview / transcript。 */
+function patchItem(provider, id, patch) {
+  var it = findItem(provider, id);
+  if (it) { for (var k in patch) { if (Object.prototype.hasOwnProperty.call(patch, k)) it[k] = patch[k]; } }
+}
+function respawnCur() {
+  if (!cur || cur.provider !== 'codebuddy' || !cur.id) return false;
+  var id = cur.id;
+  var b = document.getElementById('btn_resume');
+  var setBtn = function (busy) {
+    var el = document.getElementById('btn_resume');
+    if (!el) return;
+    el.disabled = !!busy;
+    el.textContent = busy ? '复活中…（约 3~20s）' : '继续对话（复活 worker）';
+  };
+  setBtn(true);
+  fetch(HUB + '/takeover/respawn?id=' + encodeURIComponent(id) + '&key=' + encodeURIComponent(getKey()), { method: 'POST' })
+    .then(function (r) { return r.json().then(function (j) { return { code: r.status, j: j }; }); })
+    .then(function (r) {
+      if (keyRejected(r)) { window.alert('本项目 httpKey 不匹配，已清除缓存 —— 请重试'); setBtn(false); return; }
+      if (r.code === 200) {
+        var jd = (r.j && r.j.data && r.j.data.job) || {};
+        patchItem('codebuddy', id, {
+          state: jd.state || 'working', detail: jd.detail || 'resuming…',
+          live: true, alive: true, needs: '',
+        });
+        selectSession('codebuddy', id);              // 立刻重绘：输入框回来
+        setTimeout(function () { pollOverview(true); }, 900);   // 对账侧栏（state 以 serve 为准）
+        setTimeout(function () {                      // worker 就绪后拉一次 transcript（首个提示可能稍后出现）
+          if (cur && cur.provider === 'codebuddy' && cur.id === id) { syncHead(); loadTranscript(true); }
+        }, 3000);
+      } else if (r.code === 404) {
+        setBtn(false);
+        window.alert('serve 已不再持有该会话（serve 重启过）⇒ 请新建会话；\n或在「Web UI 打开」里恢复对应 session。');
+      } else {
+        setBtn(false);
+        window.alert('复活失败: ' + ((r.j && (r.j.error || r.j.message || r.j.hint)) || r.code));
+      }
+    })
+    .catch(function (e) { setBtn(false); window.alert('复活失败: ' + e.message); });
+  return false;
+}
+function tickTranscript() {                // codebuddy 活跃会话 3s 轮询
+  if (!cur || cur.provider !== 'codebuddy') return;
+  var it = cur.item;
+  if (it && (it.state === 'working' || it.state === 'blocked')) loadTranscript(false);
+}
+function renderTranscript(ups) {
+  var el = document.getElementById('cv_msgs');
+  var stick = (el.scrollHeight - el.scrollTop - el.clientHeight) < 80;
+  var L = [];
+  var bubbles = [], byId = {};
+  for (var i = 0; i < ups.length; i++) {
+    var x = ups[i];
+    var su = x.sessionUpdate || '';
+    var ts = fmtLocal(x._meta && x._meta.timestamp);   // ★ 本地时区 HH:MM（原字符串切片显示 UTC，早 8h）
+    if (su === 'user_message_chunk' || su === 'agent_message_chunk' || su === 'agent_thought_chunk') {
+      var mid = x.messageId || (su + '#' + i);
+      var txt = (x.content && x.content.text) || '';
+      var role = su === 'user_message_chunk' ? 'user' : (su === 'agent_thought_chunk' ? 'thought' : 'agent');
+      var k = byId[mid];
+      if (k != null && bubbles[k] && bubbles[k].role === role) bubbles[k].text += txt;
+      else { byId[mid] = bubbles.length; bubbles.push({ role: role, text: txt, ts: ts }); }
+    } else if (su === 'tool_call' || su === 'tool_call_update') {
+      var inner = '';
+      if (x.rawInput) inner += JSON.stringify(x.rawInput, null, 2);
+      if (x.content && x.content.length) {
+        var ct = '';
+        for (var ci = 0; ci < x.content.length; ci++) {
+          var cc = x.content[ci] || {};
+          if (cc.content && cc.content.text) ct += cc.content.text + '\n';
+          else if (cc.type === 'content' && cc.content && cc.content.type === 'text') ct += cc.content.text + '\n';
+          else if (cc.text) ct += cc.text + '\n';
+        }
+        if (ct) inner += (inner ? '\n\n' : '') + ct;
+      }
+      bubbles.push({ role: 'tool', ts: ts, title: String(x.title || x.kind || x.toolCallId || 'tool').slice(0, 90), status: x.status || '', open: su === 'tool_call_update', inner: inner });
+    } else if (su === 'plan') {
+      var pl = x.plan || [];
+      var ph = '';
+      for (var pi = 0; pi < pl.length; pi++) {
+        var itp = pl[pi] || {};
+        ph += (itp.status === 'completed' ? '✓ ' : (itp.status === 'in_progress' ? '▶ ' : '· ')) + (itp.content || itp.prompt || '') + '\n';
+      }
+      bubbles.push({ role: 'plan', ts: ts, inner: ph });
+    } else if (su === 'available_commands_update' || su === 'current_mode_update' || su === 'file-history-snapshot') {
+      /* 环境帧忽略 */
+    } else {
+      bubbles.push({ role: 'other', ts: ts, su: su, inner: JSON.stringify(x, null, 2) });
+    }
+  }
+  for (var bi = 0; bi < bubbles.length; bi++) {
+    var b = bubbles[bi];
+    var tm = b.ts ? '<span class="mtime">' + esc(b.ts) + '</span>' : '';
+    if (b.role === 'user') {
+      L.push('<div class="msg user"><div class="mcol"><div class="mhead">' + tm + '<span class="mname">我</span></div>'
+        + '<div class="mbody bubble">' + mdLite(b.text) + '</div></div>'
+        + '<div class="ava me">' + USER_ICON + '</div></div>');
+    } else if (b.role === 'agent') {
+      L.push('<div class="msg agent"><div class="ava ai">◆</div><div class="mcol"><div class="mhead"><span class="mname">助手</span>' + tm + '</div>'
+        + '<div class="mbody">' + mdLite(b.text) + '</div></div></div>');
+    } else if (b.role === 'thought') {
+      L.push('<div class="msg side"><details class="m-thought"><summary>思考过程</summary><div class="t-body">' + mdLite(b.text) + '</div></details></div>');
+    } else if (b.role === 'plan') {
+      L.push('<div class="msg side"><details class="m-tool"><summary><span class="t-title">📋 计划</span></summary><pre class="t-pre">' + esc(b.inner) + '</pre></details></div>');
+    } else if (b.role === 'tool') {
+      var stHtml = '';
+      if (b.status) {
+        var sc = (b.status === 'completed') ? 'ok' : (b.status === 'failed' || b.status === 'error') ? 'bad' : (b.status === 'in_progress' || b.status === 'running') ? 'warn' : '';
+        stHtml = ' <span class="pill ' + sc + '">' + esc(b.status) + '</span>';
+      }
+      L.push('<div class="msg side"><details class="m-tool"' + (b.open ? ' open' : '') + '><summary><span class="t-title">🛠 ' + esc(b.title) + '</span>' + stHtml + '</summary>'
+        + (b.inner ? '<pre class="t-pre">' + esc(b.inner) + '</pre>' : '') + '</details></div>');
+    } else {
+      L.push('<div class="msg side"><details class="m-tool"><summary><span class="t-title">「' + esc(b.su || 'unknown') + '」帧</span></summary><pre class="t-pre">' + esc(b.inner) + '</pre></details></div>');
+    }
+  }
+  if (!bubbles.length) {
+    if (isStarting(cur && cur.item)) L.push('<div style="color:var(--muted);padding:16px 16px 4px">会话已创建，CLI 启动就绪中——<b>本机常态 2~4 分钟</b>，期间无输出属正常，无需重复提交。</div>'
+      + '<div style="color:var(--muted);padding:0 16px 16px;font-size:12px">（实测：spawn 与进程拉起 &lt;1s；就绪握手 + 模型首响应 2.5~4 分钟；回复显示后状态落定约再等 1.5 分钟）</div>');
+    else L.push('<div style="color:var(--muted);padding:16px">（无消息内容）</div>');
+  }
+  /* ★ 2026-11-19：worker 已退出（done/stopped/failed）的会话 reply 只 saved 不投递（delivered:false），
+     输入框本就隐藏（canReply=working|blocked）。原实现只给一行"仅保留历史回放"的引导（2026-10-06 探针
+     结论「serve 不会自动复活」），现该结论已过期 —— serve 有 POST /api/v1/jobs/{id}/respawn：
+     停止旧进程、消费 pending reply、基于原会话（sessionId 不变）恢复 worker，且不重放 prompt。
+     ⇒ 改为按钮一键复活续聊（实测 2026-11-19：done → working，alive false → true）。 */
+  if (cur && cur.provider === 'codebuddy' && cur.item
+    && !(cur.item.state === 'working' || cur.item.state === 'blocked')) {
+    L.push('<div class="resume-tip"><span>— 会话已退出（worker 不在运行），历史仍可回放。</span>'
+      + '<button id="btn_resume" onclick="return respawnCur()">继续对话（复活 worker）</button>'
+      + '<span class="meta">基于原会话上下文恢复、不重放 prompt；首次约 3~20s。'
+      + '若提示 serve 不认该会话（serve 重启过），请新建会话。</span></div>');
+  }
+  el.innerHTML = L.join('');
+  if (stick) el.scrollTop = el.scrollHeight;
+}
+document.getElementById('cv_input').addEventListener('keydown', function (ev) {
+  if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); sendReply(); }
+});
+document.getElementById('cv_input').addEventListener('input', function () {
+  this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 200) + 'px';
+});
+function sendReply() {
+  if (!cur || cur.provider !== 'codebuddy') return false;
+  var el = document.getElementById('cv_input');
+  var msg = document.getElementById('cv_msg');
+  var text = el.value.trim();
+  if (!text) { msg.textContent = '内容为空'; return false; }
+  var btn = document.getElementById('cv_send');
+  msg.textContent = '发送中…';
+  btn.disabled = true;
+  fetch(HUB + '/takeover/reply?key=' + encodeURIComponent(getKey()), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: cur.id, text: text }),
+  }).then(function (r) { return r.json().then(function (j) { return { code: r.status, j: j }; }); })
+    .then(function (r) {
+      btn.disabled = false;
+      if (keyRejected(r)) { msg.textContent = '本项目 httpKey 不匹配，已清除缓存 —— 请重发（会重新提示输入）'; return; }
+      if (r.code === 200) { msg.textContent = '已发送'; el.value = ''; el.style.height = 'auto'; setTimeout(loadTranscript, 800); }
+      else msg.textContent = '失败: ' + (r.j.error || r.code) + (r.j.hint ? ' — ' + r.j.hint : (r.j.message ? ' — ' + r.j.message : ''));
+    })
+    .catch(function (e) { btn.disabled = false; msg.textContent = '失败: ' + e.message; });
+  return false;
+}
+// ★ 2026-10-07：QQ 待确认项在本页直接「确认 / 取消」——走 hub `/qq-reply` → qqbot `/simulate-message`
+//   → handleMessage（与真实 QQ 回复同一处理链，不绕过任何守卫）。用途：QQ 通信故障时的本机兜底
+//   （例如门禁开闸请求收不到 QQ 卡）。
+function qqReply(id, action) {
+  var msg = document.getElementById('cv_msg');
+  if (msg) msg.textContent = (action === 'confirm' ? '确认' : '取消') + ' #' + id + ' 发送中…';
+  fetch(HUB + '/qq-reply?key=' + encodeURIComponent(getKey()), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: id, action: action }),
+  }).then(function (r) { return r.json().then(function (j) { return { code: r.status, j: j }; }); })
+    .then(function (r) {
+      if (keyRejected(r)) { alert('本项目 httpKey 不匹配，已清除缓存 —— 请重试（会重新提示输入）'); return; }
+      var ok = (r.code === 200);
+      if (ok) { if (msg) msg.textContent = '已' + (action === 'confirm' ? '确认' : '取消') + ' #' + id; }
+      else alert('QQ 待确认项 ' + action + ' #' + id + ' 失败：' + (r.j.error || r.code) + (r.j.hint ? ' — ' + r.j.hint : ''));
+      setTimeout(pollQQ, 600);
+    })
+    .catch(function (e) { alert('QQ 待确认项 ' + action + ' #' + id + ' 失败：' + e.message); });
+  return false;
+}
+function newSession() {
+  cur = null;
+  showView('new');
+  var inp = document.getElementById('nc_input');
+  inp.value = ''; inp.style.height = 'auto';
+  setTimeout(function () { inp.focus(); }, 50);
+  loadModels(false);                        // ★ 2026-11-18：惰性加载 CLI 模型清单（服务端 10min TTL）
+  return false;
+}
+/* ═══ ★ 2026-11-18：模型选择（清单唯一来源 = CLI --help，服务端解析 + TTL 缓存）═══ */
+var modelCache = null;                     // { ok, models[], source, cached }
+function modelKey() { return 'hubModel:' + PROJ_TAG; }   // ★ 多项目：两项目各记各的选择
+function loadModels(force) {
+  var sel = document.getElementById('nc_model');
+  if (!sel) return;
+  if (modelCache && !force) { renderModels(modelCache); return; }
+  var note = document.getElementById('nc_model_note');
+  sel.innerHTML = '<option value="">默认模型（清单加载中…）</option>';
+  if (note) note.textContent = '';
+  fetch(HUB + '/takeover/models' + (force ? '?force=1' : ''), { cache: 'no-store' })
+    .then(function (r) { return r.json(); })
+    .then(function (d) { modelCache = d || { ok: false, models: [] }; renderModels(modelCache); })
+    .catch(function (e) { modelCache = null; renderModels({ ok: false, models: [], reason: e.message }); });
+}
+function renderModels(d) {
+  var sel = document.getElementById('nc_model');
+  var note = document.getElementById('nc_model_note');
+  if (!sel) return;
+  var models = (d && d.ok && d.models) ? d.models : [];
+  if (!models.length) {
+    /* 清单不可用 ⇒ 只留“默认”，且禁用下拉（禁止手输：CLI 对错模型名静默接受，拼错等于悄悄跑默认模型） */
+    sel.innerHTML = '<option value="">默认模型</option>';
+    sel.disabled = true;
+    if (note) note.textContent = '模型清单不可用（' + ((d && d.reason) || 'CLI 探测失败') + '）· 本次用全局默认';
+    return;
+  }
+  sel.disabled = false;
+  var pick = '';
+  try { pick = localStorage.getItem(modelKey()) || ''; } catch (e) {}
+  var L = ['<option value="">默认模型（settings.json）</option>'];
+  for (var i = 0; i < models.length; i++) {
+    L.push('<option value="' + esc(models[i]) + '">' + esc(models[i]) + '</option>');
+  }
+  sel.innerHTML = L.join('');
+  if (pick && models.indexOf(pick) >= 0) sel.value = pick;
+  if (note) note.textContent = models.length + ' 项 · 来源 ' + (d.source || 'help') + (d.cached ? '（缓存）' : '');
+}
+function saveModelPick() {
+  var sel = document.getElementById('nc_model');
+  if (!sel) return false;
+  try {
+    if (sel.value) localStorage.setItem(modelKey(), sel.value);
+    else localStorage.removeItem(modelKey());
+  } catch (e) {}
+  return false;
+}
+function sendNewConv() {
+  var el = document.getElementById('nc_input');
+  var text = el.value.trim();
+  if (!text) return false;
+  var btn = document.getElementById('nc_send');
+  var selM = document.getElementById('nc_model');
+  var model = (selM && !selM.disabled) ? selM.value : '';
+  var hintEl = document.querySelector('#nc_box .nc-hint');
+  var hint0 = hintEl ? hintEl.textContent : '';
+  btn.disabled = true;
+  /* serve 不在跑时服务端会自动拉起（首次冷启 3~20s）—— 提示到位，避免用户以为卡死 */
+  if (hintEl) hintEl.textContent = '正在提交…' + (model ? ('模型 ' + model) : '默认模型') + '（serve 未运行会自动拉起，首次可能 30~90s，请勿重复提交）';
+  var restore = function () { btn.disabled = false; if (hintEl) hintEl.textContent = hint0; };
+  fetch(HUB + '/takeover/new?key=' + encodeURIComponent(getKey()), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt: text, name: 'webui-new', model: model }),
+  }).then(function (r) { return r.json().then(function (j) { return { code: r.status, j: j }; }); })
+    .then(function (r) {
+      restore();
+      if (keyRejected(r)) { window.alert('本项目 httpKey 不匹配，已清除缓存 —— 请重试（会重新提示输入）'); return; }
+      if (r.code === 200) {
+        var jd = r.j.data || null;
+        var id = (jd && jd.id) || '';
+        el.value = ''; el.style.height = 'auto';
+        // ★ 2026-10-05：把新 job 立即注入 overview（消除 5s 轮询空窗：否则头部闪"记录不存在"、启动提示延迟）
+        if (jd && ovData && ovData.groups && ovData.groups[0] && ovData.groups[0].provider === 'codebuddy') {
+          ovData.groups[0].items.unshift({
+            provider: 'codebuddy', id: jd.id, name: jd.name || 'webui-new', title: '',
+            state: jd.state || 'working', detail: jd.detail || 'starting…', needs: '', intent: text,
+            startedAt: jd.startedAt || Date.now(), updatedAt: jd.updatedAt || Date.now(), live: true,
+          });
+        }
+        pollOverview();
+        if (id) selectSession('codebuddy', id); else showView('empty');
+      } else {
+        /* bad-model = 本地缓存的清单与 CLI 实际支持不符（CLI 升级后）⇒ 强制重取清单再让用户重选 */
+        if (r.j && r.j.error === 'bad-model') { modelCache = null; loadModels(true); }
+        window.alert('失败: ' + (r.j.error || r.code) + (r.j.hint ? '\n' + r.j.hint : (r.j.message ? '\n' + r.j.message : '')));
+      }
+    })
+    .catch(function (e) { restore(); window.alert('失败: ' + e.message); });
+  return false;
+}
+document.getElementById('nc_input').addEventListener('keydown', function (ev) {
+  if (ev.key === 'Escape') { showView('empty'); return; }
+  if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); sendNewConv(); }
+});
+document.getElementById('nc_input').addEventListener('input', function () {
+  this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 200) + 'px';
+});
+function stopJob() {
+  if (!cur) return false;
+  if (!window.confirm('停止 job ' + cur.id + '？')) return false;
+  fetch(HUB + '/takeover/stop?id=' + encodeURIComponent(cur.id) + '&key=' + encodeURIComponent(getKey()), { method: 'POST' })
+    .then(function (r) { return r.json().then(function (j) { return { code: r.status, j: j }; }); })
+    .then(function (r) {
+      if (keyRejected(r)) { window.alert('本项目 httpKey 不匹配，已清除缓存 —— 请重试'); pollOverview(); return; }
+      window.alert(r.code === 200 ? '已发送停止指令' : ('失败: ' + (r.j.error || r.code))); pollOverview();
+    });
+  return false;
+}
+function removeFromOverview(provider, id) {
+  if (!ovData) return;
+  for (var g = 0; g < ovData.groups.length; g++) {
+    var items = ovData.groups[g].items || [];
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].provider === provider && items[i].id === id) { items.splice(i, 1); break; }
+    }
+  }
+}
+function deleteJob(did) {
+  var id = did || (cur && cur.id);
+  if (!id) return false;
+  if (!window.confirm('删除会话 ' + id + ' 的记录？（不可恢复）')) return false;
+  var wasCur = !!(cur && cur.id === id);
+  /* 乐观更新：立即从侧栏移除并关闭会话窗格（serve DELETE 杀 PTY 树可达 30s，不能干等） */
+  removeFromOverview('codebuddy', id);
+  renderSidebar();
+  if (wasCur) closeConv();
+  fetch(HUB + '/takeover/delete?id=' + encodeURIComponent(id) + '&key=' + encodeURIComponent(getKey()), { method: 'POST' })
+    .then(function (r) { return r.json().then(function (j) { return { code: r.status, j: j }; }); })
+    .then(function (r) {
+      /* serve 对已死 job 的 DELETE 常 30s 超时但实际已删 —— 以 overview 对账结果为准，不再误报失败 */
+      pollOverview(true, function () {
+        if (keyRejected(r)) { window.alert('本项目 httpKey 不匹配，已清除缓存 —— 请重试'); return; }
+        if (r.code !== 200 && findItem('codebuddy', id)) {
+          var j = r.j || {};
+          window.alert('失败: ' + (j.error || r.code) + (j.hint ? ' — ' + j.hint : (j.message ? ' — ' + j.message : '')));
+        }
+      });
+    })
+    .catch(function () { pollOverview(true); });
+  return false;
+}
+
+/* ═══ 右键菜单（重命名 / 置顶 / 删除）═══ */
+function openCtx(ev, provider, id) {
+  ctxFor = { provider: provider, id: id };
+  var m = document.getElementById('ctx_menu');
+  document.getElementById('ctx_pin_txt').textContent = pins[provider + ':' + id] ? '取消置顶' : '置顶';
+  var isCb = provider === 'codebuddy';
+  document.getElementById('ctx_del').style.display = isCb ? 'flex' : 'none';
+  document.getElementById('ctx_sep').style.display = isCb ? 'block' : 'none';
+  m.style.display = 'block';
+  var r = m.getBoundingClientRect();
+  var x = ev.clientX, y = ev.clientY;
+  if (x + r.width > window.innerWidth - 8) x = window.innerWidth - 8 - r.width;
+  if (y + r.height > window.innerHeight - 8) y = window.innerHeight - 8 - r.height;
+  m.style.left = x + 'px';
+  m.style.top = y + 'px';
+  return false;
+}
+function closeCtx() {
+  var m = document.getElementById('ctx_menu');
+  if (m) m.style.display = 'none';
+}
+function ctxRename() {
+  closeCtx();
+  if (!ctxFor) return false;
+  var key = ctxFor.provider + ':' + ctxFor.id;
+  var curNm = dispName(findItem(ctxFor.provider, ctxFor.id));
+  var v = window.prompt('重命名会话（留空恢复默认命名）：', curNm);
+  if (v === null) return false;
+  v = String(v).trim();
+  if (!v) delete names[key];
+  else if (v !== curNm) names[key] = v;
+  saveNames();
+  renderSidebar();
+  syncHead();
+  return false;
+}
+function ctxPin() {
+  closeCtx();
+  if (!ctxFor) return false;
+  var key = ctxFor.provider + ':' + ctxFor.id;
+  if (pins[key]) delete pins[key]; else pins[key] = 1;
+  savePins();
+  renderSidebar();
+  return false;
+}
+function ctxDelete() {
+  closeCtx();
+  if (ctxFor && ctxFor.provider === 'codebuddy') { var id = ctxFor.id; ctxFor = null; deleteJob(id); }
+  return false;
+}
+var serveDirectUrl = '';
+function openTkWeb() {
+  if (serveDirectUrl) window.open(serveDirectUrl, '_blank');
+  else window.alert('Web UI 直链未就绪');
+  return false;
+}
+function showLegacy(on) {
+  document.body.classList.toggle('legacy', !!on);
+  if (on) { pollQQ(); pollDialog(); pollServe(); refreshSessions(); pollAudit(); }
+  return false;
+}
+var mqMobile = window.matchMedia('(max-width:768px)');
+function toggleSb() {
+  if (mqMobile.matches) {                      // 移动端：抽屉开合（不持久化，每次进页面默认收起）
+    document.body.classList.toggle('sb-open');
+  } else {
+    var c = document.body.classList.toggle('sb-collapsed');
+    try { localStorage.setItem('hubSbCollapsed', c ? '1' : '0'); } catch (e) {}
+  }
+  return false;
+}
+function sbCloseIfMobile() { if (mqMobile.matches) document.body.classList.remove('sb-open'); }
+
+/* ═══ legacy 运维视图（QQ / 会话清单 / 审计）═══ */
+function stClass(st) { return 'st-' + String(st || 'done'); }
+var qqBackoff = 5000;
+function renderQQ(h, p, ans, lt) {
+  var el = document.getElementById('qq'), L = [];
+  if (h && !h.offline) {
+    L.push('<ul>');
+    L.push('<li><b>待确认 ' + (h.pending || 0) + '</b> · watch idleSec=' + esc(h.watch ? h.watch.idleSec : '-') + ' · 接管：' + (h.handoffLock ? ('<b>#' + esc(hl_id(h)) + '</b>') : '空闲') + '</li>');
+    var sv = h.serve;
+    L.push('<li>serve：' + (sv && sv.alive ? ('运行中 pid=' + esc(sv.pid) + ' port=' + esc(sv.port)) : '未运行') + '</li>');
+    L.push('</ul>');
+  } else {
+    L.push('<div class="off">QQ 服务离线（' + esc(h && h.reason || '?') + '）</div>');
+  }
+  if (p && !p.offline && p.length) {
+    L.push('<b>待确认明细</b><ul>');
+    var pendCount = 0;
+    for (var i = 0; i < p.length; i++) {
+      var x = p[i];
+      var pk = String(x.kind || '');
+      // ★ 2026-10-07：kind=gate 多为「门禁开闸请求」⇒ 高亮；QQ 通信故障时可本页直接确认（本机兜底）
+      var badge = (pk === 'gate') ? '<span style="background:#c0392b;color:#fff;padding:0 6px;border-radius:8px;font-size:12px;margin-right:4px">🔓 开闸/门禁请求</span>'
+        : (pk === 'new-iteration' ? '<span style="background:#8e44ad;color:#fff;padding:0 6px;border-radius:8px;font-size:12px;margin-right:4px">🚀 开新迭代请求</span>'
+        : (pk === 'continue-iteration' ? '<span style="background:#8e44ad;color:#fff;padding:0 6px;border-radius:8px;font-size:12px;margin-right:4px">🔄 继续迭代请求</span>' : ''));   // ★ TOOL-QQNEWITER：确认后将创建迭代/启动 CLI 会话 ⇒ 高亮；★ TOOL-QQCONT（同级高亮）
+      var ops = '';
+      var st = String(x.status || 'pending');
+      if (st === 'pending') pendCount++;
+      // ★ TOOL-QQNEWITER：白名单与 qqbot-service.js 的 SIM_KINDS 同源 —— 改一处必须同步另一处（+README 两处文本）
+      if (['', 'ask', 'decision', 'gate', 'idle', 'new-iteration', 'continue-iteration'].indexOf(pk) >= 0 && st === 'pending') {
+        ops = ' <button onclick="return qqReply(' + (Number(x.id) || 0) + ',\'confirm\')">确认</button>'
+            + '<button onclick="return qqReply(' + (Number(x.id) || 0) + ',\'cancel\')">取消</button>';
+      }
+      if (!ops && x.status) ops = ' <span style="color:#888">（' + esc(x.status) + '）</span>';
+      L.push('<li>' + badge + '<b>#' + esc(x.id) + '</b> [' + esc(x.kind || '-') + '] ' + esc(String(x.prompt || '').split(/\r?\n/)[0].slice(0, 120)) + ops + '</li>');
+    }
+    L.push('</ul>');
+    // ★ 2026-10-07：区分「无待确认」与「没有按钮」—— 用户实测困惑点
+    if (!pendCount) L.push('<div class="meta" style="padding:4px 2px">以上均为历史项（expired / confirmed / cancelled）⇒ 无可点按钮。出现新的待确认请求时，该行右侧才会出现「确认 / 取消」。</div>');
+  } else if (p && !p.offline) {
+    L.push('<b>待确认明细</b><div class="off">（空）</div>');
+  }
+  if (lt && !lt.offline && lt.lines && lt.lines.length) {
+    L.push('<b>service.log 尾</b><pre>' + esc(lt.lines.join('\n')) + '</pre>');
+  }
+  // ★ 2026-10-07：侧栏 ⚙（运维面板入口）显示待确认计数 —— 提高「QQ 故障 → 本页确认」入口的可发现性
+  try {
+    var ob = document.getElementById('btn_ops');
+    if (ob) {
+      var pend = (h && !h.offline && h.pending) ? Number(h.pending) : 0;
+      ob.innerHTML = '⚙' + (pend ? '<span style="background:#c0392b;color:#fff;border-radius:8px;padding:0 4px;font-size:11px;margin-left:2px">' + pend + '</span>' : '');
+      ob.title = '运维面板（QQ / 会话 / 审计）' + (pend ? ' — ' + pend + ' 条待确认' : '');
+    }
+  } catch (e) {}
+  el.innerHTML = L.join('');
+}
+function hl_id(h) { return h.handoffLock ? h.handoffLock.id : '-'; }
+function pollQQ() {
+  // ★ 2026-10-07：每请求独立超时（8s）—— 公网经 Cloudflare 隧道单请求 ~450ms（冷启动更久），
+  //   原实现 Promise.all 任一挂住 ⇒ 面板永远停在「加载中…」（用户实测「公网运维面板里没有」的成因）。
+  //   超时/失败退化为 {offline:true}，其余项照常渲染。
+  function qqGet(u) {
+    var c = (typeof AbortController === 'function') ? new AbortController() : null;
+    var t = c ? setTimeout(function () { try { c.abort(); } catch (e) {} }, 8000) : null;
+    var opt = c ? { signal: c.signal, cache: 'no-store' } : { cache: 'no-store' };
+    return fetch(HUB + u, opt).then(function (r) { if (t) clearTimeout(t); return r.json(); })
+      .catch(function (e) {
+        if (t) clearTimeout(t);
+        return { offline: true, reason: (e && e.name === 'AbortError') ? 'timeout' : 'fetch-error' };
+      });
+  }
+  Promise.all([
+    qqGet('/proxy/qq/health'),
+    qqGet('/proxy/qq/pending'),
+    qqGet('/proxy/qq/answers'),
+    qqGet('/proxy/qq/logtail'),
+  ]).then(function (rs) { renderQQ(rs[0], rs[1], rs[2], rs[3]); qqBackoff = 5000; })
+    .catch(function () { renderQQ({ offline: true, reason: 'proxy-error' }, null, null, null); qqBackoff = Math.min(qqBackoff * 2, 60000); })
+    .then(function () { setTimeout(pollQQ, qqBackoff); });
+}
+function pollDialog() {
+  fetch(HUB + '/dialog').then(function (r) { return r.json(); })
+    .then(function (d) {
+      var el = document.getElementById('dialog');
+      if (!d || (d.offline && (!d.items || !d.items.length))) { el.innerHTML = '<div class="off">QQ 服务离线</div>'; return; }
+      if (!d.items || !d.items.length) { el.innerHTML = '<div class="off">（暂无问答记录）</div>'; return; }
+      var L = ['<table><tr><th>时间</th><th>方向</th><th>内容</th><th>状态</th></tr>'];
+      for (var i = 0; i < d.items.length; i++) {
+        var x = d.items[i];
+        var ts = x.ts ? fmtLocal(x.ts, 'hms') : '-';   // ★ 本地时区（原切片显示 UTC，早 8h）
+        L.push('<tr><td>' + esc(ts) + '</td><td>→ 问</td><td>#' + esc(x.id) + ' [' + esc(x.kind || '-') + '] ' + esc(String(x.prompt || '').split(/\r?\n/)[0].slice(0, 110)) + '</td><td>' + esc(x.status) + '</td></tr>');
+        if (x.answer) L.push('<tr><td></td><td>← 答</td><td>' + esc(x.answer) + (x.text ? '：' + esc(x.text) : '') + '</td><td></td></tr>');
+      }
+      L.push('</table>');
+      el.innerHTML = L.join('');
+    })
+    .catch(function () { document.getElementById('dialog').innerHTML = '<div class="off">QQ 服务离线</div>'; });
+}
+function pollServe() {
+  fetch(HUB + '/serve-direct').then(function (r) { return r.json(); }).then(function (s) {
+    var el = document.getElementById('serve');
+    if (s.alive) {
+      serveDirectUrl = s.directUrl || '';
+      el.innerHTML = '<ul><li><b>Web UI 运行中</b> · <a href="' + esc(s.directUrl) + '">' + esc(s.webUrl) + '</a> · pid=' + esc(s.pid) + '</li></ul>';
+    } else {
+      el.innerHTML = '<div class="off">实例指针不存在（' + esc(s.reason || '-') + '）—— serve 会话仍可从左侧会话列表进入</div>';
+    }
+  });
+}
+function refreshSessions() {
+  fetch(HUB + '/sessions').then(function (r) { return r.json(); }).then(function (list) {
+    var el = document.getElementById('sessions');
+    if (!list.length) { el.innerHTML = '<div class="off">（无会话）</div>'; return; }
+    var now = Date.now(), rows = ['<table><tr><th>id</th><th>tool</th><th>状态</th><th>开始</th><th>时长</th><th>命令</th></tr>'];
+    for (var i = 0; i < list.length; i++) {
+      var s = list[i];
+      var endMs = s.status === 'running' ? now : (Date.parse(s.endedAt) || now);
+      rows.push('<tr><td>' + esc(s.id.slice(0, 24)) + '</td><td>' + esc(s.tool) + '</td>'
+        + '<td class="' + stClass(s.status) + '">' + esc(s.status) + '</td>'
+        + '<td>' + esc(fmtLocal(s.startedAt, 'full')) + '</td>'
+        + '<td>' + fmtDur(endMs - (Date.parse(s.startedAt) || now)) + '</td>'
+        + '<td>' + esc(s.cmd.join(' ').slice(0, 80)) + '</td></tr>');
+    }
+    rows.push('</table>');
+    el.innerHTML = rows.join('');
+  });
+}
+function splitCmd(s) {
+  var out = [], cur2 = '', q = '';
+  for (var i = 0; i < s.length; i++) {
+    var ch = s[i];
+    if (q) { if (ch === q) q = ''; else cur2 += ch; }
+    else if (ch === '"' || ch === "'") q = ch;
+    else if (/\s/.test(ch)) { if (cur2) { out.push(cur2); cur2 = ''; } }
+    else cur2 += ch;
+  }
+  if (cur2) out.push(cur2);
+  return out;
+}
+function doSpawn(ev) {
+  ev.preventDefault();
+  var tool = document.getElementById('sp_tool').value;
+  var cmd = splitCmd(document.getElementById('sp_cmd').value);
+  var out = document.getElementById('spawn_out');
+  if (!cmd.length) { out.textContent = '命令为空'; return false; }
+  if (tool === 'custom') tool = cmd[0].replace(/^(.*[\\\/])/, '').replace(/\.(exe|cmd|bat|ps1)$/i, '') || 'custom';
+  fetch(HUB + '/spawn?key=' + encodeURIComponent(getKey()), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tool: tool, cmd: cmd }),
+  }).then(function (r) { return r.json().then(function (j) { return { code: r.status, j: j }; }); })
+    .then(function (r) {
+      if (keyRejected(r)) { out.textContent = '本项目 httpKey 不匹配，已清除缓存 —— 请重试'; return; }
+      out.textContent = r.code === 200 ? ('已启动 id=' + r.j.id) : ('失败: ' + (r.j.error || r.j.message || r.code));
+      refreshSessions();
+    });
+  return false;
+}
+function pollAudit() {
+  fetch(HUB + '/audit').then(function (r) { return r.json(); }).then(function (a) {
+    document.getElementById('audit').textContent = (a.lines && a.lines.length) ? a.lines.join('\n') : '（空）';
+  }).catch(function () {});
+}
+
+/* ═══ 启动 ═══ */
+try { if (!mqMobile.matches && localStorage.getItem('hubSbCollapsed') === '1') document.body.classList.add('sb-collapsed'); } catch (e) {}
+(function () {
+  var h = new Date().getHours();
+  var g = h < 6 ? '夜深了' : h < 12 ? '早上好' : h < 14 ? '中午好' : h < 18 ? '下午好' : '晚上好';
+  document.getElementById('nc_greet').textContent = g + '，想做什么？';
+})();
+loadProjects();          // ★ 多项目：填充侧栏项目下拉（无前缀请求也会正确标出缺省项目）
+pollOverview();
+setInterval(pollOverview, 5000);
+setInterval(tickTranscript, 3000);
+setInterval(function () { if (document.body.className === 'legacy') { refreshSessions(); } }, 5000);
+setInterval(function () { if (document.body.className === 'legacy') { pollAudit(); pollDialog(); } }, 8000);
+setInterval(pollServe, 10000);
+</script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+{
+  "_warning": "模板：本文件只示意结构，密钥一律留空。实际运行配置在 %LOCALAPPDATA%\\codebuddy-hub\\hub.config.json（不进版本库）。",
+  "_note": "projects[] 是唯一项目源。httpKey / qq.key / qq.simulateKey / doc.key 必须在该项目自己的运行配置里填写真实值，切勿提交回本仓库。",
+  "_schema": "2026-11-18 多项目版（P1）：无 /p/<id> 前缀的请求落 default 项目；未知 id 返回 404 不回落。全局键 = port/httpKey/清扫/编码表；每项目 = root + qq + doc + serve。",
+  "port": 18766,
+  "httpKey": "",
+  "default": "demo",
+  "maxSessions": 200,
+  "maxAgeDays": 14,
+  "logHardCapBytes": 67108864,
+  "replayTailBytes": 262144,
+  "pollMs": 500,
+  "encodingByTool": {
+    "default": "gbk",
+    "codebuddy": "utf8",
+    "node": "utf8",
+    "git": "utf8",
+    "msbuild": "gbk",
+    "sqlplus": "gbk",
+    "svn": "gbk"
+  },
+  "projects": [
+    {
+      "id": "demo",
+      "name": "示例项目",
+      "root": "D:/path/to/your-project",
+      "httpKey": "",
+      "qq": {
+        "origin": "http://127.0.0.1:18875",
+        "key": "",
+        "simulateKey": "",
+        "answersDir": ".codebuddy/temp/qq-answers",
+        "serviceLog": "tools/qqbot/service.log",
+        "serveInstanceFile": "tools/qqbot/runtime/serve-instance.json",
+        "answersLimit": 8,
+        "logTailLines": 30,
+        "healthTimeoutMs": 2500
+      },
+      "doc": {
+        "key": "",
+        "publicUrl": "",
+        "title": "迭代文档",
+        "extraFiles": []
+      },
+      "serve": {
+        "port": 19000,
+        "jobPermissionMode": "bypassPermissions",
+        "idleTtlMs": 1800000,
+        "reapIntervalMs": 300000,
+        "reapEnabled": true
+      }
+    }
+  ]
+}
