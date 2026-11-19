@@ -1,7 +1,7 @@
 # 运行健康度评分（Run Health Scoring）
 
-> 状态：**S1 已完成**（2026-11-19）。§1.1.1 形态定位、§1.2 三机制取舍、§1.2.1/§1.2.2 实测结构已定稿；§4 维度待 S3 定稿
-> 建立：2026-11-19｜最后更新：2026-11-19（补 §1.1.1 形态定位）
+> 状态：**S1 / S2 / M1 / M2 / M4 / S3 / S4 已完成**（2026-11-19）。§4 是评分口径唯一事实源，改动只能走 §9.6 回滚或 T2 校准
+> 建立：2026-11-19｜最后更新：2026-11-19（S3 §4 维度定稿）
 > 来源：腾讯 LoopForge 对标分析（§1）
 > 范围：iteration-workflow 引擎的**度量底座补齐** + **运行级评分新增**
 > 不涉及：LoopForge 平台版能力的移植（见 §5）
@@ -190,8 +190,8 @@ curl.exe -sSL -m 600 -o LoopForge-main.zip "https://ghfast.top/https://github.co
 | **2** | **M4** | signals 驱动规则注入（`rules/manifest.json` + `inspect_context.py` + 注入器） | 是 | 2~3h | 每个阶段只注入命中规则，且注入结果可复现 |
 | **3** | **M2** | 状态写入统一（关闭手写 YAML 路径）+ `events[]` 审计旁路 + `resume` 只读返回 + `rotate-team` | 是 | 3~4h | 无手写 YAML 追加路径；`resume` 只读不改文件 |
 | **4** | **M1** | 产物内容合同（`content_concepts` 声明 + 校验器）+ `artifact_baseline` | 是 | 2~3h | 旧报告无法过 `finish` 门禁 |
-| **5** | **S3** | 评分维度/权重/阈值定稿（写回 §4） | 否 | 0.5h | ✅ 定稿后不再改 |
-| **6** | **S4** | 评分脚本 + 07 接入 + 历史回测 | 是 | 2~3h | 3~5 个历史迭代回测有区分度 |
+| **5** | **S3** | 评分维度/权重/阈值定稿（写回 §4） | 否 | 0.5h | ✅ 已完成（2026-11-19），定稿后不再改 |
+| **6** | **S4** | 评分脚本 + 07 接入 + 前向验证 | 是 | 2~3h | ✅ 脚本与接入已完成（2026-11-19）：001 **88** / 002 **77**，跨 11 分；前向验证待新迭代（回测不可行，见 §2 #8） |
 
 **排序依据（三条依赖关系，不可随意调换）**
 
@@ -200,6 +200,7 @@ curl.exe -sSL -m 600 -o LoopForge-main.zip "https://ghfast.top/https://github.co
 3. **M4 排 M2/M1 之前**：它改动面最小（新增 `rules/manifest.json` + 探测/注入两个脚本，规则正文复用现有 47 个 md）、不依赖前两者、且落地后每次阶段加载都受益（降 token）。它的 `stage_rules` 映射到 7 个阶段文件，不受 M1/M2 改动影响。
 
 **总预估**：11~16h，必然跨多次会话 ⇒ 每一步都回写 §6 勾选表。
+> 序 1~4（S2 / M4 / M2 / M1）均已按各自「停止点」验收通过，收口记录见 §8 步骤 1~4；序 5（S3）定稿见 §4，序 6（S4）收口见 §8 步骤 6。
 
 ### S1 对标拆解（只读）
 
@@ -216,9 +217,9 @@ curl.exe -sSL -m 600 -o LoopForge-main.zip "https://ghfast.top/https://github.co
 4. 验收：`node <skill>/runtime/metrics/refresh-metrics.mjs --force` 退出 0，产出 `sessions.csv` / `phase-aggregates.csv`，`docs/iterations/阶段消耗.md` 出现本迭代行
 5. 写入位置：`<项目根>/.codebuddy/skills/iteration-workflow/runtime/metrics/`（该目录在 `EXEMPT_PATHS` 内，无需开闸）
 
-### S3 维度定稿（文档）
+### S3 维度定稿（文档 · ✅ 已完成 2026-11-19）
 
-输入 = S1 取舍结论 + S2 实际能取到的字段。输出 §4 终稿：维度、权重、准入分、每维取数口径与降级规则（取不到数输出 `—` 而非 0，沿用 `estimate_*` 的既有先例）。
+输入 = S1 取舍结论 + S2 实际能取到的字段。**产出 = §4 终稿**：5 个评分维（权重 30/25/20/15/10）、准入分 75、两条硬红线、每维取数口径与降级规则（取不到数输出 `—` 而非 0，沿用 `estimate_*` 先例）；被剔除的三项见 §4.1，区分度预览见 §4.11。
 
 ### S4 评分脚本 + 07 接入
 
@@ -230,26 +231,157 @@ curl.exe -sSL -m 600 -o LoopForge-main.zip "https://ghfast.top/https://github.co
 | 是否自动回写 | **否**。只输出分数 + 建议清单，人工决定是否改 SOP/门禁 | 对标 LoopForge 的「一键应用」但降级为人工，理由见 §5 |
 | 回测 | **改前向验证**（原「取最近 3~5 个已完成迭代」不可行） | 依据 §2 #8：历史 state 只剩 2 个，且其 `phase_history` 已固定 ⇒ 无样本可回算。替代：首批 2~3 个**新**迭代跑完再校准权重；首个迭代分数只作观测、不参与准入判定 |
 
-## 4. 维度裁剪草案（待 S3 定稿）
+## 4. 评分维度（S3 定稿 · 2026-11-19）
 
-| LoopForge 维度 | 权重 | 0003 取数可行性 | 候选处置 |
-|---|:--:|---|---|
-| 控制流健康 | 25% | 部分：`gate-check.mjs` 拦截记录 + `phase_history` 跳步 | 保留，口径改为「**门禁拦截 → 自愈 → 复发**」三段式 |
-| 耗时与等待 | 20% | 可：`phase_history.completed_at` + `started_at` | 保留，需扣除人工等待（`waiting-protocol.md` 的挂起时长），否则长等待迭代被误判 |
-| 工具浪费 | 20% | 部分：步骤重试计数 | 保留，降权（无云端工具调用轨迹可比） |
-| Token 效率 | 15% | 可（S2 之后）：`token-scanner.mjs` | 保留，权重上调（这是 0003 唯一能硬取的成本指标） |
-| 错误恢复 | 10% | 部分 | 保留 |
-| 交付完整 | 10% | 可：07 交付标准 checklist | 保留 |
+> 状态：**已定稿并经用户拍板**（2026-11-19「按建议定稿」）。本节是评分口径的唯一事实源；后续改动只能走 §9.6 回滚条件或 T2 校准，**不再逐次微调**。
+> 评分对象：**单个迭代的一次运行**（≠ §1.3 的 skill 产品分）。
+> 硬原则：全部子项由脚本从文件**确定性计算**，不接受 Agent 自评；脚本只读，不改任何产物。
 
-**0003 特有候选维度（LoopForge 没有）**
+### 4.1 定稿时剔除/归并的三项（相对 S1 草案）
 
-| 维度 | 取数来源 | 说明 |
+| 项 | S1 草案 | 终稿 | 依据（实测） |
+|---|---|---|---|
+| 耗时与等待 | 保留 20%，扣除人工等待 | **降为观测项（0 权重）** | `phase_history` 只有 `completed_at`、**无 per-phase `started_at`** ⇒ 阶段墙钟必然含人工等待；`waiting-protocol.md` 无机器可读的挂起时长 ⇒ 不可归因，扣分等于惩罚「人不在」 |
+| 门禁绕过率 | 新增独立维 | **降为观测项（0 权重）** | `.gate-bypass` 只能由用户手动创建（门禁硬拦 Agent 自建）⇒ 属引擎摩擦，不属运行不健康 |
+| 产物复用率 | 新增独立维（依赖 M1） | **并入 D2 新鲜度子项** | M1 的 `reuse` 判据已覆盖同一事实，独立成维＝同一现象两处计价 |
+
+### 4.2 五维权重与 LoopForge 映射
+
+| # | 维度 | 权重 | LoopForge 对应 | 变动理由 |
+|:--:|---|:--:|---|---|
+| D1 | Token 效率 | 30% | Token 效率 15% | 0003 唯一能硬取的成本指标（S2 已跑通），权重上调 |
+| D2 | 交付完整 | 25% | 交付完整 10% | M1 落地后由人工 checklist 升级为机器判据 |
+| D3 | 控制流健康 | 20% | 控制流健康 25% | 删「拦截→自愈」子项（历史 37,721 行日志零拦截，无信号），改为「强制步闭合 + 02/03 评审合规 + 降级留痕」 |
+| D4 | 工具浪费 | 15% | 工具浪费 20% | 无云端工具轨迹，改为「阶段后回改率 + 窗外轮次占比」两个代理 |
+| D5 | 错误恢复 | 10% | 错误恢复 10% | 保留；依赖 `events[]`，历史迭代 fail-open 为 `—` |
+
+合计 100%。**观测项 4 个、0 权重**（§4.9）。
+
+### 4.3 D1 Token 效率（30%）
+
+基础量（全部取自 `runtime/metrics/`，**不新增采集**）：
+
+| 符号 | 定义 | 实测（001 / 002） |
 |---|---|---|
-| `门禁绕过率` | `hooks/.gate-bypass` 创建次数 + TTL 使用时长 | 0003 门禁能拦 IDE 工具层，绕过行为是真实质量信号 |
-| `产物复用率` | **依赖 M1 落地**：`artifact_baseline` 记录 + `finish` 基线比对 | 度量"有多少产物是 prepare 后新写的、多少是拿旧报告过的门禁"。**M1 未落地前此维不可算** |
+| `phasedInput` | `phase-aggregates.csv` 的 `iteration-total.sumInputTokens` − `unphased.sumInputTokens` | 10,881,768 / 83,962,583 |
+| `deliveredKB` | `docs/iterations/<id>/` 产物字节 ÷1024（**排除 `阶段消耗.md`** 等度量派生文件） | 30.25 / 87.65 |
+| `r` | `phasedInput ÷ deliveredKB`（k tokens/KB） | 360 / 958 |
+| `peak` | `iterations.csv.maxLastStepInputTokens` | 203,440 / 380,112 |
+| `cache_hit` | `1 − sumCacheMissTokens / sumInputTokens`（S2b 已正名，**不是归属率**） | 98.55% / 98.92% |
 
-> ★ S1 联动结论：`交付完整` 与 `产物复用率` 两维的可信度**完全依赖 M1**。若 M1 不落地，则"交付完整"只能靠人工 checklist 打分（弱证据），建议届时将该维权重压到 5% 以下或直接删除。
-> 权重、准入分、降级规则 **S3 定稿**；本表仅供 S1 判定取舍时参考，不作为实现依据。
+> 窗外轮次**不计入本维**（计入 D4②），避免同一现象两处计价。
+
+| 子项 | 满分 100 | 归零 0 | 维内权重 |
+|---|:--:|:--:|:--:|
+| ① `r` | ≤250k/KB | ≥2000k/KB | 50% |
+| ② `peak` | ≤150k | ≥500k | 30% |
+| ③ `cache_hit` | ≥97% | ≤90% | 20% |
+
+分段线性插值，超界取端点。**阈值是先验设计值，不得用被评迭代自身实测当基线**（否则恒 100，自我参照）。
+
+### 4.4 D2 交付完整（25%）
+
+| 子项 | 取数 | 口径 | 维内权重 |
+|---|---|---|:--:|
+| ① 内容合同 | `validate-artifacts.py --iteration <id> --json` | ERROR 0 = 100；每条 −15，下限 0 | 50% |
+| ② 产物齐备 | `engine/templates/manifest.json` 的 7 产物 vs 实存 | 7/7 = 100；缺 1 个 −25 | 25% |
+| ③ 新鲜度 | `state-apply.py artifact-check` | 「未变」每个 −10；缺基线 ⇒ `—` 不扣分 | 25% |
+
+`missing` / `reuse` **不在维内扣分**，直接触发硬红线 R1（§4.8）。
+
+### 4.5 D3 控制流健康（20%）
+
+| 子项 | 口径 | 维内权重 |
+|---|---|:--:|
+| ① 强制步闭合 | `iteration_status=completed` 时，`mandatory:true` 且 `status ∈ {pending,in_progress}` 的步数 ÷ `mandatory:true` 总数；0 个 = 100，每个 −15 | 40% |
+| ② 评审合规 | 仅 **02/03**（`state-protocol.md:261` 法定适用阶段，**分母恒为 2**；04~06 的附加 gate 不加分）：`result=passed` 合规，02 另允许 `conditionally_passed`；`rejected` 且无 `override_reason` ⇒ 子项 0 且触发 R2（§4.8） | 40% |
+| ③ 降级留痕 | `mandatory:true` 且 `skipped` 但 `skip_reason` 非空 = 合规（只记录不扣分）；`skip_reason` 空 ⇒ 每个 −20 | 20% |
+
+**解析铁律**：`phase_history` 按 `phase` 聚合——状态取末条、`review_gate` **任一命中即合规**。实测 002 的 `03` 有 `in_progress` + `completed` 两条重复条目，取末条会误杀已通过的 gate。
+
+### 4.6 D4 工具浪费（15%）
+
+| 子项 | 口径 | 满分 → 归零 | 维内权重 |
+|---|---|---|:--:|
+| ① 阶段后回改率 | `docs/iterations/<id>/` 产物 mtime **晚于**所属阶段 `completed_at` 的文件数 ÷ 产物数（T0′ 口径） | ≤10% → ≥60% | 60% |
+| ② 窗外轮次占比 | `unphased.rounds ÷ iterations.rounds` | ≤10% → ≥50% | 40% |
+
+①② 是同根现象的两种观测（阶段收口后仍在动文件），报告须并列展示、**只做一次归因**。
+
+### 4.7 D5 错误恢复（10%）
+
+| 子项 | 口径 | 维内权重 |
+|---|---|:--:|
+| ① blocker 闭环率 | `blocker_removed ÷ blocker_added`（`events[]`） | 40% |
+| ② defect 闭环率 | `defect_closed ÷ defect_opened`（`events[]`） | 40% |
+| ③ 终态残留 | 终态 `blockers[]` / `defects[]` 非空，每项 −20 | 20% |
+
+无 `events[]`（002 及更早）⇒ 整维 `—`。**这是唯一必须靠前向样本才能出数的维**，首版长期 `—` 属预期，不算缺陷。
+
+### 4.8 总分、准入、红线、分带
+
+- 总分 = `round( Σ(wᵢ·sᵢ) ÷ Σ(可得维度 wᵢ) × 100 )`（缺数维度按剩余权重归一）
+- **准入分 75**；≥85 健康 / 75–84 放行 / 60–74 复核 / <60 不健康
+- **两条硬红线（触发即总分封顶 59）**
+  - **R1** D2 出现 `missing`（应有产物不存在）或 `reuse`（拿旧产物过门禁）
+  - **R2** 02/03 出现 `rejected` 未 `override` 却推进，或阶段序列回退（如 04→03）
+- **可比性**：分数只在**同 complexity 档内**可比；🟢 vs 🟡 跨档只看趋势，不做高低判断（§9.5 控制变量）
+- **观察期**：前 2 个新迭代只出分不入准入，第 3 个起生效
+
+### 4.9 观测项（0 权重，只进报告）
+
+| 观测项 | 取数 | 归因 |
+|---|---|---|
+| 耗时画像 | 墙钟（`started_at` → 末条 `phase_history.completed_at`；★ 原写「首末 `completed_at`」，实测会丢 01 阶段耗时并算出负等待，见 §8 步骤 6）、机器时间（`phase-aggregates.sumElapsedMs`）、等待占比 = 1 − 机器/墙钟 | `human-wait` |
+| 门禁绕过 | `gate-audit.log` 的 `BYPASS` 行 + TTL 时长 | `engine` |
+| 门禁拦截 | `HOOK_EXIT code=2` 按迭代窗计数（★ 2026-11-19 更正：定稿时写的「37,721 行零命中」**不成立** —— 日志实有 26 行 `code=2`，001 窗内 3 条 / 002 窗内 6 条 ⇒ 按实计数，不再 fail-open 记 `—`，详见 §8 步骤 6） | `run` |
+| 模型漂移 | `iterations.models` 集合 | `model` |
+
+### 4.10 降级规则（脚本必须实现）
+
+1. 取不到数 ⇒ 输出 `—`，**不写 0**（沿用 `estimate_*` 先例）
+2. 缺数维度权重合计 > 30% ⇒ 结论降级为「仅观测，不判定准入」
+3. `precision=date` / note 含「半精确窗」⇒ 该维标 ⚠，照出分但**不参与准入判定**
+4. 缺 `artifact_baseline` ⇒ D2③ `—`，不扣分
+5. 权重 / 阈值 / 豁免白名单外置 `runtime/metrics/score-config.json`；**禁止以被评迭代自身实测为基线**
+6. 全部子项由脚本确定性计算，不接受 Agent 自评；脚本只读
+7. **维内合并**（S4 实施时补齐）：非 `optional` 子项缺数 ⇒ **整维输出 `—`**（不拿残缺子项凑出一个看似正常的分数）；
+   `optional:true` 的子项缺数只从分母剔除。当前 optional 集合 = D2③（无基线，§4.4 明确不扣分）、
+   D3①（迭代未 completed）、D3②（`phase_history` 无 02/03）。
+
+### 4.11 定稿验收：区分度预览（人工粗算，非脚本产物）
+
+| 维度 | 001 🟢 集成验证 | 002 🟡 知识库全量化 |
+|---|:--:|:--:|
+| D1 Token 效率 | 88 | 48 |
+| D2 交付完整 | 100 | 100 |
+| D3 控制流健康 | 94（1 强制步未闭合） | 100 |
+| D4 工具浪费 | 55 | 42 |
+| D5 错误恢复 | `—` | `—` |
+| **总分（归一后）** | **≈87 健康** | **≈73 复核** |
+
+跨 14 分、无红线触发，满足 §9.6「不得全部挤在 85+ 或全部不及格」。002 的扣分可逐项归因：`peak 380k`、回改 `3/7`、窗外 `28.8%`。
+
+**注**：🟢/🟡 跨档不可比，本表只用于验证区分度，不构成「001 优于 002」的结论。
+
+### 4.12 S4 落点（因定稿而锁定）
+
+| 项 | 值 |
+|---|---|
+| 脚本 | `runtime/metrics/score-run.mjs --iteration <id>`（缺省取 ACTIVE），**只读** |
+| 配置 | `runtime/metrics/score-config.json`（权重 / 阈值 / 白名单） |
+| 输出 | `runtime/metrics/scores/<id>.json` + `runtime/metrics/scores.csv` 追加一行 |
+| 07 接入 | `engine/phase-07.md` 增一小节：脚本存在则执行并在 07 报告写入「## 运行健康度」段；不存在打印 SKIP 不阻断 |
+| 阻断力 | **不阻断归档**（R1 级阻断已由 M1 的 `artifact-check` 承担）；R1/R2 只在报告标红 |
+| 回流 | 仅 `phase-07.md` 走 `a6_reflux`；`runtime/metrics/**` 不回流 |
+
+**定稿时的三条实证事实（勿重新取证）**
+
+| 事实 | 值 | 对口径的影响 |
+|---|---|---|
+| `phase-aggregates.csv` 有独立 `unphased` 行 | 001 `4/12` 轮、002 `15/52` 轮 | Token 维只用阶段内轮次；窗外轮次归 D4② |
+| 002 精度为 `date` 且窗尾含过夜 | `precision=date` | Token 维标 ⚠，不参与准入判定（§4.10） |
+| M1 在两迭代均 0 ERROR | 001 lite 7 文件 / 002 full 7 文件 | D2 在历史样本上无区分度，只能当护栏；区分度由 D1/D3/D4 承担 |
 
 ## 5. 明确不做
 
@@ -266,8 +398,9 @@ curl.exe -sSL -m 600 -o LoopForge-main.zip "https://ghfast.top/https://github.co
 
 ## 6. 进度勾选（代替 state.yaml）
 
-> ★ **下次开工 = §8 步骤 5（S3 评分维度定稿）—— 这是「停止点」，需用户先拍板维度与权重再动手**。
-> M2 / M4 / M1 三机制已于 2026-11-19 全部落地并部署到 0003 实例。跨会话接手顺序：读本表看进度 → 读 §8 对应任务卡 → 直接执行，不要重新取证（取证结论已固化在 §2 / §2.1 / §1.2.2）。
+> ★ **下次开工 = §8 步骤 7（前向验证 / T2 复采）**。S4 已于 2026-11-19 落地（脚本 + 配置 + 07 接入 + 5 条验收全过），
+> §4 已于同日定稿并经用户拍板，**不要重新设计维度**。
+> M2 / M4 / M1 / S3 / S4 均已落地。跨会话接手顺序：读本表看进度 → 读 §8 对应任务卡 → 直接执行，不要重新取证（取证结论已固化在 §2 / §2.1 / §1.2.2 / §4）。
 
 | 阶段 | 状态 | 完成时间 | 备注 |
 |:--:|:--:|---|---|
@@ -282,9 +415,9 @@ curl.exe -sSL -m 600 -o LoopForge-main.zip "https://ghfast.top/https://github.co
 | M4 规则注入 | ✅ | 2026-11-19 | 三件产物：`engine/rules/manifest.json`（v1.1，`base_rules` + `stage_rules` + 13 profiles）、`scripts/inspect-context.py`（单次 walk 采证据）、`scripts/build-stage-prompt.py`（清单 + 命中理由）。验收：两次跑 04 输出**逐字一致**；00 阶段 0 基础规则 + 2 阶段文件（轻量查询不注入）；恒真信号已清除 |
 | M2 状态写入统一 + events | ✅ | 2026-11-19 | `state-apply.py` 新增 `append-steps` / `rotate-team` / `resume`（只读）+ 每次成功写入自动 append `events[]`；`phase-07.md` 内联写盘模板已删除；`state-protocol.md` 新增 §9.7；门禁新增 `isStateYamlDirectWrite` 前置拦截。回归 **20/20 PASS** |
 | M1 内容合同 + 基线 | ✅ | 2026-11-19 | `engine/templates/manifest.json`（7 产物 × full/lite 双档）+ `scripts/validate-artifacts.py`（6 判据）+ `state-apply.py` 的 `baseline-set` / `artifact-check`。真实两迭代 14 文件 0 ERROR；旧 07 报告复制必拒；`run-state-tests.py` 24/24 |
-| S3 维度定稿（§4） | ☐ | | **停止点** |
-| S4 评分脚本 + 07 接入 | ☐ | | 放 `runtime/metrics/score-run.mjs` |
-| S4 历史回测 | ☐ | | |
+| S3 维度定稿（§4） | ✅ | 2026-11-19 | 5 评分维（30/25/20/15/10）+ 4 观测项；准入 75；R1/R2 封顶 59；剔除耗时/绕过/复用三项见 §4.1 |
+| S4 评分脚本 + 07 接入 | ✅ | 2026-11-19 | `runtime/metrics/score-run.mjs` + `score-config.json` + 07 §6.4；两迭代实测 **88 / 77**，5 条验收全过（见 §8 步骤 6 收口） |
+| S4 前向验证（原「历史回测」） | ☐ | | 历史 state 只剩 2 个 ⇒ 不可回算（§2 #8）；脚本已实现观察期闸门（`events[]` 存在的前 2 个迭代 `judged=false`），等新迭代落样本 |
 | 回流引擎仓库 | ☐ | | 仅 `engine/` 与 `scripts/` 的改动；`runtime/metrics/` 不回流 |
 
 ## 7. 为何不走正式迭代流程
@@ -430,15 +563,85 @@ ended_at → 末条 phase_history.completed_at → 后继迭代的 started_at �
 3. `state-apply.py` 增 `baseline-set`（`phase-advance` 之后调用，记内容 hash）与 `artifact-check`（只读比对，输出"基线后新增/变化/未变"三类）
 4. `phase-07.md` 归档步骤前插一步：`validate-artifacts.py --phase 07` ⇒ 未过则**拒绝归档**
 
-### 步骤 5 ｜ S3：评分维度定稿
+### 步骤 5 ｜ S3：评分维度定稿（✅ 已完成 2026-11-19）
 
-依赖 S2 实测数据 + M1 是否落地（未落地则 `交付完整`/`产物复用率` 两维降权或删除，见 §4 联动结论）。
+**实测结论（收口）**
 
-### 步骤 6 ｜ S4：评分脚本 + 07 接入 + 回测
+| 项 | 结果 |
+|---|---|
+| 维度集 | D1 Token 30%｜D2 交付完整 25%｜D3 控制流健康 20%｜D4 工具浪费 15%｜D5 错误恢复 10% |
+| 剔除/归并 | 耗时与等待、门禁绕过率 → 观测项（0 权重）；产物复用率 → 并入 D2 新鲜度（理由见 §4.1） |
+| 准入 | **75**；分带 ≥85 健康 / 75–84 放行 / 60–74 复核 / <60 不健康；R1（`missing`/`reuse`）、R2（`rejected` 未 override 或阶段回退）触发即封顶 **59** |
+| 降级 | 缺数出 `—` 不写 0；缺数权重 >30% 只观测不判定；`precision=date` 标 ⚠ 不入准入；无基线 D2③ `—` |
+| 区分度预览 | 001 ≈**87**（健康）/ 002 ≈**73**（复核），跨 14 分（人工粗算，见 §4.11） |
+| 观察期 | 前 2 个新迭代只观测，第 3 个起参与准入 |
+| 用户拍板 | 2026-11-19「按建议定稿」 |
 
-**改动面**：`runtime/metrics/score-run.mjs`（不回流）+ `engine/phase-07.md` 增一小节（唯一需回流项，写成"若脚本存在则执行，否则 SKIP 不阻断"）+ 3~5 个历史迭代回测。
+> 定稿时新增的实证事实：① `phase-aggregates` 有独立 `unphased` 行（001 `4/12` 轮、002 `15/52` 轮）⇒ Token 维剔除窗外轮次；② 002 `precision=date` 且窗尾含过夜 ⇒ 需精度降级；③ M1 在两迭代均 0 ERROR ⇒ D2 历史样本无区分度，只能当护栏；④ `gate-audit.log` 37,721 行内 `code=2` 零命中 ⇒ D3 删「拦截→自愈」子项。
 
-**验收**：分数有区分度（不全部挤在 85+ 或全部不及格）。
+### 步骤 6 ｜ S4：评分脚本 + 07 接入 + 前向验证（✅ 脚本与接入已完成 2026-11-19）
+
+**实测结论（收口）**
+
+| 项 | 结果 |
+|---|---|
+| 产物 | `runtime/metrics/score-run.mjs`（~800 行，零依赖）｜`runtime/metrics/score-config.json`（权重/阈值/降级全外置）｜`engine/phase-07.md` §6.4 |
+| 实测分数 | 001 🟢 **88**（健康，准入通过）｜002 🟡 **77**（放行，`judged=false`）。对 §4.11 的 87 / 73 分别差 **+1 / +4**，均在 ±5 内 |
+| 逐维对账 | 001：D1 92.3 / D2 100 / D3 94.0 / D4 54.4 / D5 `—`；002：D1 60.0 / D2 100 / D3 100 / D4 41.7 / D5 `—`。D3/D4 与 §4.11 人工粗算**逐位一致**，偏差全在 D1（§4.11 未给插值细节） |
+| 验收 3（R1 探针） | 把 002 整目录复制成 `2099-01-01-999-R1探针`（同盘隔离目录 + `--iterations-dir`）⇒ 7 个 `reuse` 全命中、`red_lines[R1]` 非空、总分 **59**（封顶生效）。★ 探针目录**必须在 E: 盘**：`validate-artifacts.py` 的 `os.path.relpath` 跨盘抛 `ValueError`（既有缺陷，非本次引入） |
+| 验收 4（断数探针） | 移走 `iterations.csv` ⇒ D1/D4 整维 `—`、`coverage_weight` 90→**45**、总分按剩余权重归一 97、`judged=false`（缺数 55% >30%），**不抛错** |
+| 验收 5（缺脚本探针） | 07 §6.4 的 `Test-Path` 分支实测输出 `SKIP(no metrics)`，归档不阻断 |
+| ★ 维内合并口径（实施新增，§4 未写） | **非 optional 子项缺数 ⇒ 整维 `—`**（宁可出 — 也不拿残缺子项凑分）；`optional:true` 子项（D2③ 无基线、D3① 迭代未 completed、D3② 无 02/03）从分母剔除。理由：§4.4 明确「缺基线不扣分」是**维内豁免**，与「维级缺数」不同性质 |
+| ★ D4① 容差（实施新增） | `mtime > completed_at + 120s` 才算回改。`completed_at` 只有分钟精度，阶段收口后 41~96s 内的收尾写盘属噪声；2 分钟容差才能复现 §9.3 T0′ 的 **2/7（001）与 3/7（002）** |
+| ★ 墙钟口径修正 | §4.9 写「`phase_history` 首末 `completed_at`」，实测会丢掉 01 阶段耗时并算出**负等待**（001 机器 0.6h > 0.42h 墙钟）⇒ 观测项改 `started_at → 末 completed_at`。仅观测项，不影响分数 |
+| ★ 门禁拦截口径更正 | §4.9 称「37,721 行内 `code=2` 零命中」**不成立**：`gate-audit.log` 实有 `HOOK_EXIT code=2` **26 行**，001 窗内 3 条、002 窗内 6 条 ⇒ 脚本按实计数，不再 fail-open 记 `—` |
+| ★ 门禁绕过口径 | `BYPASS` 行按迭代窗过滤后计数（001 窗内 **58** 条、002 窗内 **43** 条），并取 `until=` 最大值作 TTL；未装窗口时输出 `—` 而非全局计数 |
+| 观察期闸门 | 以「state 是否含 `events[]`」区分新/旧迭代：有 events ⇒ 计入观察期（前 2 个 `judged=false`）；001/002 无 events ⇒ 不受观察期约束（但 002 因 `precision=date` 独立降级） |
+| 只读性 | 脚本不写 state / 不写 `docs/iterations/**`；唯一写入面 = `runtime/metrics/scores/<id>.json` + `scores.csv`。07 报告段落由 Agent 自行粘贴 |
+| 已知自指 | 追加「## 运行健康度」段会让 07 报告 mtime 晚于 `completed_at` ⇒ 重算时被 D4① 计为「阶段后回改」。已在 §6.4 写死「同一迭代只追加一次；复算用 `--no-write`」 |
+| 待办 | 前向验证（新迭代样本）+ 回流引擎仓库（仅 `engine/phase-07.md`） |
+
+
+
+**改动面（3 件，已锁）**
+
+| # | 产物 | 性质 |
+|:--:|---|---|
+| 1 | `runtime/metrics/score-config.json` | 新增，权重/阈值/白名单外置（数字照抄 §4.3 / §4.6 / §4.8，**不改口径**） |
+| 2 | `runtime/metrics/score-run.mjs` | 新增，**只读**，不回流 |
+| 3 | `engine/phase-07.md` 增一小节 | **唯一回流项**（走 `a6_reflux`）；写成「脚本存在则执行，否则打印 `SKIP(no metrics)` 且不阻断归档」 |
+
+**取数契约（全部已存在，禁止新增采集）**
+
+| 用途 | 来源 | 字段 |
+|---|---|---|
+| 迭代汇总（D1②③、D4②、观测） | `runtime/metrics/iterations.csv` | `rounds` `sumInputTokens` `sumCacheMissTokens` `maxLastStepInputTokens` `models` `note` |
+| 阶段汇总（D1①、观测） | `phase-aggregates.csv` | `phase=iteration-total` 与 `phase=unphased` 的 `sumInputTokens` `sumElapsedMs` `rounds` `precision` |
+| 交付产物（D1 分母、D2②、D4①） | `docs/iterations/<id>/*/*.md` | 存在性、字节数、mtime；**排除 `阶段消耗.md`** |
+| 内容合同（D2①） | `python scripts/validate-artifacts.py --iteration <id> --json` | `summary.error`、`files[].status` |
+| 新鲜度（D2③） | `python scripts/state-apply.py artifact-check --phase 07 --json` | 新增 / 变化 / **未变** / 消失 |
+| 控制流（D3、D5③） | `runtime/<id>.state.yaml` | `phase_history`（按 phase 去重取末条）、`phase_steps`（`mandatory`/`status`/`skip_reason`）、`blockers`/`defects`、`events[]` |
+| 观测项 | `gate-audit.log`、`iterations.models` | `BYPASS` 行 + TTL、`HOOK_EXIT code=2`、`models` 集合 |
+
+**解析注意（沿用 metrics 既有先例，勿引 yaml 依赖）**：`iteration-align.mjs` 用行级正则且**只认无缩进的顶层字段**（步骤级缩进的 `started_at` 曾导致窗口误判）。`phase_steps` 必须按块解析（`- id:` 起块、块内 4 空格缩进的键），`phase_history` 的 `review_gate` 按 §4.5「任一命中即合规」聚合。
+
+**输出契约**
+
+- `runtime/metrics/scores/<id>.json`：`{iteration, scored_at, complexity, total, band, admission, coverage_weight, dims:[{id,weight,score,status,warn[],items[]}], red_lines[], observed:{wall_clock_h,machine_time_h,wait_ratio,bypass,blocks,models}, attribution[]}`
+- `runtime/metrics/scores.csv` 追加一行：`ts,iteration,complexity,total,band,D1..D5,red_lines,coverage_weight`
+- stdout 打「## 运行健康度」Markdown 段（供 07 报告直接粘贴）；`--json` 时只打 JSON
+
+**实现顺序**：config → 读 state + 3 个 csv → 五维计算（D5 无 `events[]` 直接 `—`）→ 归一与分带 → 落盘 + 打印。**先只跑 001/002 对账，对不上 §4.11 的 ±5 就查实现，不要改 §4 的阈值**。
+
+**验收（5 条）**
+
+1. `node runtime/metrics/score-run.mjs --iteration 2026-11-17-001-集成验证` ⇒ ≈**87±5**（健康）
+2. 同命令对 002 ⇒ ≈**73±5**（复核），且输出 `warn: precision=date`
+3. **R1 探针**：把 002 的 07 报告复制进一个临时迭代目录 ⇒ `reuse` 命中、`red_lines` 非空、总分 ≤59
+4. **断数探针**：临时移走 `iterations.csv` ⇒ D1 输出 `—`、总分按剩余权重归一、`coverage_weight` 下降，**不抛错**
+5. **缺脚本探针**：把 `score-run.mjs` 临时改名 ⇒ 07 小节打印 `SKIP(no metrics)` 且归档不阻断
+
+> 不影响的既有面：未改 `state-apply.py` ⇒ `run-state-tests.py` 无需重跑；`runtime/metrics/**` 在 `EXEMPT_PATHS` 内 ⇒ 无需 `.gate-bypass`。
 
 ## 9. 收益论证方案
 
