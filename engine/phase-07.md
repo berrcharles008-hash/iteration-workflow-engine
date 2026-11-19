@@ -68,47 +68,33 @@
 | step-5-lessons | 正向模式提炼（从原 06 step-3 迁移过来） | ✅ | ✅ | ✅ | ✅ |
 | step-6-archive | 回顾归档（更新 state.yaml 完成 07，释放 ACTIVE） | ✅ | ✅ | ✅ | ✅ |
 
-**★ 写入方式（P-239 · 2026-11-04 内联模板）**：`phase_steps` 是**跨阶段累积**的，初始化本阶段只能**块末追加**。
+**★ 写入方式（M2 · 2026-11-19 起：唯一通道 = `state-apply.py append-steps`）**：`phase_steps` 是**跨阶段累积**的，初始化本阶段只能**块末追加**。
 
 | # | 硬约束 | 违反后果 |
 |---|---|---|
 | 1 | 禁整块替换（块区间一次性赋值的形态） | 删掉前序阶段全部步骤记录（2026-11-01 删 35 条、11-04 删 12 条） |
 | 2 | **禁从 `runtime/_steps_*.py` 复制** | 该目录正反两类历史脚本并存，形态不可辨 |
 | 3 | 追加后必须打印 total 并核对 | 期望值 = 各阶段步骤数之和 |
+| 4 | **禁内联 python 直改 `state.yaml`**（M2） | 绕过 version/backup/events/validate 四道关；手写路径已由门禁拦截 |
+
+```bash
+python .codebuddy/skills/iteration-workflow/scripts/state-apply.py append-steps \
+  --steps "step-1-summary|迭代总结|pending|true;step-2-issues|问题清单|pending|true;step-3-patterns|模式沉淀|pending|false;step-3-5-workflow-audit|工作流一致性审计|pending|true;step-3-6-attribution|偏差归因|pending|false;step-4-actions|行动项|pending|false;step-5-lessons|正向模式提炼|pending|true;step-6-archive|回顾归档（释放 ACTIVE）|pending|true"
+```
+
+- 条目格式 `id|name|status|mandatory`；`status` 缺省 `pending`、`mandatory` 缺省 `true`
+- 脚本内部一次完成：块末追加 → 重复 id 拒绝 → `version+1` → **`events` 追加** → 备份 → ACTIVE 同步 → `validate-state.py`（失败自动回滚）
+- 输出 `phase_steps 块末追加 N 条（total=…）`，据此核对硬约束 #3
+
+<details>
+<summary>历史内联模板（仅供理解 YAML 结构；<b>已禁止用于写盘</b>）</summary>
 
 ```python
-# 通用模板：只替换 PATH 与 STEPS（按上表填全），其余照抄
-import io, os, re
-PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '<迭代ID>.state.yaml')
+# 不再使用：块末追加 + 去重已由 append-steps 承接
 STEPS = [('step-1-summary', '迭代总结', 'pending', True)]
-
-lines = io.open(PATH, encoding='utf-8').read().split('\n')
-i = lines.index('phase_steps:')
-end = len(lines)
-for j in range(i + 1, len(lines)):
-    if re.match(r'^[A-Za-z_][A-Za-z0-9_]*:', lines[j]):
-        end = j
-        break
-
-existing = set()
-for j in range(i + 1, end):
-    m = re.match(r'^  - id: "([^"]+)"', lines[j])
-    if m:
-        existing.add(m.group(1))
-dup = [s[0] for s in STEPS if s[0] in existing]
-if dup:
-    raise SystemExit('ABORT: step id 已存在: %s' % ','.join(dup))
-
-out = []
-for sid, name, status, mandatory in STEPS:
-    out += ['  - id: "%s"' % sid, '    name: "%s"' % name,
-            '    status: "%s"' % status, '    mandatory: %s' % ('true' if mandatory else 'false')]
 lines[end:end] = out          # ★ 块末追加（唯一正确形态）
-
-with io.open(PATH, 'w', encoding='utf-8', newline='\n') as f:
-    f.write('\n'.join(lines))
-print('appended %d; total = %d' % (len(STEPS), len(existing) + len(STEPS)))
 ```
+</details>
 
 ### Step 3 执行标准（🟡 "按需"的判断规则）
 
@@ -213,8 +199,19 @@ print('appended %d; total = %d' % (len(STEPS), len(existing) + len(STEPS)))
 | step-5 声称有正向模式 | 回顾报告 §5 节 | 若声称"有"，则 `project/lessons-learned.md` 必须已有 P-xxx（success）行 |
 | lessons-learned.md 实际内容 | `search_content` 搜索最新 P 编号 | 确认新增行存在于文件中，非仅在报告中 |
 | 模式库蒸馏义务（第 4 项） | `node runtime/check-distill.mjs` 退出码 | 0 通过 / 3 需蒸馏 / 1 工具故障 |
+| 产物内容合同（M1） | `python scripts/validate-artifacts.py --phase 07` 退出码 | 0 通过 / 1 未过（缺概念·空章节·只剩占位·复制旧报告） |
+| 基线相对变化（M1） | `python scripts/state-apply.py artifact-check --phase 07 --require-baseline` 退出码 | 0 通过（有新增或变化）/ 1 未变（沿用旧文件）或基线缺失 |
 
 > **若任何一项检查失败**：不更新 state.yaml、不释放 ACTIVE。先执行缺失的写入操作，再重新自检。
+
+> ★ **M1 基线的两个时点（勿混）**：
+> - **阶段开始时**（`phase-advance --to NN` 之后立刻）：`python scripts/state-apply.py baseline-set --phase NN`
+>   —— 记下该阶段目录当时的产物 hash（目录还不存在也照记，`files: []`）。漏记 ⇒ 归档时 `--require-baseline` 会拒。
+> - **归档（finish）时**：上面表格后两行。`未变` 的语义是「阶段开始就有这份文件、到结束一个字没改」
+>   ⇒ 该产物不是本阶段产出的，故拒；`新增 / 变化` 才放行。
+> - 两类失败原因不同、修法不同：内容合同红 = 产物本身不合格（去补写/重写）；基线红 = 产物没产出（去写或重跑）。
+> - 环境不足（`scripts/validate-artifacts.py` 或 `templates/manifest.json` 缺失、脚本异常）⇒ **SKIP 不阻断**，
+>   登记 `runtime/TOOLING-TODO.md`；不得因为"跑不了校验"就跳过归档自检。
 
 > ★ **第 4 项三码分流（2026-11-05 BATCH-B 新增）** —— 退出码由 `runtime/check-distill.mjs` 给出：
 > - `0` ⇒ 通过（活跃条目 ≤15 **且** 活跃表 ≤6000 字符）。
@@ -292,7 +289,7 @@ self_evolve:
 
 > **版式纪律**：产出文档须遵循 `engine/doc-style-guide.md`（模式条目用"编号 + 要点列表"，不塞表格）；生成后自检 `python scripts/doc_lint.py <文件>`（ERROR 必修）。
 
-**交付标准**：回顾报告完成，模式库已实际写入，**知识资产抽取已评估（有增量 / 无）+ 候选区已清池**，ACTIVE 释放，用户确认"回顾完成"；**投影已刷新**（阶段消耗明细出现 07 行 + 看板/索引终态一致）；**文档版式自检 ERROR 0**（`python scripts/doc_lint.py <文档>`）
+**交付标准**：回顾报告完成，模式库已实际写入，**知识资产抽取已评估（有增量 / 无）+ 候选区已清池**，ACTIVE 释放，用户确认"回顾完成"；**投影已刷新**（阶段消耗明细出现 07 行 + 看板/索引终态一致）；**文档版式自检 ERROR 0**（`python scripts/doc_lint.py <文档>`）；**产物内容合同与基线比对均 0 ERROR**（`validate-artifacts.py --phase 07` + `state-apply.py artifact-check --phase 07`）
 ★ 等待方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`。
 
 ### ★ 流程变更说明

@@ -1,0 +1,144 @@
+{
+  "version": "1.1",
+  "note": "M4 规则注入声明（唯一事实源）。base_rules = 全阶段基础规则；stage_rules = 阶段主文件；profiles = 按 signals 命中才注入，未命中不注入。file 路径相对 engine/。判定脚本：scripts/inspect-context.py（证据）+ scripts/build-stage-prompt.py（清单）。SKILL.md 分级路由保留为降级路径。★ 勿用恒真信号表达\"always\"（如 path_parts:.codebuddy）——always 请写进本键，保持信号语义诚实。",
+  "base_rules": {
+    "files": [
+      "state-protocol.md",
+      "waiting-protocol.md",
+      "gate-protocol.md",
+      "gate-decision-table.md"
+    ],
+    "exclude_stages": ["00"],
+    "note": "00 = 轻量查询/状态问答，只读 runtime/ACTIVE + 状态区间；注入这四件等于把 12KB 引擎重新灌回上下文，故排除。"
+  },
+  "stage_rules": {
+    "00": { "primary": [], "always": ["startup-protocol.md", "context-discipline.md"] },
+    "01": { "primary": ["phase-01.md"], "always": ["phase-steps.md"] },
+    "02": { "primary": ["phase-02.md"], "always": ["phase-steps.md"] },
+    "03": { "primary": ["phase-03.md"], "always": ["phase-steps.md"] },
+    "04": { "primary": ["phase-04.md"], "always": ["phase-steps.md"] },
+    "05": { "primary": ["phase-05.md"], "always": ["phase-steps.md"] },
+    "06": { "primary": ["phase-06.md"], "always": ["phase-steps.md"] },
+    "07": { "primary": ["phase-07.md"], "always": ["phase-steps.md"] }
+  },
+  "profiles": [
+    {
+      "id": "doc-style",
+      "title": "文档版式规范",
+      "file": "doc-style-guide.md",
+      "stages": ["01", "02", "03", "04", "05", "06", "07"],
+      "signals": { "path_parts": ["docs/iterations", "requirements"] }
+    },
+    {
+      "id": "backend",
+      "title": "后端代码专项（编译/资源/契约/命名冲突）",
+      "file": "naming-conflict-check.md",
+      "stages": ["01", "03", "04", "05"],
+      "signals": {
+        "filenames": ["*.sln", "*.csproj"],
+        "evidence_extensions": [".cs"],
+        "path_parts": ["back-end", "backend"],
+        "terms": ["后端", "接口", "服务", "controller", "mgr", "dto"]
+      }
+    },
+    {
+      "id": "frontend",
+      "title": "前端代码专项（组件/表单/字典/差异标记）",
+      "file": "delta-marking.md",
+      "stages": ["01", "03", "04", "05"],
+      "signals": {
+        "filenames": ["package.json", "vite.config.ts", "vue.config.js"],
+        "package_dependencies": ["vue", "element-ui", "sj.sys", "ag-grid-community"],
+        "evidence_extensions": [".vue"],
+        "path_parts": ["front-end", "frontend"],
+        "terms": ["前端", "页面", "表单", "组件", "vue"]
+      }
+    },
+    {
+      "id": "sql",
+      "title": "SQL / 数据变更专项",
+      "file": "consistency-checklist.md",
+      "stages": ["01", "03", "04", "05"],
+      "signals": {
+        "evidence_extensions": [".sql"],
+        "path_parts": ["sql"],
+        "terms": ["数据库", "sql", "表结构", "字段", "迁移", "补丁"]
+      }
+    },
+    {
+      "id": "report",
+      "title": "报表专项（FRX / 打印模板）",
+      "file": "template-injection.md",
+      "stages": ["01", "03", "04", "05"],
+      "signals": {
+        "evidence_extensions": [".frx"],
+        "terms": ["报表", "打印", "frx", "fastreport"]
+      }
+    },
+    {
+      "id": "team-agent",
+      "title": "Team Agent 并行策略",
+      "file": "team-agent-strategy.md",
+      "stages": ["04"],
+      "signals": {
+        "terms": ["并行", "team", "多任务", "批量"],
+        "state_flag": "parallel_mode"
+      }
+    },
+    {
+      "id": "multi-story",
+      "title": "多 Story 并行工作流",
+      "file": "multi-story-workflow.md",
+      "stages": ["01", "03", "04"],
+      "signals": {
+        "terms": ["多 story", "多个需求", "并行开发", "story"],
+        "state_flag": "multi_story"
+      }
+    },
+    {
+      "id": "cross-review",
+      "title": "交叉评审协议",
+      "file": "cross-review-protocol.md",
+      "stages": ["02", "04", "05"],
+      "signals": {
+        "terms": ["评审", "review", "复核", "审查"],
+        "state_flag": "review_required"
+      }
+    },
+    {
+      "id": "complexity",
+      "title": "复杂度评分与工作量预估",
+      "file": "complexity-scoring.md",
+      "stages": ["01", "03"],
+      "signals": { "terms": ["复杂度", "工作量", "预估", "人日", "评分"] }
+    },
+    {
+      "id": "capability-map",
+      "title": "能力盘点与复用清单",
+      "file": "capability-map.md",
+      "stages": ["01", "03"],
+      "signals": { "terms": ["能力", "复用", "模块", "清单", "盘点"] }
+    },
+    {
+      "id": "evolution-safety",
+      "title": "引擎自改安全纪律（仅改引擎时）",
+      "file": "evolution-safety.md",
+      "stages": ["01", "02", "03", "04", "05", "06", "07"],
+      "signals": { "terms": ["引擎", "skill", "门禁", "工作流改造", "工作流引擎"] }
+    },
+    {
+      "id": "lessons",
+      "title": "经验教训沉淀",
+      "file": "lessons-learned.md",
+      "stages": ["01", "07"],
+      "signals": { "terms": ["回顾", "复盘", "经验", "教训", "沉淀"] }
+    },
+    {
+      "id": "workflow-engine",
+      "title": "工作流引擎总览",
+      "file": "workflow-engine.md",
+      "stages": ["01", "03", "07"],
+      "signals": { "terms": ["工作流", "阶段流转", "流程改造"] }
+    }
+  ]
+}

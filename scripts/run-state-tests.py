@@ -32,6 +32,8 @@
   T13 sync：两侧 version 分叉 ⇒ 跑 sync 后两侧逐字节一致 + 新者胜方向正确
   T14 sync：同 version 同时间但内容不同 ⇒ 拒绝（rc=2）+ 强制双侧备份 + 内容未被覆盖
   T15 sync：目标侧 runtime 不存在 ⇒ 自动创建（自举）+ 幂等重跑零 diff
+  T16 M1 artifact_baseline：baseline-set 写入 / 未变即拒（只读：mtime 不变、无锁残留）/ 变化与新增放行
+  T17 M1 基线缺失：默认 SKIP 不阻断（rc=0）；--require-baseline 才拒（rc=1）
 
 退出码: 0 = 全部通过；1 = 存在失败。
 """
@@ -48,7 +50,9 @@ SCRIPTS = SELF.parent
 SKILL = SCRIPTS.parent
 APPLY = SCRIPTS / 'state-apply.py'
 SYNC = SCRIPTS / 'sync-runtime.py'
-PROJECT = SELF.parents[4]
+# 项目根：实例内是 `parents[4]`；引擎源仓库（少一级 `<项目根>/.codebuddy`）只有 4 级 ⇒ 取到盘的根，
+# 本值只用于子进程 cwd，不参与判据（★ 2026-11-19：原写法在引擎仓库里直接 IndexError，回归跑不起来）
+PROJECT = SELF.parents[4] if len(SELF.parents) > 4 else SELF.parents[-1]
 TESTROOT = SKILL / 'runtime' / 'state-apply-tests'
 IID = 'TEST-STATE-APPLY'
 REL = pathlib.Path('skills') / 'iteration-workflow' / 'runtime'
@@ -156,6 +160,11 @@ def run(cmd, extra_env=None):
     #   用例不可复现。纯靠脚本自身位置层解析（= CANON_IDE）或用例显式注入。
     for k in ('GATE_HOST_IDE', 'CODEBUDDY_PROJECT_DIR', 'CLAUDE_PROJECT_DIR', 'STATE_APPLY_SIDE'):
         env.pop(k, None)
+    # ★ 2026-11-19：引擎**源仓库**里 `state-apply.py` 的位置不含 `.codebuddy`/`.claude` 层
+    #   ⇒ 四级解析必失败（fail-closed rc=2），整套用例在仓库内跑不起来。此处仅在"自身位置层
+    #   不可用"时显式注入本侧；T12b 的 fail-closed 用例用独立 subprocess（不走本函数），不受影响。
+    if not ({'.codebuddy', '.claude'} & {p.name for p in APPLY.parents}):
+        env['STATE_APPLY_SIDE'] = CANON_IDE
     env.update(extra_env or {})
     p = subprocess.run([sys.executable, str(APPLY)] + cmd, capture_output=True, cwd=str(PROJECT), env=env)
     out = (p.stdout or b'').decode('utf-8', 'replace') + (p.stderr or b'').decode('utf-8', 'replace')
@@ -203,7 +212,7 @@ def version_of(p):
 
 
 def main():
-    say('=== state-apply 回归测试（T1~T15 · ★ FIX-49 v2.4：canonical=本宿主侧 + 单写）===')
+    say('=== state-apply 回归测试（T1~T17 · ★ FIX-49 v2.4：canonical=本宿主侧 + 单写）===')
     if not APPLY.exists():
         say('找不到 state-apply.py')
         return 1
@@ -405,6 +414,43 @@ def main():
     ok = ok and rc2 == 0 and h1 == h2 and h1[0] != ''
     check('T15 sync 自举创建 + 幂等重跑零 diff', ok,
           'rc1={} rc2={} exist={}'.format(rc1, rc2, pc.exists()))
+
+    # ── T16~T17（★ M1 · 2026-11-19）：artifact_baseline（prepare）+ artifact-check（finish）──
+    # SEED 的 current_phase="04" ⇒ 阶段目录 `04-开发实现/`（manifest dir_prefix="04-"）
+    stage_dir = TESTROOT / 'docs' / 'iterations' / IID / '04-开发实现'
+    stage_file = stage_dir / '04-开发任务清单.md'
+    lock_c = TESTROOT / ('.' + CANON_IDE) / REL / (IID + '.lock')
+
+    setup()
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    stage_file.write_text('# 旧骨架\n\n## 1. 任务拆解\n没写。\n', encoding='utf-8')
+    rc, out = run(['baseline-set'])
+    body = read(cs)
+    blk_ok = 'artifact_baseline:' in body and 'phase: "04"' in body
+    check('T16a baseline-set 写入 artifact_baseline', rc == 0 and blk_ok,
+          'rc={} blk={}'.format(rc, blk_ok))
+
+    mt0 = os.stat(cs).st_mtime_ns
+    rc, out = run(['artifact-check'])
+    mt1 = os.stat(cs).st_mtime_ns
+    check('T16b 未变即拒 + 只读（mtime 不变 / 无锁残留）',
+          rc == 1 and '未变' in out and mt0 == mt1 and not lock_c.exists(),
+          'rc={} mtime_same={} nolock={}'.format(rc, mt0 == mt1, not lock_c.exists()))
+
+    stage_file.write_text('# 本阶段重写\n\n## 1. 任务拆解\n真的写了任务。\n', encoding='utf-8')
+    rc1, out1 = run(['artifact-check'])
+    (stage_dir / '04-附录.md').write_text('# 附录\n本阶段新增。\n', encoding='utf-8')
+    rc2, out2 = run(['artifact-check'])
+    check('T16c 变化 / 新增放行', rc1 == 0 and '变化 1' in out1 and rc2 == 0 and '新增 1' in out2,
+          'rc1={} rc2={}'.format(rc1, rc2))
+
+    setup()
+    stage_dir.mkdir(parents=True, exist_ok=True)      # 目录在、基线不在 ⇒ 只考基线缺失分支
+    rc, out = run(['artifact-check'])
+    rc2, out2 = run(['artifact-check', '--require-baseline'])
+    check('T17 基线缺失 fail-open / --require-baseline 拒',
+          rc == 0 and '基线缺失' in out and rc2 == 1 and '基线缺失' in out2,
+          'rc={} rc2={}'.format(rc, rc2))
 
     fails = [r for r in RESULTS if not r[1]]
     say('')

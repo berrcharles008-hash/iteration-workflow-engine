@@ -57,6 +57,33 @@ config:
 **自检指标**：单轮 `read_file` 合计 **≤ 500 行**（跨阶段整段重读等例外须注明理由）。
 **兜底**：`read_file` 报 "File too large" ⇒ 直接转 `search_content` + `offset/limit`，**禁**换工具硬读全文。
 
+## ★ M4 阶段注入清单（可选加速；失败即降级）
+
+> 进入任一阶段前可先跑一次清单，按命中结果读引擎文件。**脚本不可用或输出异常 ⇒ 直接按上文分级路由读，不阻断、不报错。**
+
+```bash
+python "scripts/build-stage-prompt.py" --stage 04 --root . --request "<本次需求原文>"
+```
+
+- 输出三段：**基础规则（全阶段）** / **阶段必读** / **命中规则（附证据）**，证据形如 `exts:.cs=489`、`path_parts:back-end`、`deps:vue`、`terms:接口`
+- `--stage 00` = 轻量查询路径（仅 `startup-protocol.md` + `context-discipline.md`，不含任何 `phase-0X`）
+- 判定依据：`engine/rules/manifest.json`（唯一事实源）；**未命中的规则不读**，这是本机制的全部收益
+- `--json` 供程序消费；`evidence.scanned_files/truncated` 用于判断是否降级
+
+## ★ M1 产物内容合同（阶段开始 / 结束各一条硬动作）
+
+> 进入阶段 N 后**立刻**记基线；归档或推进前跑校验。**脚本或合同不可用 ⇒ SKIP 并登记 `runtime/TOOLING-TODO.md`，不阻断、不静默跳过。**
+
+```bash
+python "scripts/state-apply.py" baseline-set --phase 07                        # 阶段开始（phase-advance 之后）
+python "scripts/validate-artifacts.py" --phase 07                             # 内容合同 + 跨迭代复用
+python "scripts/state-apply.py" artifact-check --phase 07 --require-baseline   # finish：未变即拒
+```
+
+- 合同 SSOT = `templates/manifest.json` 的 `content_concepts`；档位按 state 的 `complexity` 自动选（🟢 = lite 档，首版 lite 只查最低要求）
+- `validate-artifacts.py --root . --json` = **全阶段**巡检（仍需 `--iteration` 或活跃迭代；缺失产物只 SKIP）
+- 判据分四类：`no-concept` 缺章节 / `empty` 只写标题 / `placeholder` 整节占位 / `reuse` 复制更早迭代的产物
+
 ## ★ 第一优先级：轻量查询快速退出
 
 > **本 skill 被加载后，立即执行此判断——在读取任何其他文件之前。**

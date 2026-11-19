@@ -1059,3 +1059,44 @@ function write_state_yaml(iteration_id, new_content):
 **不覆盖**（仍走 §二-A 手工协议或文件工具）：重新打开 10 步协议、归档重命名、多 Story 全量重置、`stories[]` 深层结构。
 
 **回归**：`scripts/run-state-tests.py`（T1~T10：全链路 / 幂等 / 锁占用 / TTL 恢复 / confirm 负向 / advance 正向 / patch 未知键 / 校验失败双侧回滚 / FORCE / 自留痕），隔离根 `runtime/state-apply-tests/` 执行，不触碰真实 state。
+
+### 9.7 append-only 事件与只读 resume（★ M2 · 2026-11-19）
+
+**`events[]` —— 审计旁路，不是真相源**
+
+每次 `state-apply.py` **成功**写入，会在 `state.yaml` 末尾 `events:` 块追加一条：
+
+```yaml
+events:
+  - at: "2026-11-19T15:18"
+    event: "phase_advanced"
+    version: 67
+    detail: "current_phase 04 → 05（confirm by ide）"
+```
+
+| 硬约束 | 说明 |
+|---|---|
+| **只增不改** | 脚本无修改/删除路径；**禁止 Agent 手写追加**——绕过 version/backup/validate 即失去可信度 |
+| **不做事件溯源** | 状态字段仍是唯一真相源，**不由 events 重放推导** state（做重放等于重写状态机，明确不做） |
+| **历史 fail-open** | 旧 state 无 `events` 属正常态，不回溯补齐；消费方输出 `—` 而非 0 |
+
+事件最小集（`state-apply.py` 的 `EVENT_OF` 映射）：`session_summary` / `step_completed` / `step_skipped` / `task_completed` / `phase_advanced` / `blocker_added` / `blocker_removed` / `defect_opened` / `defect_closed` / `state_patched` / `steps_appended` / `workflow_team_rotated`。
+
+用途：① 恢复时回答「上次为什么停、停过几次、谁批准」；② 运行健康度评分「控制流健康 / 错误恢复」两维的唯一低成本数据源（此前要跨 `write-claims.jsonl` + `gate-audit.log` + 106 个快照做 diff）。
+
+**`resume` —— 只读返回下一步**
+
+```bash
+python {IDE}/skills/iteration-workflow/scripts/state-apply.py resume [--json]
+```
+
+- 返回：`iteration_status` / `current_phase` / **下一步行动**（`in_progress` → `pending`(mandatory) → `pending`(可选) → 待 `phase-advance` → 收尾）/ blockers / 最近 3 条 events
+- **硬约束**：在 `mkdir` 锁之前返回 ⇒ 不建锁、不备份、不写 state 与 ACTIVE（可用 mtime 前后比对验证）
+
+**`rotate-team` —— 会话/模型切换后接手**
+
+```bash
+python {IDE}/skills/iteration-workflow/scripts/state-apply.py rotate-team --reason "会话切换接管"
+```
+
+把所有 `status: "in_progress"` 的 `phase_steps` 回落 `pending`，并记 `workflow_team_rotated` 事件。

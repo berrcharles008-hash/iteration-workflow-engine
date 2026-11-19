@@ -28,6 +28,28 @@
                                      [--design-changed true|false]
   defect-close --id <D-n> [--verified-by user|agent]
   patch --file <json>                       顶层标量覆盖（仅已存在键；逃生口）
+  append-steps --steps "id|name|status|mandatory;…"
+                                            phase_steps **块末追加**（替代 phase-07 内联脚本；
+                                            重复 id 即拒绝；status 缺省 pending / mandatory 缺省 true）
+  rotate-team [--reason "…"]                 所有 in_progress 步骤回落 pending（会话/模型切换后接手）
+  resume [--json]                            ★只读：返回下一步行动（不建锁/不备份/不写 state 与 ACTIVE）
+  baseline-set [--phase NN]                  M1：记 artifact_baseline（阶段**开始**时调用；记当前阶段
+                                            目录下全部 md 的 sha256 前 16 位）
+  artifact-check [--phase NN] [--require-baseline] [--json]
+                                             ★只读：基线后「新增/变化/未变」分类；**未变** = 沿用旧文件⇒拒
+
+★ M2（2026-11-19）events[]：每次**成功**写入会在 state.yaml 末尾 `events:` 块追加一条
+  （at / event / version / detail），**只增不改、不允许 Agent 手写**。它是审计旁路与
+  运行健康度评分的数据源，**不是**真相源（状态字段仍是唯一真相源，不由 events 重放推导）。
+  历史 state 无该块属正常态（fail-open，不回溯补齐）。
+
+★ M1（2026-11-19）artifact_baseline：`prepare` / `finish` 的等价物（本引擎原无阶段开始/结束双钩子）。
+  为什么用内容 hash 而不是 mtime：要拦的正是「把旧迭代的产物复制过来 / 阶段开始时就有同名文件、
+  结束没重写」——复制会刷新 mtime，内容不变，mtime 判不出来。
+  位置为什么在 state.yaml 而不是 runtime/temp：M2 已把 state 写入统一进本脚本（version + 备份 +
+  events + validate 四道关），放 temp 等于再开一条无审计旁路。
+  分工：**内容合同**（章节存在/非空/非占位、跨迭代复用）由 `scripts/validate-artifacts.py` 判；
+  本脚本只管**基线相对变化**。两者都不通过 ⇒ 不得推进/归档。
 
 每次调用内部完成:
   加锁(§9 mkdir 原子锁+TLL 60s) → 读 canonical(**本宿主侧**，FIX-49) → 幂等检查 → 文本级改字段
@@ -61,6 +83,7 @@ import shutil
 import runpy
 import datetime
 import pathlib
+import importlib.util
 
 os.environ.setdefault('PYTHONIOENCODING', 'utf-8')
 try:
@@ -70,11 +93,13 @@ except Exception:
     pass
 
 SELF = pathlib.Path(__file__).resolve()
-RUNTIME_SELF = SELF.parents[1] / 'runtime'          # <IDE>/skills/iteration-workflow/runtime
 VALIDATE = SELF.parent / 'validate-state.py'        # 单源校验脚本（同目录）
 ROOT = pathlib.Path(os.environ.get('STATE_APPLY_ROOT') or SELF.parents[4])
-SNAPSHOTS = RUNTIME_SELF / 'snapshots'
-LOG = RUNTIME_SELF / 'state-apply.log'
+# ★ 2026-11-19 修：日志与备份落点**不再**挂在脚本安装位置（原 `RUNTIME_SELF/snapshots`、
+#   `RUNTIME_SELF/state-apply.log`）。原写法在隔离根（`run-state-tests.py` 的 TESTROOT 演练）里
+#   仍写**真实项目**的 runtime ⇒ 实测一次回归往生产 `state-apply.log` 灌 26 行
+#   `iter=TEST-STATE-APPLY`、往 `snapshots/` 留 41 个测试备份，把「写入次数」类基线永久污染。
+#   现在统一走 `runtime_dir()`（= `ROOT/<IDE>/skills/iteration-workflow/runtime`，跟随 STATE_APPLY_ROOT）。
 SESSION = os.environ.get('STATE_APPLY_SESSION') or ('pid-' + str(os.getpid()))
 
 ALLOWED_CONFIRM_BY = ('qq#', 'ide', 'handoff', 'bypass')
@@ -185,13 +210,24 @@ def resolve_side():
         return ''
 
 
+def runtime_dir(ide=None):
+    """本侧项目的 runtime 目录（跟随 `STATE_APPLY_ROOT`，**不**跟随脚本安装位置）。
+
+    日志、备份、留痕一律落这里；隔离根演练时自然落进演练目录，不再污染真实项目 runtime。
+    """
+    return rt(ide or resolve_side() or 'codebuddy')
+
+
 def say(msg=''):
     print(msg)
 
 
 def log(msg):
+    """写本侧 runtime 的 `state-apply.log`（见 runtime_dir 头注：不再跟随脚本安装位置）。"""
     try:
-        with open(LOG, 'a', encoding='utf-8') as f:
+        p = runtime_dir() / 'state-apply.log'
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, 'a', encoding='utf-8') as f:
             f.write(datetime.datetime.now().strftime('%Y-%m-%dT%H:%M:%S') + ' ' + msg + '\n')
     except Exception:
         pass
@@ -343,6 +379,308 @@ def remove_list_item(lines, key, item_id):
     return False
 
 
+# ---------------- ★ M2（2026-11-19）：append-only events + 只读 resume
+EVENT_OF = {
+    'summary': 'session_summary',
+    'step-complete': 'step_completed',
+    'step-skip': 'step_skipped',
+    'task-done': 'task_completed',
+    'phase-advance': 'phase_advanced',
+    'blocker-add': 'blocker_added',
+    'blocker-rm': 'blocker_removed',
+    'defect-add': 'defect_opened',
+    'defect-close': 'defect_closed',
+    'patch': 'state_patched',
+    'append-steps': 'steps_appended',
+    'rotate-team': 'workflow_team_rotated',
+    'baseline-set': 'artifact_baseline_set',
+}
+
+
+def append_event(lines, etype, detail, stamp, ver_to):
+    """块末追加一条事件；块不存在时在文件末尾建 `events:`（末尾插入 = 不打乱既有顶层顺序）。
+    边界：只增不改 —— 本函数没有修改/删除路径；events 不参与状态推导（非事件溯源）。"""
+    ev = ['  - at: "%s"' % stamp,
+          '    event: "%s"' % etype,
+          '    version: %d' % ver_to]
+    if detail:
+        ev.append('    detail: "' + str(detail).replace('"', '\\"')[:300] + '"')
+    if not append_list(lines, 'events', ev):
+        lines.append('events:')
+        lines.extend(ev)
+    return True
+
+
+def parse_steps(lines):
+    """phase_steps → [{id,name,status,mandatory}]（只读）"""
+    kind, s, e, items = list_span(lines, 'phase_steps')
+    out = []
+    if kind != 'block':
+        return out
+    cur = None
+    for j in range(s + 1, e):
+        m = re.search(r'-\s+id:\s*"([^"]+)"', lines[j])
+        if m:
+            cur = {'id': m.group(1), 'name': '', 'status': '', 'mandatory': ''}
+            out.append(cur)
+            continue
+        if cur is None:
+            continue
+        m2 = re.match(r'\s+(name|status|mandatory):\s*"?([^"\n]*?)"?\s*$', lines[j])
+        if m2:
+            cur[m2.group(1)] = m2.group(2).strip()
+    return out
+
+
+def cmd_resume(spath, iid, as_json=False):
+    """★ 只读：返回「下一步做什么」。硬约束：不建锁、不备份、不写 state 与 ACTIVE（mtime 必须不变）。"""
+    text = read_text(spath).replace('\r\n', '\n')
+    lines = text.split('\n')
+    status = get_scalar(text, 'iteration_status', '')
+    phase = get_scalar(text, 'current_phase', '')
+    pstat = get_scalar(text, 'phase_status', '')
+    steps = parse_steps(lines)
+    running = [x for x in steps if x['status'] == 'in_progress']
+    must = [x for x in steps if x['status'] == 'pending' and x['mandatory'] == 'true']
+    opt_steps = [x for x in steps if x['status'] == 'pending' and x['mandatory'] != 'true']
+    blockers = []
+    kind, _s, _e, items = list_span(lines, 'blockers')
+    if kind == 'block':
+        blockers = [x[2] for x in items if x[2]]
+    events = []
+    kind2, s2, e2, _ = list_span(lines, 'events')
+    if kind2 == 'block':
+        cur = None
+        for j in range(s2 + 1, e2):
+            m = re.search(r'-\s+at:\s*"([^"]+)"', lines[j])
+            if m:
+                cur = {'at': m.group(1)}
+                events.append(cur)
+                continue
+            if cur is not None:
+                m2 = re.match(r'\s+(event|detail):\s*"?(.*?)"?\s*$', lines[j])
+                if m2:
+                    cur[m2.group(1)] = m2.group(2)
+    if status == 'completed':
+        nxt, nkind = '迭代已结案：nothing-to-do（新工作请立项）', 'done'
+    elif running:
+        nxt, nkind = '继续 step %s（%s）' % (running[0]['id'], running[0]['name']), 'step'
+    elif must:
+        nxt, nkind = '执行 step %s（%s，mandatory）' % (must[0]['id'], must[0]['name']), 'step'
+    elif opt_steps:
+        nxt, nkind = '按需执行 step %s（%s）' % (opt_steps[0]['id'], opt_steps[0]['name']), 'step'
+    elif phase and phase != '07' and pstat != 'completed':
+        nxt, nkind = '阶段 %s 步骤已完 → phase-advance --to %02d（需用户确认）' % (phase, int(phase) + 1), 'advance'
+    else:
+        nxt, nkind = '阶段 %s 收尾（phase-07 归档动作）' % (phase or '?'), 'wrap'
+    out = {
+        'ok': True, 'iteration_id': iid, 'iteration_status': status,
+        'phase': phase, 'phase_status': pstat, 'next': nxt, 'next_kind': nkind,
+        'steps': {'total': len(steps),
+                  'in_progress': [x['id'] for x in running],
+                  'pending_mandatory': [x['id'] for x in must],
+                  'pending_optional': [x['id'] for x in opt_steps]},
+        'blockers': blockers, 'recent_events': events[-3:], 'readonly': True,
+    }
+    if as_json:
+        say(json.dumps(out, ensure_ascii=False, indent=2))
+        return 0
+    say('迭代 %s ｜ STATUS=%s ｜ PHASE=%s(%s)' % (iid, status or '?', phase or '?', pstat or '?'))
+    say('下一步：' + nxt)
+    if blockers:
+        say('阻塞中：' + ','.join(blockers))
+    if events:
+        say('最近事件：')
+        for ev in events[-3:]:
+            say('  · %s %s %s' % (ev.get('at', ''), ev.get('event', ''), ev.get('detail', '')))
+    say('（只读：未加锁 / 未备份 / 未写 state 与 ACTIVE）')
+    return 0
+
+
+# ---------------- ★ M1（2026-11-19）：artifact_baseline（prepare）+ artifact-check（finish 判据）
+ARTIFACT_HELPER = SELF.parent / 'validate-artifacts.py'
+ARTIFACT_MANIFEST = SELF.parents[1] / 'engine' / 'templates' / 'manifest.json'
+BASELINE_KEY = 'artifact_baseline'
+
+
+def load_artifact_helper():
+    """按路径加载 validate-artifacts.py（文件名含连字符，无法按名字 import）。失败返回 None。"""
+    if not ARTIFACT_HELPER.exists():
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location('validate_artifacts', str(ARTIFACT_HELPER))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception as exc:                                  # noqa: BLE001
+        log('artifact helper load failed: ' + repr(exc))
+        return None
+
+
+def norm_phase(v):
+    s = str(v or '').strip().strip('"')
+    if s.isdigit():
+        s = s.zfill(2)
+    return s
+
+
+def scan_phase_artifacts(helper, iid, phase):
+    """扫「当前迭代 · 该阶段目录」下全部 .md → ({相对项目根路径: sha16}, iter_dir, 错误说明)。
+
+    ★ 用 `collect_phase_files`（阶段目录全量）而非合同 filenames：`04-代码审查报告.md` 这类
+      合同外产物同样属阶段产出，漏记会让"未变"判定漏掉一批文件。
+    """
+    if not ARTIFACT_MANIFEST.exists():
+        return {}, '', '内容合同缺失: ' + str(ARTIFACT_MANIFEST)
+    try:
+        manifest = helper.load_manifest(str(ARTIFACT_MANIFEST))
+    except Exception as exc:                                  # noqa: BLE001
+        return {}, '', '内容合同解析失败: ' + repr(exc)
+    art = None
+    for a in manifest.get('artifacts') or []:
+        if str(a.get('phase') or '') == phase:
+            art = a
+            break
+    if art is None:
+        return {}, '', 'manifest 未声明阶段 ' + phase
+    iterations_dir = str(manifest.get('docs_iterations_default') or 'docs/iterations').strip().strip('/')
+    iter_dir = ROOT / iterations_dir / iid
+    if not iter_dir.is_dir():
+        return {}, str(iter_dir), '迭代目录不存在: ' + str(iter_dir)
+    out = {}
+    for p in helper.collect_phase_files(str(iter_dir), art):
+        try:
+            rel = pathlib.Path(p).resolve().relative_to(ROOT.resolve()).as_posix()
+        except Exception:                                     # noqa: BLE001
+            rel = pathlib.Path(p).name
+        try:
+            out[rel] = helper.sha256_of(p)[:16]
+        except OSError:
+            continue
+    return out, str(iter_dir), ''
+
+
+def baseline_block(phase, stamp, files):
+    blk = [BASELINE_KEY + ':', '  phase: "%s"' % phase, '  set_at: "%s"' % stamp]
+    if not files:
+        blk.append('  files: []')
+        return blk
+    blk.append('  files:')
+    for rel in sorted(files):
+        blk += ['    - path: "%s"' % rel, '      sha: "%s"' % files[rel]]
+    return blk
+
+
+def parse_baseline(text):
+    """解析 state 的 artifact_baseline 块；不存在返回 None（历史 state 无该块属正常态）。"""
+    lines = text.replace('\r\n', '\n').split('\n')
+    sp = block_span(lines, BASELINE_KEY)
+    if not sp:
+        return None
+    out = {'phase': '', 'set_at': '', 'files': {}}
+    cur = None
+    for ln in lines[sp[0] + 1:sp[1]]:
+        m = re.match(r'\s+phase:\s*"([^"]*)"', ln)
+        if m:
+            out['phase'] = m.group(1)
+            continue
+        m = re.match(r'\s+set_at:\s*"([^"]*)"', ln)
+        if m:
+            out['set_at'] = m.group(1)
+            continue
+        m = re.match(r'\s*-\s+path:\s*"([^"]*)"', ln)
+        if m:
+            cur = m.group(1)
+            out['files'][cur] = ''
+            continue
+        m = re.match(r'\s+sha:\s*"([^"]*)"', ln)
+        if m and cur:
+            out['files'][cur] = m.group(1)
+    return out
+
+
+def cmd_artifact_check(spath, iid, phase_arg, require_baseline, as_json=False):
+    """★ 只读：基线后「新增 / 变化 / 未变 / 消失」四分类。
+
+    判据：**未变**（基线里有、内容 hash 相同）⇒ 该产物在阶段内没被重写 ⇒ 拒。
+    硬约束与 resume 同：不建锁、不备份、不写 state 与 ACTIVE（mtime 必须不变）。
+    """
+    text = read_text(spath).replace('\r\n', '\n')
+    phase = norm_phase(phase_arg or get_scalar(text, 'current_phase', ''))
+    blk = parse_baseline(text)
+    helper = load_artifact_helper()
+    errors = []
+    if helper is None:
+        say('[SKIP] validate-artifacts.py 不可用（%s）⇒ 跳过基线比对' % ARTIFACT_HELPER)
+        return 0
+    now, iter_dir, why = scan_phase_artifacts(helper, iid, phase)
+    if why:
+        msg = '无法扫描阶段产物：' + why
+        if require_baseline:
+            errors.append(msg)
+        else:
+            say('[SKIP] ' + msg)
+        now = {}
+    new, changed, same, gone = [], [], [], []
+    usable = False
+    if blk is None:
+        msg = '基线缺失（state 无 %s）' % BASELINE_KEY
+        if require_baseline:
+            errors.append(msg + ' ⇒ 阶段开始时应跑 baseline-set --phase ' + phase)
+        else:
+            say('[SKIP] ' + msg + '（--require-baseline 可强制）')
+    elif blk['phase'] != phase:
+        msg = '基线阶段 %s ≠ 当前阶段 %s（跨阶段复用无意义）' % (blk['phase'] or '?', phase)
+        if require_baseline:
+            errors.append(msg + ' ⇒ 重跑 baseline-set --phase ' + phase)
+        else:
+            say('[WARN] ' + msg)
+    else:
+        usable = True
+        base = blk['files']
+        for rel, sha in sorted(now.items()):
+            if rel not in base:
+                new.append(rel)
+            elif base[rel] != sha:
+                changed.append(rel)
+            else:
+                same.append(rel)
+        gone = sorted(r for r in base if r not in now)
+        for rel in same:
+            errors.append('未变：%s（基线后内容未改动 ⇒ 该产物不是本阶段写的）' % rel)
+
+    out = {'ok': not errors, 'iteration_id': iid, 'phase': phase,
+           'baseline': None if blk is None else {'phase': blk['phase'], 'set_at': blk['set_at'],
+                                                'files': len(blk['files'])},
+           'iter_dir': iter_dir.replace('\\', '/'), 'new': new, 'changed': changed,
+           'unchanged': same, 'gone': gone, 'errors': errors, 'readonly': True}
+    if as_json:
+        say(json.dumps(out, ensure_ascii=False, indent=2))
+        return 1 if errors else 0
+    say('阶段 %s ｜ 基线 %s ｜ 迭代 %s' % (
+        phase,
+        ('%s（%s，%d 文件）' % (blk['phase'], blk['set_at'], len(blk['files']))) if blk else '缺失',
+        iid))
+    if usable:
+        say('新增 %d ｜ 变化 %d ｜ 未变 %d ｜ 消失 %d'
+            % (len(new), len(changed), len(same), len(gone)))
+        for rel in new:
+            say('  + 新增 ' + rel)
+        for rel in changed:
+            say('  ~ 变化 ' + rel)
+        for rel in same:
+            say('  = 未变 ' + rel)
+        for rel in gone:
+            say('  - 消失 ' + rel)
+    for e in errors:
+        say('[ERROR] ' + e)
+    if errors:
+        say('基线比对未通过 ⇒ 不得归档/推进')
+        return 1
+    say('（只读：未加锁 / 未备份 / 未写 state 与 ACTIVE）')
+    return 0
+
+
 def find_step_status(lines, step_id):
     """定位 phase_steps 中某 step 的 status 行 → (行号, 当前值) 或 None"""
     for i, ln in enumerate(lines):
@@ -389,6 +727,15 @@ def main():
     if not spath.exists():
         say('canonical state 不存在: ' + str(spath))
         return 2
+
+    # ★ M2：resume 是**只读**命令 —— 必须在 mkdir 锁之前返回，否则会留下 .lock 目录（改写文件系统）。
+    if cmd == 'resume':
+        return cmd_resume(spath, iid, as_json=('--json' in args))
+
+    # ★ M1：artifact-check 同为只读（finish 判据）⇒ 同层提前返回
+    if cmd == 'artifact-check':
+        return cmd_artifact_check(spath, iid, opt(args, '--phase', ''),
+                                  '--require-baseline' in args, as_json=('--json' in args))
 
     force = os.environ.get('STATE_FORCE_WRITE') == '1'
     lock = rt(canon) / (iid + '.lock')
@@ -638,9 +985,90 @@ def main():
                 changed.append('{} → {}'.format(k, sv))
             new = '\n'.join(lines)
 
+        elif cmd == 'append-steps':
+            spec = opt(args, '--steps', '')
+            if not spec:
+                say('append-steps 需要 --steps "id|name|status|mandatory;…"')
+                return 2
+            entries = []
+            for chunk in spec.split(';'):
+                chunk = chunk.strip()
+                if not chunk:
+                    continue
+                parts = [p.strip() for p in chunk.split('|')]
+                if len(parts) < 2 or not parts[0]:
+                    say('append-steps 条目格式错误（至少 id|name）: ' + chunk)
+                    return 2
+                st = parts[2] if len(parts) > 2 and parts[2] else 'pending'
+                md = (parts[3] if len(parts) > 3 and parts[3] else 'true').lower() in ('1', 'true', 'yes', 'y')
+                if st not in ('pending', 'in_progress', 'completed', 'skipped', 'not_applicable'):
+                    say('append-steps status 非法: ' + st)
+                    return 2
+                entries.append((parts[0], parts[1], st, md))
+            if not entries:
+                say('append-steps 无有效条目')
+                return 2
+            kind, s, e, items = list_span(lines, 'phase_steps')
+            if kind == 'missing':
+                say('未找到 phase_steps → 拒绝（结构异常）')
+                return 2
+            existing = set(x[2] for x in items if x[2])
+            dup = [x[0] for x in entries if x[0] in existing]
+            if dup:
+                say('ABORT: step id 已存在: ' + ','.join(dup))
+                return 2
+            block = []
+            for sid, name, st, md in entries:
+                block += ['  - id: "' + sid + '"',
+                          '    name: "' + name.replace('"', '\\"') + '"',
+                          '    status: "' + st + '"',
+                          '    mandatory: ' + ('true' if md else 'false')]
+            if not append_list(lines, 'phase_steps', block):
+                say('phase_steps 追加失败')
+                return 2
+            new = '\n'.join(lines)
+            changed.append('phase_steps 块末追加 {} 条（total={}）'.format(len(entries), len(existing) + len(entries)))
+
+        elif cmd == 'baseline-set':
+            ph = norm_phase(opt(args, '--phase', '') or get_scalar(new, 'current_phase', ''))
+            if not re.fullmatch(r'0[1-7]', ph or ''):
+                say('baseline-set 需要 --phase <01..07>（state 无 current_phase 时必须显式给）')
+                return 2
+            helper = load_artifact_helper()
+            if helper is None:
+                say('baseline-set 拒绝：validate-artifacts.py 不可用（%s）' % ARTIFACT_HELPER)
+                return 2
+            files, iter_dir, why = scan_phase_artifacts(helper, iid, ph)
+            if why:
+                say('baseline-set 拒绝：' + why)
+                return 2
+            set_block(lines, BASELINE_KEY, baseline_block(ph, stamp, files),
+                      anchor_after='last_session_summary')
+            new = '\n'.join(lines)
+            changed.append('artifact_baseline phase=%s files=%d（phase 内须有新增/变化才放行）'
+                           % (ph, len(files)))
+
+        elif cmd == 'rotate-team':
+            reason = opt(args, '--reason', '')
+            n = 0
+            kind, s, e, items = list_span(lines, 'phase_steps')
+            if kind == 'block':
+                for j in range(s + 1, e):
+                    if re.match(r'\s*status:\s*"in_progress"\s*$', lines[j]):
+                        lines[j] = re.sub(r'"[^"]*"', '"pending"', lines[j])
+                        n += 1
+            new = '\n'.join(lines)
+            changed.append('rotate-team: in_progress → pending（{} 条）{}'.format(
+                n, ('；原因: ' + reason) if reason else ''))
+
         else:
             say('未知命令: ' + cmd + '（-h 查看用法）')
             return 2
+
+        # ---------------- ★ M2：append-only 事件（只增不改；version 记为目标版本 ver+1）
+        lines = new.split('\n')
+        append_event(lines, EVENT_OF.get(cmd, cmd), (changed[0] if changed else ''), stamp, ver + 1)
+        new = '\n'.join(lines)
 
         # ---------------- 通用收尾：version / last_updated / 乐观锁 / 备份 / 双写 / ACTIVE / 校验
         lines = new.split('\n')
@@ -656,8 +1084,11 @@ def main():
                 say('🛑 并发冲突：version 已从 {} 变为 {}（拒绝写入，请重跑）'.format(ver, now_v))
                 return 2
 
-        SNAPSHOTS.mkdir(exist_ok=True)
-        bak = SNAPSHOTS / ('state-apply-{}-{}.state.yaml.bak'.format(
+        # ★ M2 加固：parents=True —— 演练/新装实例的 runtime/ 可能整体不存在，
+        #   原 `mkdir(exist_ok=True)` 在父目录缺失时抛 FileNotFoundError（生产因 runtime 恒存在未暴露）
+        snapdir = runtime_dir(canon) / 'snapshots'
+        snapdir.mkdir(parents=True, exist_ok=True)
+        bak = snapdir / ('state-apply-{}-{}.state.yaml.bak'.format(
             datetime.datetime.now().strftime('%Y%m%d-%H%M%S'), iid))
         write_text(bak, orig, crlf)
         # ★ FIX-49 v2.4（R9 方案 B）：**单写本侧** —— 跨侧文件（mpath/他侧 ACTIVE）零触碰。

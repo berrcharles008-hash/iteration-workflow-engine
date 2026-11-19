@@ -1446,6 +1446,25 @@ await concLockCheck(relativePath, toolName);
 // 必须挂在第 1 关 ALWAYS_ALLOW 之前（state.yaml 命中 runtime/ 豁免段，挂后面=死代码）。
 await phaseAdvanceGuard(relativePath);
 
+// ── ★ M2：状态文件直写拦截（与 phaseAdvanceGuard 同层：**必须挂在第 1 关 ALWAYS_ALLOW 之前**）──
+//   为什么不能放 gateCheck 内：`runtime/<id>.state.yaml` 落在 ALWAYS_ALLOW 的 runtime/ 豁免段，
+//   第 1 关就 exit 0（实测：放在 gateCheck 开头 = 死代码，沙箱探针恒 rc=0）。
+if (isStateYamlDirectWrite(relativePath)) {
+  audit('STATE_DIRECT_BLOCK', relativePath);
+  block(
+    'state.yaml 禁止直写（M2 起唯一写入通道 = state-apply.py）。',
+    `本次尝试: ${relativePath}`,
+    '',
+    '替代命令（从项目根执行）:',
+    '  python .codebuddy/skills/iteration-workflow/scripts/state-apply.py <cmd> …',
+    '  常用: summary / step-complete / step-skip / task-done / phase-advance /',
+    '        append-steps --steps "id|name|status|mandatory;…" / rotate-team / blocker-add|rm / defect-add|close',
+    '  只读查询: state-apply.py resume [--json]（不加锁、不写文件）',
+    '',
+    '理由：直写绕过 version 乐观锁 / 快照备份 / events 审计 / validate-state 四道关。'
+  );
+}
+
 // ── ★ FIX-49 ③-2e（R8 甲 · 写侧路由）：镜像面「他侧」直写拦截 ─────────────
 //   背景（复核 R36/P0-1）：三个咽喉点（ALWAYS_ALLOW_SEGMENTS / FIX-45 none 态豁免 / 04 全放行）
 //   对 runtime/** 的放行**不分侧** ⇒ 手工/工具直写"非本侧镜像面文件"会持续制造单侧漂移且零检测。
@@ -1589,6 +1608,30 @@ function cmdGateLines(cmdCtx) {
     '命令建议直接写 Get-ChildItem · Select-String · git log · git status（无需 powershell -Command 包装）。',
     '确需写操作：进入 04-开发实现 阶段，或由用户手动开闸（.gate-bypass）。',
   ];
+}
+
+/**
+ * ★ M2（2026-11-19）：state.yaml 直写拦截 —— 唯一写入通道 = `scripts/state-apply.py`。
+ * 判据三条同时成立：
+ *   ① 目标是项目内 `runtime/<id>.state.yaml`（或 state.archived.yaml）且**文件已存在**；
+ *      （不存在 = 立项初始化，FIX-45 既有放行口径不变）
+ *   ② 非 Bash 伪路径（`[` 开头）——命令分支不在此拦（state-apply 本身就是命令）
+ *   ③ 非删除类工具（Delete/delete_file 走 FIX-9 删除豁免，归档重命名不受影响）
+ * 拦截理由：直写绕过 version 乐观锁 / 快照备份 / events 审计 / validate-state 四道关。
+ * 逃生口：`.gate-bypass`（用户手动开闸）在上游生效，此处不重复判断。
+ */
+function isStateYamlDirectWrite(fsPath) {
+  const raw = String(fsPath || '');
+  if (!raw || raw.startsWith('[')) return false;
+  if (/^(Delete|delete_file|delete_files)$/.test(String(toolName || ''))) return false;
+  const p = raw.replace(/\\/g, '/');
+  if (!/(?:^|\/)runtime\/[^/]+\.state(?:\.archived)?\.yaml$/.test(p)) return false;
+  const abs = /^[A-Za-z]:\//.test(p) ? p : join(PROJECT_DIR, p);
+  try {
+    return existsSync(abs);
+  } catch {
+    return false;
+  }
 }
 
 async function gateCheck(fsPath, cmdCtx) {

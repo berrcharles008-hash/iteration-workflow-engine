@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "updated": "2026-11-19",
+  "note": "产物内容合同（M1）。声明每个阶段产物「必须有哪些内容概念」，由 scripts/validate-artifacts.py 消费。concepts 是概念不是逐字标题：match 数组任一子串出现在 2~4 级标题里即算命中（不区分大小写）；正文过短或整节只剩占位则判 empty/placeholder。tier 由 state.yaml 的 complexity 决定（🟢=lite，🟡/🔴=full），lite 档概念留空 = 该档不校验 —— 首版只把 full 档做实，避免一上来就把精简迭代拦死。",
+  "docs_iterations_default": "docs/iterations",
+  "artifacts": [
+    {
+      "id": "01-requirement",
+      "phase": "01",
+      "dir_prefix": "01-",
+      "filenames": ["01-需求记录.md"],
+      "content_concepts": {
+        "full": [
+          {"name": "结论摘要", "match": ["结论摘要", "摘要"]},
+          {"name": "需求背景", "match": ["需求背景", "背景与目标", "背景"]},
+          {"name": "改造范围", "match": ["改造范围", "范围界定", "改造内容"]},
+          {"name": "验收标准", "match": ["验收标准", "验收判据", "验收断言"]},
+          {"name": "待决议", "match": ["待决议", "已决议", "决策点"]}
+        ],
+        "lite": [
+          {"name": "结论摘要", "match": ["结论摘要", "摘要"]}
+        ]
+      }
+    },
+    {
+      "id": "02-review",
+      "phase": "02",
+      "dir_prefix": "02-",
+      "filenames": ["02-需求评审.md"],
+      "content_concepts": {
+        "full": [
+          {"name": "结论摘要", "match": ["结论摘要", "摘要"]},
+          {"name": "评审结论", "match": ["评审结论"]},
+          {"name": "问题与处置", "match": ["问题与处置", "问题处置"]},
+          {"name": "需求范围", "match": ["最终确认的需求范围", "需求范围"]},
+          {"name": "遗留问题", "match": ["遗留问题", "待办与风险"]}
+        ],
+        "lite": [
+          {"name": "结论摘要", "match": ["结论摘要", "摘要"]}
+        ]
+      }
+    },
+    {
+      "id": "03-tech-plan",
+      "phase": "03",
+      "dir_prefix": "03-",
+      "filenames": ["03-技术方案.md"],
+      "content_concepts": {
+        "full": [
+          {"name": "结论摘要", "match": ["结论摘要", "摘要"]},
+          {"name": "改造方案", "match": ["改造方案", "技术方案", "方案设计"]},
+          {"name": "代码改动范围", "match": ["代码改动范围", "改动范围"]},
+          {"name": "接口设计", "match": ["接口设计", "接口清单"]},
+          {"name": "验收断言", "match": ["验收断言", "验收标准"]},
+          {"name": "回滚方案", "match": ["回滚方案", "回滚"]}
+        ],
+        "lite": [
+          {"name": "结论摘要", "match": ["结论摘要", "摘要"]}
+        ]
+      }
+    },
+    {
+      "id": "04-task-list",
+      "phase": "04",
+      "dir_prefix": "04-",
+      "filenames": ["04-开发任务清单.md"],
+      "content_concepts": {
+        "full": [
+          {"name": "结论摘要", "match": ["结论摘要", "摘要"]},
+          {"name": "任务拆解", "match": ["任务拆解", "任务表", "任务清单"]},
+          {"name": "依赖关系", "match": ["依赖关系", "依赖"]},
+          {"name": "验证结果", "match": ["验证结果", "验证"]}
+        ],
+        "lite": [
+          {"name": "结论摘要", "match": ["结论摘要", "摘要"]}
+        ]
+      }
+    },
+    {
+      "id": "05-test-report",
+      "phase": "05",
+      "dir_prefix": "05-",
+      "filenames": ["05-测试验证报告.md"],
+      "content_concepts": {
+        "full": [
+          {"name": "结论摘要", "match": ["结论摘要", "摘要"]},
+          {"name": "用例清单", "match": ["用例清单", "测试用例", "用例"]},
+          {"name": "缺陷记录", "match": ["缺陷记录", "缺陷"]},
+          {"name": "执行结果", "match": ["执行结果", "测试结论", "通过率"]},
+          {"name": "测试环境", "match": ["测试环境", "环境"]}
+        ],
+        "lite": [
+          {"name": "结论摘要", "match": ["结论摘要", "摘要"]}
+        ]
+      }
+    },
+    {
+      "id": "06-release",
+      "phase": "06",
+      "dir_prefix": "06-",
+      "filenames": ["06-发布上线记录.md"],
+      "content_concepts": {
+        "full": [
+          {"name": "结论摘要", "match": ["结论摘要", "摘要"]},
+          {"name": "部署", "match": ["部署", "发布"]},
+          {"name": "验证", "match": ["验证"]},
+          {"name": "结论", "match": ["上线结论", "部署结论", "结论"]}
+        ],
+        "lite": [
+          {"name": "结论摘要", "match": ["结论摘要", "摘要"]}
+        ]
+      }
+    },
+    {
+      "id": "07-retro",
+      "phase": "07",
+      "dir_prefix": "07-",
+      "filenames": ["07-迭代回顾报告.md", "07-迭代回顾.md"],
+      "content_concepts": {
+        "full": [
+          {"name": "迭代总结", "match": ["迭代总结", "本次迭代总结"]},
+          {"name": "问题清单", "match": ["问题清单", "问题"]},
+          {"name": "模式沉淀", "match": ["模式沉淀", "模式库"]},
+          {"name": "正向模式提炼", "match": ["正向模式提炼", "正向模式"]},
+          {"name": "行动项", "match": ["行动项", "改进措施", "改进点"]}
+        ],
+        "lite": [
+          {"name": "结论摘要", "match": ["结论摘要", "摘要"]},
+          {"name": "本次迭代总结", "match": ["本次迭代总结", "迭代总结"]},
+          {"name": "改进点", "match": ["改进点", "改进措施"]}
+        ]
+      }
+    }
+  ]
+}
