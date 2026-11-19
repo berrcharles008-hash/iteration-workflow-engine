@@ -29,7 +29,10 @@ SPECS_DIR=""
 #   （启动文件夹快捷方式 / schtasks 计划任务 / shutdown.exe / GBK 解码），POSIX 侧
 #   故意**不实现拷贝**：装一份跑不起来的工具包比不装更糟（用户会以为已启用）。
 #   这里只做「接受参数 + 明示」，避免 `--with-qqbot` 被判 Unknown option 直接退出。
+# ★ TOOL-SESSIONHUB-DIST（2026-11-19）：session-hub 同为 Windows-only（全 .ps1 + 活实例在
+#   %LOCALAPPDATA%\codebuddy-hub）⇒ 同样只接受参数并明示，不实现拷贝。
 WITH_QQBOT=false
+WITH_SESSION_HUB=false
 COMPONENTS_ONLY=false
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -43,6 +46,8 @@ while [[ $# -gt 0 ]]; do
             SPECS_DIR="$2"; shift 2 ;;
         --with-qqbot)
             WITH_QQBOT=true; shift ;;
+        --with-session-hub)
+            WITH_SESSION_HUB=true; shift ;;
         --components-only)
             COMPONENTS_ONLY=true; shift ;;
         *)
@@ -130,6 +135,11 @@ if $DRY_RUN; then
     else
         echo "    状态: 不安装（需要时在 Windows 上执行 install.ps1 -WithQqbot）"
     fi
+    if $WITH_SESSION_HUB; then
+        echo "    ⏭  session-hub 仅支持 Windows —— 本脚本不拷贝（请用 scripts/install.ps1 -WithSessionHub）"
+    else
+        echo "    · session-hub: 不安装（Windows-only；需要时执行 scripts/install.ps1 -WithSessionHub）"
+    fi
     echo ""
     echo "  Step 3 (IDE adapter — 简化模式：仅差异文件):"
     case $DETECTED_IDE in
@@ -187,6 +197,8 @@ if $COMPONENTS_ONLY; then
     else
         echo "  ○  qqbot 未安装（Windows-only 组件；请在 Windows 上执行 scripts/install.ps1 -WithQqbot -ComponentsOnly）"
     fi
+    echo "  · session-hub 为共享型 Windows 组件（活实例在 %LOCALAPPDATA%\\codebuddy-hub，项目侧无副本）"
+    echo "    状态请查: scripts/install.ps1 -ComponentsOnly（Windows）"
     exit 0
 fi
 

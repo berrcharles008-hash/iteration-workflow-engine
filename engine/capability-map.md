@@ -97,7 +97,7 @@
 | 等待协议 A/B/D | 工位（`ask.js` 默认等待，**无「只登记」分支**；`--no-wait` 已删除）/ headless / QQ 唤醒（waiter 成员 `send_message`）；不可逆门禁卡 = 单向知会（无待确认项） | `waiting-protocol.md` | ✅ |
 | QQ 指令集 | /help · 开新迭代 · 继续 · 模型列表 | 项目侧 tools/qqbot/ | ✅ |
 | 确认门 QQ 登记 | 未登记 ⇒ 单向提醒（G1） | `engine/gate/gate-check.mjs` | ✅ |
-| 接管会话面板 | hub 确认/接管/派发 | 项目侧 tools/session-hub/ | ✅ |
+| 接管会话面板 | hub 确认/接管/派发（共享型可选组件；`-WithSessionHub` 只分发代码，不登记项目/不起服务） | 宿主层 %LOCALAPPDATA%\codebuddy-hub（源 = 引擎仓库 tools/session-hub/） | ✅ |
 | 成员等待协议 | 回合内等待（team-out 标记分片轮询 ≤10min + 总 30min 超时兜底） | `phase-04.md` · `team-agent-strategy.md` | ⏳ |
 
 ## 7. 质量与审计（14）
@@ -190,3 +190,4 @@
 | 2026-10-25 | §7 **+1 行「占位符扫描与归零」** + 节计数 `（12）`→`（13）`；同步把「一致性审计 A1~A8」更正为 **A1~A10**（b/e 已实检）+ §9「变量注入」补五类 schema/写盘前失败锚点 + 本行。依据迭代 `2026-10-25-001-引擎注入链与占位符二分` |
 | 2026-11-01 | §7 **+1 行「03 两表完整性机检（M1/M2 执行面，非新机制）」** + 节计数 `（13）`→`（14）`；「一致性审计 A1~A10」更正为 **A1~A11** + 本行。依据迭代 `2026-11-01-001-已建机制强制执行`（批 2 · 项 2-1）；★ 计入的是**既有机制的判据载体**，不是第 8 项机制 |
 | 2026-10-25 | §4 **+2 行**「VCS 判定档（G12）」「出站通知适配器（G11）」+ 节计数 `（9）`→`（11）`；§10 **+1 行**「配置的多语言消费」（含 `scripts/project_config.py` 指针）+ 节计数 `（2）`→`（3）` + 本行。依据迭代 `2026-10-25-002-引擎VCS归位与脚本去项目化` |
+| 2026-11-19 | §6「接管会话面板」**更正落点**：项目侧 tools/session-hub/ 已退役 ⇒ 宿主层 %LOCALAPPDATA%\codebuddy-hub（源在引擎仓库 tools/session-hub/），并补 `-WithSessionHub` 开关说明（只分发代码）。依据 session-hub 吸收为共享型可选组件（fabce44 + design/optional-component-distribution.md v0.2 L5）+ 本行 |

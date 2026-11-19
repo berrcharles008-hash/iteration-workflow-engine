@@ -77,37 +77,49 @@ pwsh scripts/init-checklist.ps1 -ProjectPath "你的项目路径"
 向导会引导你完成：`project.manifest.yaml` 项目配置、编码规范、审查规则、门禁微核注入等。
 也可手动编辑 `project/` 下的配置文件（见下节文件地图）。
 
-### 可选组件：QQ 通知通道（默认不装）
+### 可选组件（默认都不装）
 
-安装 skill 时**先问一句**（人或 Agent 执行安装都适用）：
+安装 skill 时**先问两句**（人或 Agent 执行安装都适用）：
 
-> 需要额外的「QQ 通知通道」吗？它把任务完成/待确认事项推到手机 QQ，并在你离开工位时驱动会话继续。
-> 默认**不装**；要就加 `-WithQqbot`，不要就跳过（之后随时可补装）。
+> 1. 需要「QQ 通知通道」吗？把任务完成/待确认事项推到手机 QQ，并在你离开工位时驱动会话继续。要就加 `-WithQqbot`。
+> 2. 需要「会话监控面板」吗？一个本地网页统一查看/回放各 CLI 会话（**一个实例服务多项目**）。要就加 `-WithSessionHub`。
+>
+> 默认都**不装**；跳过之后随时可补装。
 
 ```powershell
-# 装：安装期一并带
+# 装：安装期一并带（两者可同时或分别加）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithQqbot
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithSessionHub
 
 # 补装（skill 早已装好，之后才想要）：轻量，不备份、不重装引擎
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithQqbot -ComponentsOnly
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithSessionHub -ComponentsOnly
 
-# 查状态
+# 查状态（两个组件一起报）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -ComponentsOnly
 ```
 
-装完只是「文件到位」：真正启用要你自己在项目根执行一次
-`powershell -File tools\qqbot\install-all.ps1`（凭据 / 自启 / 看门狗 / 通知开关都在那一步）。
-细节见 `tools/qqbot/README.md`。仅 Windows。
+装完只是「文件到位」：真正启用要你自己执行（凭据 / 自启 / 通知开关 / 项目登记都在那一步）。
 
-状态有三态，别把「目录在」当成「已生效」：
+- qqbot：在项目根跑 `powershell -File tools\qqbot\install-all.ps1`。细节见 `tools/qqbot/README.md`。
+- session-hub：跑 `%LOCALAPPDATA%\codebuddy-hub\install-all.ps1 -ProjectRoot <项目根> -ProjectId <id>`
+  —— 共享型**代码不在项目里**（主动拷进项目会与运行实例抢 18766 端口），细节见 `tools/session-hub/README.md`。
 
-| 状态 | 判据 | 下一步 |
-|---|---|---|
-| 未分发 | `<项目根>\tools\qqbot` 不存在 | `-WithQqbot -ComponentsOnly` |
-| 已分发未启用 | 目录在，但 manifest 的 `notifications.adapter` 不是 `qqbot` | 跑一次 `tools\qqbot\install-all.ps1` |
-| 已启用 | 目录在 **且** adapter = `qqbot` | `curl http://127.0.0.1:18765/health` |
+均仅 Windows（install.sh 接受同名参数但只提示、不拷贝）。
 
-查询：`scripts\install.ps1 -ComponentsOnly`（只读）。组件的通用规范（位置与主从、唯一入口、三态、生命周期）见引擎仓库 design/optional-component-distribution.md。
+状态别把「目录在」当成「已生效」——两类组件的判据不同：
+
+| 组件 | 状态 | 判据 | 下一步 |
+|---|---|---|---|
+| qqbot | 未分发 | `<项目根>\tools\qqbot` 不存在 | `-WithQqbot -ComponentsOnly` |
+| qqbot | 已分发未启用 | 目录在，但 manifest 的 `notifications.adapter` 不是 `qqbot` | 跑一次 `tools\qqbot\install-all.ps1` |
+| qqbot | 已启用 | 目录在 **且** adapter = `qqbot` | `curl http://127.0.0.1:18765/health` |
+| session-hub | 未分发 | `%LOCALAPPDATA%\codebuddy-hub\server.js` 不存在 | `-WithSessionHub -ComponentsOnly` |
+| session-hub | 已分发未启用 | 代码在，但本项目 id 不在 `projects[]` | `install-all.ps1 -ProjectRoot <根> -ProjectId <id>` |
+| session-hub | 已启用 | 在清单 **且** `/p/<id>/health` 200 | 打开 `http://127.0.0.1:18766/p/<id>/` |
+| session-hub | 已登记但探活失败 | 在清单但探活不通（端口冲突 / 未启动） | `%LOCALAPPDATA%\codebuddy-hub\start-hub.ps1` |
+
+查询：`scripts\install.ps1 -ComponentsOnly`（只读）。组件的通用规范（位置与主从、唯一入口、三态/四态、生命周期、共享型 L5）见引擎仓库 design/optional-component-distribution.md。
 
 ### 典型对话
 

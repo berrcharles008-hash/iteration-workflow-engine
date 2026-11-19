@@ -14,6 +14,16 @@
 | `%LOCALAPPDATA%\codebuddy-hub` | **活实例**（代码 + `hub.config.json` + `sessions/` `logs/` 等运行时） |
 | `<项目根>/tools/session-hub` | **不留副本**（只允许一份指回本文件的说明） |
 
+**三条入口（都不改变「唯一安装入口 = install-all.ps1」这一事实）**：
+
+| 场景 | 命令 |
+|---|---|
+| 装工作流 skill 时顺带要代码就位 | 引擎仓库 `scripts\install.ps1 -WithSessionHub`（或后装 `-WithSessionHub -ComponentsOnly`）—— 只委托下面的 `-CopyOnly` |
+| 升级本机实例代码 | 本目录 `install-all.ps1 -CopyOnly` |
+| 登记一个新项目 | 本目录 `install-all.ps1 -ProjectRoot <abs path> -ProjectId <id>` |
+
+skill 安装器**只做 `-CopyOnly`**：不登记项目、不启动服务、不注册自启 —— 那三件改的是全机唯一实例，必须你显式执行；它也不在项目侧写任何文件（连 .gitignore 都不碰）。
+
 **改代码的唯一路径**：
 
 1. 改本目录（源）

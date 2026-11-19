@@ -139,20 +139,23 @@ sj-iteration-workflow-engine/
 
 #### 可选组件（默认不装）
 
-可选组件与核心引擎分开分发：默认**不安装**，需要时显式开启。安装期由安装器（或代为执行安装的 Agent）先问一句「是否需要 QQ 通知通道」，同意才装、拒绝则不装。
+可选组件与核心引擎分开分发：默认**不安装**，需要时显式开启。安装期由安装器（或代为执行安装的 Agent）先问一句「是否需要 QQ 通知通道 / 会话监控面板」，同意才装、拒绝则不装。两个组件的类型不同（per-project vs 共享型），开关互相独立。
 
-| 组件 | 作用 | 开关 |
-|---|---|---|
-| `qqbot` | QQ 通知 + 双向确认：任务完成推送、待确认 `#N` 回执、工位外驱动会话继续、成员卡死告警 | `install.ps1 -WithQqbot` |
+| 组件 | 类型 | 作用 | 开关 |
+|---|---|---|---|
+| `qqbot` | per-project | QQ 通知 + 双向确认：任务完成推送、待确认 `#N` 回执、工位外驱动会话继续、成员卡死告警 | `install.ps1 -WithQqbot` |
+| `session-hub` | 共享型（一进程服务 N 个项目） | 会话监控中心：登记 + 实时查看 + 回放各 CLI headless 会话，`/p/<id>/` 按项目隔离 | `install.ps1 -WithSessionHub` |
 
 ```powershell
 # 安装期一并装（Windows）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithQqbot
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithSessionHub
 
 # 已装过 skill，之后才想加（轻量：不备份 IDE 目录、不重装引擎）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithQqbot -ComponentsOnly
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithSessionHub -ComponentsOnly
 
-# 只查组件状态
+# 只查组件状态（两个组件一起报）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -ComponentsOnly
 ```
 
@@ -164,6 +167,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -Compone
 - **状态三态**：未分发 / 已分发**未启用** / 已启用 —— 查询用 `install.ps1 -ComponentsOnly`（只读，不改任何文件）。判据唯一来源是 manifest 的 `notifications.adapter`，「目录在」不等于「已生效」；
 - **分发源 = 引擎仓库顶层的 tools 目录，不常驻项目**（不在 skill 目录里留副本：副本无更新责任人，且容易被误当活实例跑）；
 - 该组件仅支持 Windows；install.sh 接受同名参数但只提示、不拷贝（装一份跑不起来的工具包比不装更糟）。
+- **session-hub 是共享型**：安装器只把代码同步到宿主层 `%LOCALAPPDATA%\codebuddy-hub`，**不在项目侧留任何副本**（第二份代码会与运行实例抢 18766 端口），也不写 .gitignore（项目侧零落盘）。登记项目 / 启动 / 自启必须你显式执行 `%LOCALAPPDATA%\codebuddy-hub\install-all.ps1 -ProjectRoot <项目根> -ProjectId <id>`；
+- **共享型是四态**：未分发 / 代码在但**本项目未登记**（`projects[]` 里没有本项目，最容易误读的一态）/ 已启用（本项目在清单 **且** `/p/<id>/health` 200）/ 已登记但探活失败（degraded）。无前缀 `/health` 只代表缺省项目，不能证明本项目已启用；规则见 design/optional-component-distribution.md L5。
 
 ### 项目级覆盖
 
@@ -303,20 +308,23 @@ Project-level configuration lives in `project/`. Edit these files to match your 
 
 #### Optional Component (off by default)
 
-Optional components ship separately from the core engine: **nothing is installed by default**; opt in explicitly. At install time the installer (or the agent driving it) should first ask "do you want the QQ notification channel?" — install only on a yes.
+Optional components ship separately from the core engine: **nothing is installed by default**; opt in explicitly. At install time the installer (or the agent driving it) should first ask "do you want the QQ notification channel / session monitor?" — install only on a yes. The two components are of different types (per-project vs shared), and their switches are independent.
 
-| Component | What it does | Switch |
-|---|---|---|
-| `qqbot` | QQ notifications + two-way confirmation: completion push, pending `#N` replies, driving a session while away from the desk, stalled-teammate alerts | `install.ps1 -WithQqbot` |
+| Component | Type | What it does | Switch |
+|---|---|---|---|
+| `qqbot` | per-project | QQ notifications + two-way confirmation: completion push, pending `#N` replies, driving a session while away from the desk, stalled-teammate alerts | `install.ps1 -WithQqbot` |
+| `session-hub` | shared (one process serves N projects) | Session monitor: register + live view + replay of headless CLI sessions, isolated per project under `/p/<id>/` | `install.ps1 -WithSessionHub` |
 
 ```powershell
 # Install together with the skill (Windows)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithQqbot
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithSessionHub
 
 # Skill already installed, add it later (light: no IDE backup, no engine re-copy)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithQqbot -ComponentsOnly
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -WithSessionHub -ComponentsOnly
 
-# Status only
+# Status only (reports both components)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -ComponentsOnly
 ```
 
@@ -328,6 +336,8 @@ Boundaries (by design, not omissions):
 - **Three states**: not distributed / distributed but **not enabled** / enabled — query with `install.ps1 -ComponentsOnly` (read-only). The single source of truth is `notifications.adapter` in the manifest; "the directory exists" is not "it is active";
 - **Distribution source = the top-level tools directory of the engine repo; it does not live in the project** (no copy inside the skill dir: a copy has no update owner and is easily mistaken for the live instance);
 - Windows only. install.sh accepts the same flags but only prints a note (shipping a toolkit that cannot run is worse than not shipping it).
+- **session-hub is a shared component**: the installer only syncs code to the host layer `%LOCALAPPDATA%\codebuddy-hub` — it leaves **no copy in the project** (a second copy fights the live instance for port 18766) and touches no .gitignore (zero project-side writes). Registering the project / starting / autostart must be done by you: `%LOCALAPPDATA%\codebuddy-hub\install-all.ps1 -ProjectRoot <root> -ProjectId <id>`;
+- **Shared components have four states**: not distributed / code present but **this project is not registered** (not in `projects[]` — the easiest one to misread) / enabled (in the list **and** `/p/<id>/health` returns 200) / registered but probe failed (degraded). A prefix-less `/health` only reflects the default project and does not prove this project is enabled; see design/optional-component-distribution.md L5.
 
 ### Project-Level Overrides
 
