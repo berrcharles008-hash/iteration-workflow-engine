@@ -122,3 +122,19 @@ tools/qqbot/*.jsonl
 tools/qqbot/runtime/
 # 0010 gate negative-probe residue (10-byte test artifact, never distributed)
 tools/qqbot/.gate-negative-probe.txt
+
+# ====================
+# tools/session-hub (shared-instance component: real config & runtime never ship)
+# Third defense layer behind install-all.ps1 exclusion rules (spec L2: single owner)
+# ====================
+tools/session-hub/hub.config.json
+tools/session-hub/sessions/
+tools/session-hub/inputs/
+tools/session-hub/dialog-archive/
+tools/session-hub/probe-out/
+tools/session-hub/runtime/
+tools/session-hub/node_modules/
+tools/session-hub/.playwright-cli/
+tools/session-hub/*.jsonl
+tools/session-hub/*.log
+tools/session-hub/*.bak-*
