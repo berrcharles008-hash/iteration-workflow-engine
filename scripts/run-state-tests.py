@@ -38,6 +38,7 @@
   T19 F1 四分类：改一行 ⇒ 变化 1；还原 ⇒ 变化 0；新增 ⇒ 新增 1；删除 ⇒ 消失 1（每例重建夹具）
   T20 F1 负向：无块 ⇒ SKIP(no baseline) rc=0；缺 validate-artifacts.py ⇒ rc=2；--repo 非 git ⇒ anchored:false
   T21 D-1 防回归：连续两步 skip 各自落 skip_reason（旧窗口判据漏插第 2 步）
+  T22 REQ-007 A1：phase-advance --to 07 随动置 iteration_status=completed（--to 05 不动）
 
 退出码: 0 = 全部通过；1 = 存在失败。
 """
@@ -619,6 +620,19 @@ def main():
     ok = rc1 == 0 and n_reason == 2 and 'R-A' in body and 'R-B' in body
     check('T21 连续两步 skip 各自落 skip_reason（D-1 防回归）', ok,
           'rc={} n_reason={}'.format(rc1, n_reason))
+
+    # T22（★ REQ-007 A1 · 2026-11-20）：phase-advance --to 07 随动置 iteration_status=completed
+    setup()
+    rc1, _ = run(['phase-advance', '--to', '05', '--confirm-by', 'ide', '--quote', 'T22 通过'])
+    s5 = read(cs)
+    rc2, _ = run(['phase-advance', '--to', '07', '--confirm-by', 'ide', '--quote', 'T22 通过'])
+    s7 = read(cs)
+    ok = (rc1 == 0 and rc2 == 0
+          and 'iteration_status: "in_progress"' in s5
+          and 'iteration_status: "completed"' in s7
+          and 'iteration_status → completed（--to 07 随动）' in s7)
+    check('T22 phase-advance --to 07 随动 iteration_status=completed（REQ-007 A1）', ok,
+          'rc1={} rc2={}'.format(rc1, rc2))
 
     fails = [r for r in RESULTS if not r[1]]
     say('')

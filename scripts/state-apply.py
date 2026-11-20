@@ -1216,6 +1216,12 @@ def main():
                 return 2
             set_scalar(lines, 'current_phase', to)
             set_scalar(lines, 'phase_status', 'in_progress')
+            if to == '07':
+                # ★ REQ-007 A1（2026-11-20）：进入 07 = 迭代内容完成 ⇒ iteration_status **随动**置
+                #   completed。原口径只在 phase-07 §6.2 文字里说「保持为 completed」而无写入时机
+                #   ⇒ 归档后 state 停在 in_progress，台账回写「已完成」被判看板「虚报」（2026-11-20-002 实测）。
+                set_scalar(lines, 'iteration_status', 'completed')
+                changed.append('iteration_status → completed（--to 07 随动）')
             conf = ['phase_confirm:', '  from: "{}"'.format(old), '  to: "{}"'.format(to),
                     '  by: "{}"'.format(by), '  at: "{}"'.format(stamp)]
             if quote:
