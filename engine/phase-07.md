@@ -201,6 +201,11 @@ lines[end:end] = out          # ★ 块末追加（唯一正确形态）
 | 模式库蒸馏义务（第 4 项） | `node runtime/check-distill.mjs` 退出码 | 0 通过 / 3 需蒸馏 / 1 工具故障 |
 | 产物内容合同（M1） | `python scripts/validate-artifacts.py --phase 07` 退出码 | 0 通过 / 1 未过（缺概念·空章节·只剩占位·复制旧报告） |
 | 基线相对变化（M1） | `python scripts/state-apply.py artifact-check --phase 07 --require-baseline` 退出码 | 0 通过（有新增或变化）/ 1 未变（沿用旧文件）或基线缺失 |
+| 引擎变更清单（F1） | `freeze-check --json` 退出码与输出 | `SKIP(no baseline)` 或漂移清单与 `engine_baseline.at` 一致 |
+
+> ★ **F1 两项口径**：① 无 `engine_baseline`（001/002 及更早的 state）⇒ 单行 `SKIP(no baseline)`、rc=0，
+> **不阻断归档**（同「环境不足 ⇒ SKIP 不阻断」例）；② 本迭代自举（自身在改 `engine/**`）⇒
+> `changed` 非空属**预期**，如实登记 `07-迭代回顾.md` §八即可，不据此判该项失败。
 
 > **若任何一项检查失败**：不更新 state.yaml、不释放 ACTIVE。先执行缺失的写入操作，再重新自检。
 
@@ -336,7 +341,7 @@ if (Test-Path $score) { node $score --iteration "<迭代ID>" } else { Write-Outp
 |:--:|---------|---------|:--:|
 | AP-1 | 报告中写"建议下一个迭代写入模式库" | 本迭代 07 阶段结束时必须实际写入 `project/lessons-learned.md` | 028 |
 | AP-2 | step-3 标记为"按需"后全部跳过不评估 | 逐条对照 §Step 3 执行标准 评估，不应写入时需在报告中说明理由 | 015, 028 |
-| AP-3 | step-6 归档时不验证模式库是否实际更新 | 执行 §6.1 前置自检的 4 项检查（第 4 项 = 蒸馏义务退出码），失败则补写 | 015, 028 |
+| AP-3 | step-6 归档时不验证模式库是否实际更新 | 执行 §6.1 前置自检的 7 项检查（第 4 项 = 蒸馏义务退出码），失败则补写 | 015, 028 |
 | AP-4 | 正向模式只写在回顾报告中，不修改 lessons-learned.md | step-5 流程第 2 步：有则立即 `replace_in_file` | 028 |
 
 > **违反以上铁律 = step-6 自检不过 → ACTIVE 不释放 → 迭代不能结束。**

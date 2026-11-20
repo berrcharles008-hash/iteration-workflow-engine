@@ -1040,7 +1040,7 @@ function write_state_yaml(iteration_id, new_content):
 > **依据**：PERF-1 实测 —— 状态更新的耗时单位是**模型 step 数**（一次更新实测 2 个 step ≈ 105s；写入载荷生成占所在 step 11%~62%）。
 > §9.1~9.4 的手工串行步骤保留为**降级/复杂路径**；**意图式命令**把「读 state」的职责移入脚本，使简单更新压到 **1 个 step**。
 
-**命令（幂等）**：
+**命令表（写入命令 + ★ 只读命令）**：
 
 | 命令 | 语义 |
 |------|------|
@@ -1050,6 +1050,11 @@ function write_state_yaml(iteration_id, new_content):
 | `phase-advance --to <NN> --confirm-by <qq#N\|ide\|handoff\|bypass> [--quote "…"] [--gate-result …]` | 旧阶段入 `phase_history` + `current_phase` 推进 + `phase_confirm`（**缺 confirm 参数 ⇒ 拒绝**；`by=ide` 时 `--quote` 必填） |
 | `blocker-add/rm` · `defect-add/close` | `blockers[]` / `defects[]` |
 | `patch --file <json>` | 顶层标量覆盖（**仅已存在键**；逃生口） |
+| `resume [--json]` | ★只读：返回下一步行动（§9.7） |
+| `rotate-team [--reason "…"]` | `in_progress` 步骤回落 `pending`（§9.7） |
+| `baseline-set [--phase NN]` / `artifact-check [--phase NN] [--require-baseline] [--json]` | M1 基线（后者 ★只读） |
+| `freeze-set [--phase NN] [--force] [--repo <path>]` | F1：记 `engine_baseline`，幂等零写入（§9.8） |
+| `freeze-check [--phase NN] [--save] [--require-frozen] [--json]` / `freeze-restore [--dry-run]` | ★只读：漂移四分类 / 还原清单（§9.8） |
 
 **单次调用内部保证**（与 §9.1~9.4 等价）：加锁（mkdir + TTL 60s）→ 读 canonical → **幂等检查** → 文本级改字段 → `version+1` / `last_updated` → 变更前重读比对（乐观锁）→ 备份 `runtime/snapshots/` → **双副本写** → 两侧 ACTIVE Line2（含 `UPDATED`）→ **单源校验**（同进程执行 `scripts/validate-state.py`；失败 ⇒ state + ACTIVE **双侧回滚**）→ 自留痕 → 释放锁。
 环境变量：`STATE_FORCE_WRITE=1`（逃生口，跳过锁与版本比对）、`STATE_APPLY_ROOT`（演练/隔离根）、`STATE_APPLY_SESSION`（留痕 session）。
@@ -1080,7 +1085,7 @@ events:
 | **不做事件溯源** | 状态字段仍是唯一真相源，**不由 events 重放推导** state（做重放等于重写状态机，明确不做） |
 | **历史 fail-open** | 旧 state 无 `events` 属正常态，不回溯补齐；消费方输出 `—` 而非 0 |
 
-事件最小集（`state-apply.py` 的 `EVENT_OF` 映射）：`session_summary` / `step_completed` / `step_skipped` / `task_completed` / `phase_advanced` / `blocker_added` / `blocker_removed` / `defect_opened` / `defect_closed` / `state_patched` / `steps_appended` / `workflow_team_rotated`。
+事件最小集（`state-apply.py` 的 `EVENT_OF` 映射）：`session_summary` / `step_completed` / `step_skipped` / `task_completed` / `phase_advanced` / `blocker_added` / `blocker_removed` / `defect_opened` / `defect_closed` / `state_patched` / `steps_appended` / `workflow_team_rotated` / `engine_baseline_set`。
 
 用途：① 恢复时回答「上次为什么停、停过几次、谁批准」；② 运行健康度评分「控制流健康 / 错误恢复」两维的唯一低成本数据源（此前要跨 `write-claims.jsonl` + `gate-audit.log` + 106 个快照做 diff）。
 
@@ -1100,3 +1105,46 @@ python {IDE}/skills/iteration-workflow/scripts/state-apply.py rotate-team --reas
 ```
 
 把所有 `status: "in_progress"` 的 `phase_steps` 回落 `pending`，并记 `workflow_team_rotated` 事件。
+
+### 9.8 引擎冻结基线（`engine_baseline` · ★ F1 · 2026-11-20）
+
+**块结构**（锚在 `last_session_summary` 之后，与 `artifact_baseline` 同风格；只由 `freeze-set` 写入）：
+
+```yaml
+engine_baseline:
+  at: "2026-11-20T15:31"
+  phase: "04"
+  source:
+    repo: "D:/sj-skills/iteration-workflow-engine"
+    commit: "4385f08"
+    anchored: false          # repo 解析失败 ⇒ false + [WARN] 引擎版本未锚定
+  scope:
+    roots:
+      - "engine/"
+      - "scripts/"
+      - "project/project.manifest.yaml"
+      - "hooks/gate-check.mjs"
+      - "skill/SKILL.md"
+      - "skill/SKILL.template.md"
+    exclude: ["__pycache__", "*.pyc", "*.pyo"]
+  files:
+    - path: "engine/phase-01.md"
+      sha: "1a2b3c4d5e6f7a8b"
+```
+
+**写入时机**：01 收口跑 `freeze-set`；基线语义 = **首次触碰引擎之前**——01-03 免开闸窗口内已改引擎者
+须在 04 首次写盘前补跑，不补则基线失真；错过该时点 ⇒ 本迭代 F1 降级为仅登记 `commit`。
+重复执行恒幂等（`ALREADY FROZEN`、rc=0、零写入）；覆盖须 `--force`（旧值与漂移计数入 `events`）。
+
+**只读命令约定**：`freeze-check` / `freeze-restore` 在 `mkdir` 锁**之前**返回（同 §9.7 `resume`），
+不建锁、不备份、不写 state 与 ACTIVE；`--save` 只写 `runtime/snapshots/<iid>/engine-drift/`
+（changed 复制 + missing 写 `_missing.txt`），复制失败仅 `[WARN]` 不改退出码。
+
+**历史兼容**：旧 state 无该块属正常态 ⇒ `SKIP(no baseline)`、rc=0，**不阻断 07 归档**；
+`engine_baseline` 是 07 报告「八、引擎变更清单」的唯一数据源（口径见 `engine/phase-07.md` §6.1）。
+
+| 命令 | 退出码 |
+|:--|:--|
+| `freeze-set` | 0 成功/幂等；2 拒绝（缺参 / 无 helper / 校验失败） |
+| `freeze-check` | 默认恒 0；`--require-frozen` 且漂移非空 ⇒ 1 |
+| `freeze-restore` | 0 只读清单；2 缺 `--dry-run`（还原走仓库 git + install.ps1） |

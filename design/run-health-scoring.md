@@ -192,15 +192,17 @@ curl.exe -sSL -m 600 -o LoopForge-main.zip "https://ghfast.top/https://github.co
 | **4** | **M1** | 产物内容合同（`content_concepts` 声明 + 校验器）+ `artifact_baseline` | 是 | 2~3h | 旧报告无法过 `finish` 门禁 |
 | **5** | **S3** | 评分维度/权重/阈值定稿（写回 §4） | 否 | 0.5h | ✅ 已完成（2026-11-19），定稿后不再改 |
 | **6** | **S4** | 评分脚本 + 07 接入 + 前向验证 | 是 | 2~3h | ✅ 脚本与接入已完成（2026-11-19）：001 **88** / 002 **77**，跨 11 分；前向验证待新迭代（回测不可行，见 §2 #8） |
+| **7** | **F1** | 引擎冻结快照（`engine_baseline` 文件级 sha16 清单 + 漂移检查 + 仅漂移文件快照） | 是 | 2.5~3.5h | ✅ 已完成（2026-11-20，迭代 `2026-11-20-002`）：5 根位 89 文件 + `source.commit` + 四分类 + 还原清单；三态冒烟 + 36/36 回归（§8 步骤 7 落地记录） |
 
-**排序依据（三条依赖关系，不可随意调换）**
+**排序依据（四条依赖关系，不可随意调换）**
 
 1. **S2 必须最先**：它是评分的唯一数据源，且完全独立于引擎改造、零回归风险；同时是最大未知项（metrics 移植能否在 0003 跑通），先暴露风险。
 2. **M2 必须早于 M1**：M1 的 `artifact_baseline` 要落进 `state.yaml` 并走统一写入路径。若 M1 先做，会先造一条"手写 baseline"的临时路径，随后被 M2 的写入统一推翻 ⇒ 返工。
 3. **M4 排 M2/M1 之前**：它改动面最小（新增 `rules/manifest.json` + 探测/注入两个脚本，规则正文复用现有 47 个 md）、不依赖前两者、且落地后每次阶段加载都受益（降 token）。它的 `stage_rules` 映射到 7 个阶段文件，不受 M1/M2 改动影响。
+4. **F1 必须前置于前向验证**（2026-11-20 新增）：T2/T3 的判据是**跨迭代比分数**（001 = 88 / 002 = 77）。规则集在样本之间漂移 ⇒ 分数差异不可归因 ⇒ 论证失效。当前 `runtime/ACTIVE` = `STATUS=none`，下一个新迭代即第一个样本 ⇒ F1 必须在该迭代 **01 立项前**落地。
 
-**总预估**：11~16h，必然跨多次会话 ⇒ 每一步都回写 §6 勾选表。
-> 序 1~4（S2 / M4 / M2 / M1）均已按各自「停止点」验收通过，收口记录见 §8 步骤 1~4；序 5（S3）定稿见 §4，序 6（S4）收口见 §8 步骤 6。
+**总预估**：13.5~19.5h，必然跨多次会话 ⇒ 每一步都回写 §6 勾选表。
+> 序 1~4（S2 / M4 / M2 / M1）均已按各自「停止点」验收通过，收口记录见 §8 步骤 1~4；序 5（S3）定稿见 §4，序 6（S4）收口见 §8 步骤 6；序 7（F1）**2026-11-20 已落地**（迭代 `2026-11-20-002`），卡片见 §8 步骤 7（需求台账登记号 = `REQ-006`）。
 
 ### S1 对标拆解（只读）
 
@@ -398,9 +400,10 @@ curl.exe -sSL -m 600 -o LoopForge-main.zip "https://ghfast.top/https://github.co
 
 ## 6. 进度勾选（代替 state.yaml）
 
-> ★ **建设面收口（2026-11-19）**：本轮四机制 + 度量底座的**建设已全部落地，无待实现功能**；剩余只有**验证面**——S4 前向验证等 2~3 个新迭代（T2 需 3 / T3 需 5，见 §9.4）+ 1 项不可逆折价（T0 第 4 项行为证据已失）。
+> ★ **建设面收口（2026-11-19）**：本轮四机制 + 度量底座的**建设已全部落地**；当时剩余只有**验证面**——S4 前向验证等 2~3 个新迭代（T2 需 3 / T3 需 5，见 §9.4）+ 1 项不可逆折价（T0 第 4 项行为证据已失）。
+> ★ **2026-11-20 增补（建设面唯一重开项）**：新增 **F1 引擎冻结快照**（§8 步骤 7 · 需求台账 `REQ-006`）⇒ 「无待实现功能」自本条起不再成立，**已于 2026-11-20 落地清偿**；新增范围仅此一项，**不重开 M/S 系列**，§4 维度定稿不动。
 > ★ 措辞边界（勿说过头）：**「机制可用、已接入、待验证」≠「已验证有效」** —— §9.4 明确 T3 之前「改造有效」只是待验证假设，§9.6 的回滚条件仍然有效。
-> ★ **下次开工 = 前向验证 / T2 复采**（口径见 §9.4；§8 任务卡到步骤 6 为止，无步骤 7）。S4 已于 2026-11-19 落地（脚本 + 配置 + 07 接入 + 5 条验收全过），
+> ★ **下次开工 = 前向验证 / T2 复采**（口径见 §9.4）—— F1 已于 2026-11-20 落地（迭代 `2026-11-20-002`：5 根位 89 文件 / `commit=4385f08` / 36 例回归），版本锚已就位。S4 已于 2026-11-19 落地（脚本 + 配置 + 07 接入 + 5 条验收全过），
 > §4 已于同日定稿并经用户拍板，**不要重新设计维度**。
 > M2 / M4 / M1 / S3 / S4 均已落地。跨会话接手顺序：读本表看进度 → 读 §8 对应任务卡 → 直接执行，不要重新取证（取证结论已固化在 §2 / §2.1 / §1.2.2 / §4）。
 
@@ -419,7 +422,8 @@ curl.exe -sSL -m 600 -o LoopForge-main.zip "https://ghfast.top/https://github.co
 | M1 内容合同 + 基线 | ✅ | 2026-11-19 | `engine/templates/manifest.json`（7 产物 × full/lite 双档）+ `scripts/validate-artifacts.py`（6 判据）+ `state-apply.py` 的 `baseline-set` / `artifact-check`。真实两迭代 14 文件 0 ERROR；旧 07 报告复制必拒；`run-state-tests.py` 24/24 |
 | S3 维度定稿（§4） | ✅ | 2026-11-19 | 5 评分维（30/25/20/15/10）+ 4 观测项；准入 75；R1/R2 封顶 59；剔除耗时/绕过/复用三项见 §4.1 |
 | S4 评分脚本 + 07 接入 | ✅ | 2026-11-19 | `runtime/metrics/score-run.mjs` + `score-config.json` + 07 §6.4；两迭代实测 **88 / 77**，5 条验收全过（见 §8 步骤 6 收口） |
-| S4 前向验证（原「历史回测」） | ☐ | | 历史 state 只剩 2 个 ⇒ 不可回算（§2 #8）；脚本已实现观察期闸门（`events[]` 存在的前 2 个迭代 `judged=false`），等新迭代落样本 |
+| F1 引擎冻结快照（§8 步骤 7 · `REQ-006`） | ✅ 已完成 | 2026-11-20 | 迭代 `2026-11-20-002`：5 根位 **89 文件** / `commit=4385f08` / freeze 三命令 + 36 例回归；偏离原 4 根位 87 方案（+`skill/` 双文件，两路交叉审查各自独立命中 ⇒ 裁定扩入） |
+| S4 前向验证（原「历史回测」） | ☐ | | 历史 state 只剩 2 个 ⇒ 不可回算（§2 #8）；脚本已实现观察期闸门（`events[]` 存在的前 2 个迭代 `judged=false`），等新迭代落样本。**依赖 F1 先落地** |
 | 回流引擎仓库 | ✅ | 2026-11-19 | `01509d2`（design 文档）+ `5b3785e`（`engine/phase-07.md`）。A6 复核后仅剩 `capability-map.md` / `evolution-safety.md` 两处，方向是**实例侧落后于仓库**（仓库为 11-19 session-hub 落点更正）⇒ 属部署同步，不是回流欠账。**同日晚已部署同步到位**：双端 SHA256 一致（`16710` / `52553` 字节），`audit-engine.py --src` 的 **A6 = 与源仓库一致**、A10-e OK、ERR 仍为既有基线 16 |
 
 ### 6.1 本轮改造与收益速览（2026-11-19 收口）
@@ -663,6 +667,78 @@ ended_at → 末条 phase_history.completed_at → 后继迭代的 started_at �
 5. **缺脚本探针**：把 `score-run.mjs` 临时改名 ⇒ 07 小节打印 `SKIP(no metrics)` 且归档不阻断
 
 > 不影响的既有面：未改 `state-apply.py` ⇒ `run-state-tests.py` 无需重跑；`runtime/metrics/**` 在 `EXEMPT_PATHS` 内 ⇒ 无需 `.gate-bypass`。
+
+### 步骤 7 ｜ F1：引擎冻结快照（✅ 已完成 2026-11-20 · 迭代 `2026-11-20-002` · 台账 `REQ-006`）
+
+> **★ 落地记录（2026-11-20 回写）**：实际改动 **13 文件**（原方案 6 件 + 07 模板 §八 / `phase-steps.md` 计数 / 治理记账 3 文件）；
+> 冻结面 4 根位 87 → **5 根位 89**（+`SKILL.md`/`SKILL.template.md`，两路交叉审查各自独立命中 ⇒ 裁定扩入）；
+> `--repo` 成显式前置（解析失败 ⇒ `anchored:false` + `[WARN] 引擎版本未锚定`，不再静默 null）。
+> 真实态：`BASELINE SET files=89 commit=4385f08`；幂等零写入实测（mtime 不变）；`freeze-check --save` 留证 7 文件；
+> `run-state-tests` **36/36**（T18~T20 新增）；收口四脚本全绿。基线在 T1 落盘后建立 ⇒ 自举口径：T1 与三阶段接入文案
+> 被基线吸收，07 报告须注明；`git cat-file --batch` 的 CRLF 差异使未回流提示偏保守（07 观察项）。
+
+**为什么排在这里（三条实证，勿跳过）**
+
+1. **前向验证的前置**：§9.4 的判据是**跨迭代比分数**（001 = 88 / 002 = 77）。规则集在样本之间漂移 ⇒ 分数差异不可归因 ⇒ T2/T3 论证失效。当前 `runtime/ACTIVE` = `STATUS=none`（实测 2026-11-20）⇒ 下一个新迭代就是第一个样本 ⇒ **F1 必须在该迭代 01 立项前落地**。
+2. **现状是"空转的版本机制"**：`engine/engine-version.template.txt` 只有模板（"复制为 `project/engine-version.txt` 填入 commit"），实测 **0003 实例与引擎仓库两处均无该文件**；`capability-map.md:169` 却标 ✅。且即便填了，它只是"一次性 commit 号"——无文件级哈希、无"该迭代用的是哪一版"、迭代中改引擎无感。
+3. **2026-11-19 是活样本**：一日内 M1/M2/M4/S3/S4 五次落盘（`state-apply.py` / `validate-artifacts.py` / `rules/manifest.json` / `score-run.mjs` / `phase-07.md`）。若当时有在跑迭代，新规则会被静默套用，事后无法举证。
+
+**边界（先说清不做什么）**
+
+| 不做 | 理由 |
+|---|---|
+| 把实例目录变成 VCS / 每迭代复制全量 skill | 冻结面实测 **92 文件 / 1703.3 KB**（engine 58 + scripts 33 + hooks 1）；权威是引擎仓库 git，实例侧只需**指纹 + 漂移取证** |
+| 自动回滚 | 回滚由 `D:\sj-skills\iteration-workflow-engine` 仓库侧 `git checkout <commit>` + `install.ps1` 下发；项目侧只出"该还原哪些文件"的清单（`freeze-restore --dry-run`） |
+| 硬阻断 | 默认只报告，`--require-frozen` 才拒 —— 见下「自举」 |
+| 替代 A6 | 「实例 vs 仓库此刻」由 `audit-engine.py --src` 的 **A6** 负责；F1 只回答"该迭代用哪一版 + 迭代中被改了什么" |
+
+**改动面（6 件）**
+
+| # | 落点 | 内容 |
+|:--:|---|---|
+| 1 | `scripts/state-apply.py` | 新增 `freeze-set`（幂等）、`freeze-check`、`freeze-restore --dry-run`（后两者**锁前只读返回**，同 `resume` / `artifact-check` 先例）+ `sha16` helper |
+| 2 | `scripts/state-apply.py` | `freeze-check --save`：仅把**变更/消失**的文件复制到 `runtime/snapshots/<id>/engine-drift/`（漂移常态个位数文件、<100 KB） |
+| 3 | `engine/state-protocol.md` | 新增 §9.8：块结构、写入时机、只读命令约定、历史 state 无该块属正常态 |
+| 4 | `engine/phase-01.md` / `phase-04.md` / `phase-07.md` | 各 +1 行：01 收口 `freeze-set`；04 首次写盘前 `freeze-check`；07 收口把「引擎变更清单」写进报告 |
+| 5 | `SKILL.md` + `SKILL.template.md` | F1 段**双写**（不同步即 **A10-e 模板漂移 ERR**） |
+| 6 | `tests/run-state-tests.py` | +T18 幂等 / +T19 漂移检出（现 24/24） |
+
+**state 块结构**（锚在 `last_session_summary` 之后，与 `artifact_baseline` 同风格）
+
+```yaml
+engine_baseline:
+  at: "2026-11-20T10:00"
+  phase: "01"
+  source: {repo: "D:/sj-skills/iteration-workflow-engine", commit: "4385f08"}
+  scope: [engine, scripts, hooks, project/manifest.yaml]
+  files:
+    - {path: engine/phase-04.md, sha16: "1a2b3c4d5e6f7788"}
+```
+
+- 口径：`sha16 = sha256(bytes)[:16]`（与 M1 `artifact_baseline` 一致：防误改，不防对抗）；全量清单**只落 state**（92 行 ≈ 7 KB），不复制文件。
+- `scope` 固定 `engine/**` + `scripts/**` + `hooks/gate-check.mjs` + `project/manifest.yaml`；**不冻** `design/` `tools/` `tests/` `adapters/` `docs/` `runtime/`。
+- `source.commit` 取 `git -C <repo> rev-parse --short HEAD`；仓库不可达 ⇒ `null`，**不阻断**。
+
+**验收（6 条）**
+
+1. `freeze-set --phase 01` 后 state 出现 `engine_baseline`，`python scripts/validate-state.py` 仍 **PASS**（未知顶层键无白名单，同 `events[]` 先例；若报错则改校验器而非改块名）。
+2. **幂等**：连跑两次，除 `at` 外 `files` 逐项一致。
+3. **漂移检出**：备份后改 `engine/phase-04.md` 一行 ⇒ `freeze-check` 报 `changed` 并列出该路径；还原后归零。
+4. **增删**：新增临时文件 ⇒ `added`；删临时文件 ⇒ `missing`。
+5. **历史兼容**：001/002 的 state 无该块 ⇒ `freeze-check` 打印 `SKIP(no baseline)`、rc=0，**不阻断 07 归档**（同 `artifact-check` 缺基线语义）。
+6. **回归**：`python tests/run-state-tests.py` 全绿（24 + 2 例）；收口另跑 `audit-engine.py` ERR 0 / `validate-template-coverage.py` ERR:0 / `run-gate-tests.mjs` 72/72，回流 `--src` 的 **A6 = [OK]**。
+
+**自举（为什么默认不阻断）**：本项自身就在改 `engine/` 与 `scripts/`。若检查默认硬阻断，"实施 F1 的那次迭代"与"引擎自我改造期"会互相锁死 ⇒ 默认只出清单，`--require-frozen` 由人工在需要严格对比的迭代上开启。
+
+**放弃条件（先定，避免沉没成本）**：若连续 3 个迭代 `freeze-check` 的 `changed` 恒非空且无法归因 ⇒ 引擎改得比迭代快，冻结只产噪声 ⇒ **降级为"仅 07 报告登记 `source.commit`"**（不建 state 块、不写漂移快照），不再投入。
+
+**开闸面备忘**：`{IDE}/skills/iteration-workflow/**` 在 `EXEMPT_PATHS`（01-03 与 04 窗口免闸）；但引擎仓库 `D:\sj-skills\iteration-workflow-engine` **在该面之外** + `none` 态只放行纯文档 ⇒ 改本文件与回流推送均需用户手动 `.gate-bypass`（2026-11-20 实测：未开闸时报 `PreToolUse hook denied`「none 态仅放行纯文档」）。
+
+**预估**：2.5~3.5h（`state-apply.py` ≈180 行 + 三阶段各 1 行 + 双份 SKILL + 2 个回归用例），另 +0.5h 回流与收口。
+
+**落地顺序**：F1-a `freeze-set` + 清单 → F1-b `freeze-check`（含 `--save`）→ F1-c 01/04/07 三处接入 → F1-d 回归 + A10-e + A6 回流。每步回写 §6 勾选表。
+
+
 
 ## 9. 收益论证方案
 

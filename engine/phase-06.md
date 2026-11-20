@@ -66,6 +66,7 @@ python scripts/gen-knowledge-base.py --force     # ② 无条件全量刷新
 
 1. 将 `runtime/{ITERATION_ID}.state.yaml` 的 `iteration_status` 设为 `"completed"`，`current_phase` 设为 `"07"`。
 2. 将 `runtime/ACTIVE` Line 2 写为 `STATUS=completed PHASE=07`（**不修改** Line 1，保留迭代 ID）。
+3. 收口后台账该条：状态 → 已完成，交付物列填一句话（权威源 `{{SPECS_DIR}}/待排期需求登记.md`）。
 
 > ★ **ACTIVE 指针禁止释放**：06 归档时不得将 ACTIVE Line 1 写为 `"none"`。ACTIVE 释放在 07-迭代回顾 完成后执行。
 > 

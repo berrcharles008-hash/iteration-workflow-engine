@@ -34,6 +34,10 @@
   T15 sync：目标侧 runtime 不存在 ⇒ 自动创建（自举）+ 幂等重跑零 diff
   T16 M1 artifact_baseline：baseline-set 写入 / 未变即拒（只读：mtime 不变、无锁残留）/ 变化与新增放行
   T17 M1 基线缺失：默认 SKIP 不阻断（rc=0）；--require-baseline 才拒（rc=1）
+  T18 F1 engine_baseline：五键块 + 7 逻辑键 / 二次 ALREADY FROZEN（at 不刷新）/ --require-frozen / --force refroze
+  T19 F1 四分类：改一行 ⇒ 变化 1；还原 ⇒ 变化 0；新增 ⇒ 新增 1；删除 ⇒ 消失 1（每例重建夹具）
+  T20 F1 负向：无块 ⇒ SKIP(no baseline) rc=0；缺 validate-artifacts.py ⇒ rc=2；--repo 非 git ⇒ anchored:false
+  T21 D-1 防回归：连续两步 skip 各自落 skip_reason（旧窗口判据漏插第 2 步）
 
 退出码: 0 = 全部通过；1 = 存在失败。
 """
@@ -44,6 +48,15 @@ import shutil
 import subprocess
 import sys
 import time
+
+# ★ 2026-11-20 F1 同批：Windows GBK 控制台无法编码 `⇒` 等字符 ⇒ UnicodeEncodeError 中断
+#   （state-apply.py 早有同款防护，本脚本漏配 —— 实测 36 例收口跑崩溃于输出阶段）。
+os.environ.setdefault('PYTHONIOENCODING', 'utf-8')
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
 
 SELF = pathlib.Path(__file__).resolve()
 SCRIPTS = SELF.parent
@@ -153,12 +166,43 @@ def setup():
                                   encoding='utf-8', newline='')
 
 
+def setup_freeze_fixture():
+    """★ F1 夹具（仅 T18/T19/T20 首行调用，**不进** setup()，避免拖慢 T1~T17）。
+
+    · 两侧都造（`.codebuddy` 与 `.claude`）：canon 若解析成另一侧仍能扫到同一批逻辑键；
+    · **不造 git 仓库** ⇒ `resolve_engine_repo()` 得 (None, None, False) ⇒ 走 `anchored:false` 分支；
+    · 预期扫描 7 个逻辑键：engine/×2 + scripts/×1 + project/×1 + hooks/×1 + skill/×2
+      （hooks 在 `<ROOT>/<.ide>/hooks/` 下，**不在** skill 根内 —— frozen_pairs 的根位口径）。
+    """
+    setup()
+    for ide in ('.' + CANON_IDE, '.' + OTHER_IDE):
+        sroot = TESTROOT / ide / REL.parent            # = skills/iteration-workflow
+        for sub in ('engine', 'scripts', 'project'):
+            (sroot / sub).mkdir(parents=True, exist_ok=True)
+        (TESTROOT / ide / 'hooks').mkdir(parents=True, exist_ok=True)
+        for name, txt in (('engine/a.md', '# a\n'), ('engine/b.md', '# b\n'),
+                          ('scripts/x.py', 'print(1)\n'),
+                          ('project/project.manifest.yaml', 'name: fixture\n'),
+                          ('SKILL.md', '# SKILL\n'), ('SKILL.template.md', '# TPL\n')):
+            (sroot / name).write_text(txt, encoding='utf-8', newline='')
+        (TESTROOT / ide / 'hooks' / 'gate-check.mjs').write_text(
+            '// gate\n', encoding='utf-8', newline='')
+
+
+def frun(cmd):
+    """freeze 用例统一入口：显式钉住本侧，保证 scan 恒落 `<TESTROOT>/.codebuddy`（不随宿主漂移）。"""
+    return run(cmd, {'STATE_APPLY_SIDE': CANON_IDE})
+
+
 def run(cmd, extra_env=None):
     env = dict(os.environ)
     env['STATE_APPLY_ROOT'] = str(TESTROOT)
     # ★ FIX-49：清继承的宿主身份源 —— 否则父进程环境（IDE 会话）会改写 SIDE 解析，
     #   用例不可复现。纯靠脚本自身位置层解析（= CANON_IDE）或用例显式注入。
-    for k in ('GATE_HOST_IDE', 'CODEBUDDY_PROJECT_DIR', 'CLAUDE_PROJECT_DIR', 'STATE_APPLY_SIDE'):
+    for k in ('GATE_HOST_IDE', 'CODEBUDDY_PROJECT_DIR', 'CLAUDE_PROJECT_DIR', 'STATE_APPLY_SIDE',
+              # ★ 2026-11-20 F1：真机若设了 IWF_ENGINE_SRC，freeze-set 会把它当引擎源解析 ⇒
+              #   commit 随机器而变、anchored 恒 true ⇒ T18/T20 的 anchored:false 分支永远测不到。
+              'IWF_ENGINE_SRC'):
         env.pop(k, None)
     # ★ 2026-11-19：引擎**源仓库**里 `state-apply.py` 的位置不含 `.codebuddy`/`.claude` 层
     #   ⇒ 四级解析必失败（fail-closed rc=2），整套用例在仓库内跑不起来。此处仅在"自身位置层
@@ -212,7 +256,7 @@ def version_of(p):
 
 
 def main():
-    say('=== state-apply 回归测试（T1~T17 · ★ FIX-49 v2.4：canonical=本宿主侧 + 单写）===')
+    say('=== state-apply 回归测试（T1~T20 · ★ FIX-49 v2.4：canonical=本宿主侧 + 单写）===')
     if not APPLY.exists():
         say('找不到 state-apply.py')
         return 1
@@ -451,6 +495,130 @@ def main():
     check('T17 基线缺失 fail-open / --require-baseline 拒',
           rc == 0 and '基线缺失' in out and rc2 == 1 and '基线缺失' in out2,
           'rc={} rc2={}'.format(rc, rc2))
+
+    # ── T18~T20（★ F1 · 2026-11-20）：engine_baseline（freeze-set / freeze-check / freeze-restore）──
+    # 夹具无 git 仓库 ⇒ resolve_engine_repo() = (None, None, False) ⇒ freeze-set 走 anchored:false 分支
+    eng_rel = REL.parent                              # skills/iteration-workflow
+
+    setup_freeze_fixture()
+    rc, out = frun(['freeze-set', '--phase', '04'])
+    body = read(cs)
+    n_path = body.count('\n    - path: "')
+    five = ('\n  at: "' in body and '\n  phase: "04"' in body and '\n  source:' in body
+            and '\n  scope:' in body and '\n  files:' in body)
+    hook_ok = 'hooks/gate-check.mjs' in body and 'skill/SKILL.template.md' in body
+    ok = rc == 0 and 'BASELINE SET' in out and five and hook_ok and n_path == 7
+    check('T18a freeze-set 五键块 + 7 逻辑键（AC-1）', ok,
+          'rc={} five={} hook={} files={}'.format(rc, five, hook_ok, n_path))
+
+    at0 = [ln for ln in body.splitlines() if ln.startswith('  at: "')]
+    md0 = md5(cs)
+    rc, out = frun(['freeze-set', '--phase', '04'])
+    at1 = [ln for ln in read(cs).splitlines() if ln.startswith('  at: "')]
+    ok = rc == 0 and 'ALREADY FROZEN' in out and at1 == at0 and md5(cs) == md0
+    check('T18b 二次 ALREADY FROZEN + at 不刷新（AC-3 零写入）', ok,
+          'rc={} at_same={} md5_same={}'.format(rc, at1 == at0, md5(cs) == md0))
+
+    mt0 = os.stat(cs).st_mtime_ns
+    rc1, out1 = frun(['freeze-check'])
+    rc2, out2 = frun(['freeze-restore', '--dry-run'])
+    mt1 = os.stat(cs).st_mtime_ns
+    ok = (rc1 == 0 and rc2 == 0 and mt0 == mt1 and not lock_c.exists()
+          and '变化 0 ｜ 新增 0 ｜ 消失 0' in out1 and '待还原 0 个' in out2)
+    check('T18c freeze-check / freeze-restore --dry-run 只读（AC-8）', ok,
+          'rc1={} rc2={} mtime_same={} nolock={}'.format(rc1, rc2, mt0 == mt1, not lock_c.exists()))
+
+    am = TESTROOT / ('.' + CANON_IDE) / eng_rel / 'engine' / 'a.md'
+    am.write_text(read(am) + 'drift\n', encoding='utf-8', newline='')
+    rc_s, out_s = frun(['freeze-check'])
+    rc_h, out_h = frun(['freeze-check', '--require-frozen'])
+    ok = rc_s == 0 and '变化 1' in out_s and rc_h == 1 and '漂移' in out_h
+    check('T18d --require-frozen 漂移 ⇒ rc=1；不带 ⇒ rc=0（AC-7）', ok,
+          'rc={} rc_req={}'.format(rc_s, rc_h))
+
+    rc, out = frun(['freeze-set', '--phase', '04', '--force'])
+    body3 = read(cs)
+    n3 = body3.count('\n    - path: "')
+    ok = (rc == 0 and 'BASELINE SET' in out and 'refroze' in body3
+          and 'c=1 a=0 m=0' in body3 and n3 == 7)
+    check('T18e --force 覆盖 ⇒ events 记 refroze 计数（AC-13）', ok,
+          'rc={} refroze={} files={}'.format(rc, 'refroze' in body3, n3))
+
+    # T19 四分类（★ P-006：断言只取本轮相对增量，不硬编码扫描总数）
+    setup_freeze_fixture()
+    frun(['freeze-set', '--phase', '04'])
+    eng = TESTROOT / ('.' + CANON_IDE) / REL.parent / 'engine'
+    orig_a = read(eng / 'a.md')
+    (eng / 'a.md').write_text(orig_a + ' 改一行\n', encoding='utf-8', newline='')
+    rc, out = frun(['freeze-check'])
+    check('T19a 内容改写一行 ⇒ 变化 1（AC-4）',
+          rc == 0 and '变化 1 ｜ 新增 0 ｜ 消失 0' in out, 'rc={}'.format(rc))
+
+    setup_freeze_fixture()
+    frun(['freeze-set', '--phase', '04'])
+    eng = TESTROOT / ('.' + CANON_IDE) / REL.parent / 'engine'
+    orig_a = read(eng / 'a.md')
+    (eng / 'a.md').write_text(orig_a + ' 改一行\n', encoding='utf-8', newline='')
+    (eng / 'a.md').write_text(orig_a, encoding='utf-8', newline='')
+    rc, out = frun(['freeze-check'])
+    check('T19b 还原原文 ⇒ 变化 0（AC-4 归零）',
+          rc == 0 and '变化 0 ｜ 新增 0 ｜ 消失 0' in out, 'rc={}'.format(rc))
+
+    setup_freeze_fixture()
+    frun(['freeze-set', '--phase', '04'])
+    (TESTROOT / ('.' + CANON_IDE) / REL.parent / 'engine' / 'c.md').write_text(
+        '# c\n', encoding='utf-8', newline='')
+    rc, out = frun(['freeze-check'])
+    check('T19c 新增 engine/c.md ⇒ 新增 1（AC-5）',
+          rc == 0 and '变化 0 ｜ 新增 1 ｜ 消失 0' in out, 'rc={}'.format(rc))
+
+    setup_freeze_fixture()
+    frun(['freeze-set', '--phase', '04'])
+    (TESTROOT / ('.' + CANON_IDE) / REL.parent / 'engine' / 'b.md').unlink()
+    rc, out = frun(['freeze-check'])
+    check('T19d 删除 engine/b.md ⇒ 消失 1（AC-5）',
+          rc == 0 and '变化 0 ｜ 新增 0 ｜ 消失 1' in out, 'rc={}'.format(rc))
+
+    # T20 三态负向（AC-6 / AC-9 / AC-12）——★ 改名/恢复必须 try/finally，失败也要复原
+    setup_freeze_fixture()
+    rc, out = frun(['freeze-check'])
+    check('T20a 无基线 ⇒ SKIP(no baseline) rc=0（AC-6）',
+          rc == 0 and 'SKIP(no baseline)' in out, 'rc={}'.format(rc))
+
+    setup_freeze_fixture()
+    helper = SCRIPTS / 'validate-artifacts.py'
+    hidden = SCRIPTS / '_validate-artifacts.py.t20bak'
+    ok, det = False, 'rename failed'
+    try:
+        helper.rename(hidden)
+        rc, out = frun(['freeze-set', '--phase', '04'])
+        ok = (rc == 2 and 'no validate-artifacts.py' in out
+              and 'engine_baseline:' not in read(cs) and version_of(cs) == 1)
+        det = 'rc={} v={}'.format(rc, version_of(cs))
+    finally:
+        if hidden.exists():
+            hidden.replace(helper)               # 覆盖式复原，失败不残留
+    check('T20b 缺 validate-artifacts.py ⇒ freeze-set rc=2 且零写入（AC-9）', ok, det)
+
+    setup_freeze_fixture()
+    nogit = TESTROOT / '_t20_nogit'
+    nogit.mkdir(parents=True, exist_ok=True)
+    rc, out = frun(['freeze-set', '--phase', '04', '--repo', str(nogit)])
+    body = read(cs)
+    ok = (rc == 0 and '引擎版本未锚定' in out
+          and '\n    anchored: false' in body and '\n    commit: null' in body)
+    check('T20c --repo 非 git 目录 ⇒ anchored:false + WARN 未锚定（AC-12）', ok,
+          'rc={}'.format(rc))
+
+    # T21 连续 skip（★ 2026-11-20 D-1 防回归：旧判据窗口含前邻居 ⇒ 第 2 步 skip_reason 漏插）
+    setup()
+    run(['step-skip', '--id', 'step-A', '--reason', 'R-A'])
+    rc1, out1 = run(['step-skip', '--id', 'step-B', '--reason', 'R-B'])
+    body = read(cs)
+    n_reason = body.count('skip_reason:')
+    ok = rc1 == 0 and n_reason == 2 and 'R-A' in body and 'R-B' in body
+    check('T21 连续两步 skip 各自落 skip_reason（D-1 防回归）', ok,
+          'rc={} n_reason={}'.format(rc1, n_reason))
 
     fails = [r for r in RESULTS if not r[1]]
     say('')

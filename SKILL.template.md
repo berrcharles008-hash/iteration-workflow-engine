@@ -84,6 +84,20 @@ python "scripts/state-apply.py" artifact-check --phase 07 --require-baseline   #
 - `validate-artifacts.py --root . --json` = **全阶段**巡检（仍需 `--iteration` 或活跃迭代；缺失产物只 SKIP）
 - 判据分四类：`no-concept` 缺章节 / `empty` 只写标题 / `placeholder` 整节占位 / `reuse` 复制更早迭代的产物
 
+## ★ F1 引擎冻结快照（01 收口 / 04 写盘前 / 07 收口）
+
+> 01 收口跑 `freeze-set` 记 `engine_baseline`（5 根位 sha + commit）；04 首次写盘前跑 `freeze-check`（默认只报告 rc=0）；07 收口按漂移清单写「八、引擎变更清单」。**脚本或仓库不可用 ⇒ SKIP 并登记 `runtime/TOOLING-TODO.md`，不阻断。**
+
+```bash
+python "scripts/state-apply.py" freeze-set --phase NN [--repo <引擎仓库>]   # 01 收口：一次性锚（幂等零写入）
+python "scripts/state-apply.py" freeze-check [--save]                       # 04 写盘前 / 07 收口：漂移四分类（★只读）
+python "scripts/state-apply.py" freeze-restore --dry-run                    # 只出还原清单；真实回滚走引擎仓库 git
+```
+
+- 冻结面 5 根位：`engine/` `scripts/` `project/` `hooks/` `skill/`（SKILL 双文件）；重复执行恒 `ALREADY FROZEN` 零写入
+- `commit=null` ⇒ `anchored: false` + `[WARN] 引擎版本未锚定`：07 报告须注明，不得当作已锚定
+- 历史无块属正常态 ⇒ `SKIP(no baseline)` 不阻断 07；口径 SSOT = `engine/state-protocol.md` §9.8
+
 ## ★ 第一优先级：轻量查询快速退出
 
 > **本 skill 被加载后，立即执行此判断——在读取任何其他文件之前。**
@@ -102,6 +116,7 @@ python "scripts/state-apply.py" artifact-check --phase 07 --require-baseline   #
 | 修改代码/审查代码 | 重量 | 全量加载 | — |
 | 分析需求 | 重量 | 全量加载 | — |
 | 初始化知识库/gen-kb | 中等 | project.manifest.yaml、`gen-knowledge-base.py --check` | 核心协议文件 |
+| 需求看板/看板 | 轻量 | `docs/iterations/BOARD.md` §五、`requirements/待排期需求登记.md` | 核心协议文件 |
 
 ## ★ 门禁规则（一句话摘要）
 

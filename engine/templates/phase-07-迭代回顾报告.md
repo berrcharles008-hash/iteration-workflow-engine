@@ -92,6 +92,26 @@
 
 {其他想记录的内容}
 
+## 八、引擎变更清单（F1）
+
+> 数据源：`python scripts/state-apply.py freeze-check --phase 07 --json` 与 state 的 `engine_baseline` 块。
+> 无该块 ⇒ 本节只写一行 `引擎变更清单：SKIP(no baseline)`，其余不填、不阻断归档。
+
+| 项 | 值 |
+|:--|:--|
+| 汇总 | `changed {X} / added {Y} / missing {Z}` |
+| 基线时刻 | `at` = {YYYY-MM-DDTHH:MM}（phase {NN}） |
+| 仓库版本 | `commit` = {sha 或 null}（null ⇒ 未锚定） |
+| 快照路径 | `runtime/snapshots/{ITERATION_ID}/engine-drift/` |
+
+| # | 类型 | 文件 | sha16（基线 → 此刻） | 说明 |
+|:--:|:--:|:--|:--|:--|
+| 1 | changed | `engine/phase-07.md` | `1a2b3c4d5e6f7a8b` → `9f8e7d6c5b4a3021` | {改了什么、为何改} |
+| 2 | added | `engine/xxx.md` | `-` → `5c4b3a29187f6e5d` | {新增文件与用途} |
+| 3 | missing | `scripts/old.py` | `7a8b9c0d1e2f3a4b` → `-` | {删除原因} |
+
+> 表行数须 = `engine_baseline.files` 数（`added` / `missing` 也计入），此为 R5 的人工对账出口。
+
 ---
 
 **回顾完成日期**：{日期}

@@ -36,7 +36,18 @@
   baseline-set [--phase NN]                  M1：记 artifact_baseline（阶段**开始**时调用；记当前阶段
                                             目录下全部 md 的 sha256 前 16 位）
   artifact-check [--phase NN] [--require-baseline] [--json]
-                                             ★只读：基线后「新增/变化/未变」分类；**未变** = 沿用旧文件⇒拒
+                                            ★只读：基线后「新增/变化/未变」分类；**未变** = 沿用旧文件⇒拒
+  freeze-set [--phase NN] [--force] [--repo <path>]
+                                           F1：记 engine_baseline（5 根位 sha + commit）；一次性锚，
+                                           重复执行恒幂等（ALREADY FROZEN，零写入）；退出码 0 / 2
+  freeze-check [--phase NN] [--save] [--require-frozen] [--json]
+                                           ★只读：变化/新增/消失/未变 四分类；默认恒 rc=0
+                                           --require-frozen 且漂移 ⇒ rc=1
+  freeze-restore [--dry-run]                ★只读：列出待还原文件，**不执行还原**；缺参 ⇒ rc=2
+
+★ F1（2026-11-20）engine_baseline：引擎冻结快照（engine/、scripts/ 全量 + 3 个单文件根位 sha256
+  前 16 位 + source.commit）。「一次性锚 + 四分类」= 07「八、引擎变更清单」唯一数据源。记 commit
+  不只记 hash（hash 只证变了，commit 才答回到哪版）。freeze-check / freeze-restore 与 resume 同层只读。
 
 ★ M2（2026-11-19）events[]：每次**成功**写入会在 state.yaml 末尾 `events:` 块追加一条
   （at / event / version / detail），**只增不改、不允许 Agent 手写**。它是审计旁路与
@@ -79,6 +90,8 @@ import re
 import sys
 import time
 import json
+import hashlib
+import subprocess
 import shutil
 import runpy
 import datetime
@@ -394,6 +407,7 @@ EVENT_OF = {
     'append-steps': 'steps_appended',
     'rotate-team': 'workflow_team_rotated',
     'baseline-set': 'artifact_baseline_set',
+    'freeze-set': 'engine_baseline_set',
 }
 
 
@@ -404,7 +418,10 @@ def append_event(lines, etype, detail, stamp, ver_to):
           '    event: "%s"' % etype,
           '    version: %d' % ver_to]
     if detail:
-        ev.append('    detail: "' + str(detail).replace('"', '\\"')[:300] + '"')
+        # ★ 原「先转义后硬切」会把 `\"` 切开留孤立反斜杠 ⇒ YAML 串未闭合。改为先按原文切 300
+        #   再转义，末尾残反斜杠 rstrip（第 300 字恰为 `\` 时同样吃掉闭合引号）。
+        tail = str(detail)[:300].replace('"', '\\"').rstrip('\\')
+        ev.append('    detail: "' + tail + '"')
     if not append_list(lines, 'events', ev):
         lines.append('events:')
         lines.extend(ev)
@@ -681,6 +698,313 @@ def cmd_artifact_check(spath, iid, phase_arg, require_baseline, as_json=False):
     return 0
 
 
+# ---------------- ★ F1（2026-11-20）：engine_baseline
+ENGINE_KEY = 'engine_baseline'
+ENGINE_ROOTS = ('engine/', 'scripts/', 'project/project.manifest.yaml',
+                'hooks/gate-check.mjs', 'skill/SKILL.md', 'skill/SKILL.template.md')
+ENGINE_EXCLUDE = ('__pycache__', '*.pyc', '*.pyo')
+
+
+def skill_root_of(canon):
+    """引擎 skill 根：跟随 ROOT 以便隔离根整体重定向；缺失时回落脚本自身位置（仓库布局）。"""
+    cand = ROOT / ('.' + canon) / 'skills' / 'iteration-workflow'
+    return cand if cand.is_dir() else SELF.parents[1]
+
+
+def frozen_pairs(canon):
+    """(逻辑键, 路径)：5 根位，排除构建产物（P1 裁定：.pyc 会被运行脚本重建）。"""
+    sroot = skill_root_of(canon)
+    for base, prefix in ((sroot / 'engine', 'engine/'), (sroot / 'scripts', 'scripts/')):
+        if not base.is_dir():
+            continue
+        for p in sorted(base.rglob('*')):
+            if p.is_file() and '__pycache__' not in p.parts and p.suffix not in ('.pyc', '.pyo'):
+                yield prefix + p.relative_to(base).as_posix(), p
+    yield 'project/project.manifest.yaml', sroot / 'project' / 'project.manifest.yaml'
+    yield 'hooks/gate-check.mjs', ROOT / ('.' + canon) / 'hooks' / 'gate-check.mjs'
+    for n in ('SKILL.md', 'SKILL.template.md'):
+        yield 'skill/' + n, sroot / n
+
+
+def scan_frozen_surface(canon):
+    """→ ({逻辑键: sha16}, err)；err 非空 ⇒ 调用方拒绝（§4.2 规则 4，禁写空基线）。"""
+    helper = load_artifact_helper()
+    if helper is None:
+        return {}, 'no validate-artifacts.py'
+    out = {}
+    for key, p in frozen_pairs(canon):
+        if p.is_file():
+            out[key] = str(helper.sha256_of(str(p)))[:16]
+    return out, ''
+
+
+def git_out(repo, *args):
+    """只读 git；失败 → ''。"""
+    try:
+        r = subprocess.run(['git', '-C', str(repo)] + list(args), stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL, timeout=20)
+    except Exception:
+        return ''
+    return r.stdout.decode('utf-8', 'replace').strip() if r.returncode == 0 else ''
+
+
+def resolve_engine_repo(explicit, canon=None):
+    """→ (repo, commit, anchored)。
+
+    --repo > IWF_ENGINE_SRC > skill_root；须 rev-parse --show-toplevel 成功且其下 engine/、
+    scripts/ 均为目录，否则 (None, None, False)。
+    ★ 不直接 rev-parse --short HEAD：会向上冒泡到无关仓库，取错 commit 比 null 更危险。
+    """
+    cands = [pathlib.Path(str(c)) for c in (explicit, os.environ.get('IWF_ENGINE_SRC')) if c]
+    for cand in cands + [skill_root_of(canon or resolve_side() or 'codebuddy')]:
+        top = git_out(cand, 'rev-parse', '--show-toplevel') if cand.is_dir() else ''
+        if not top:
+            continue
+        top_p = pathlib.Path(top)
+        if (top_p / 'engine').is_dir() and (top_p / 'scripts').is_dir():
+            return top_p, (git_out(cand, 'rev-parse', '--short', 'HEAD') or None), True
+    return None, None, False
+
+
+def freeze_block(stamp, phase, repo, commit, anchored, files):
+    """engine_baseline 块（§4.2）：锚在 last_session_summary 之后，与 artifact_baseline 同风格。"""
+    blk = [ENGINE_KEY + ':', '  at: "%s"' % stamp, '  phase: "%s"' % phase, '  source:',
+           '    repo: "%s"' % (str(repo).replace('\\', '/') if repo else ''),
+           '    commit: %s' % (('"' + commit + '"') if commit else 'null'),
+           '    anchored: %s' % ('true' if anchored else 'false'), '  scope:', '    roots:']
+    blk += ['      - "%s"' % r for r in ENGINE_ROOTS]
+    blk.append('    exclude: [%s]' % ', '.join('"%s"' % e for e in ENGINE_EXCLUDE))
+    if not files:
+        return blk + ['  files: []']
+    return blk + ['  files:'] + ['    - path: "%s"\n      sha: "%s"' % (r, files[r])
+                                 for r in sorted(files)]
+
+
+def parse_engine_baseline(text):
+    """engine_baseline 块 → dict（source/scope 两级手解）；无块 → None（历史 state 正常态）。"""
+    lines = text.replace('\r\n', '\n').split('\n')
+    sp = block_span(lines, ENGINE_KEY)
+    if not sp:
+        return None
+    out = {'at': '', 'phase': '', 'source': {'repo': '', 'commit': None, 'anchored': False},
+           'scope': {'roots': [], 'exclude': []}, 'files': {}}
+    top, cur = '', None
+    for ln in lines[sp[0] + 1:sp[1]]:
+        if not ln.strip():
+            continue
+        ind, s = len(ln) - len(ln.lstrip(' ')), ln.strip()
+        k, _, raw = s.lstrip('- ').partition(':')
+        k, v = k.strip(), raw.strip().strip('"')
+        if ind == 2:
+            top, cur = k, None
+            if k in ('at', 'phase'):
+                out[k] = v
+        elif s.startswith('- '):
+            if top == 'scope':
+                out['scope']['roots'].append(s[2:].strip().strip('"'))
+            elif top == 'files':
+                cur = v
+                out['files'][cur] = ''
+        elif ind == 6 and top == 'files' and cur:
+            out['files'][cur] = v
+        elif ind == 4:
+            if top == 'scope' and k == 'exclude':
+                out['scope']['exclude'] = [x.strip().strip('"')
+                                           for x in raw.strip('[]').split(',') if x.strip()]
+            elif top == 'source' and k == 'anchored':
+                out['source']['anchored'] = (v == 'true')
+            elif top == 'source' and k == 'commit':
+                out['source']['commit'] = None if v in ('null', '~', '') else v
+            elif top == 'source' and k == 'repo':
+                out['source']['repo'] = v
+    return out
+
+
+def drift_of(base, now):
+    """四分类（§4.3）：changed / added / missing / ok。"""
+    return (sorted(p for p in now if p in base and base[p] != now[p]),
+            sorted(p for p in now if p not in base),
+            sorted(p for p in base if p not in now),
+            sorted(p for p in now if p in base and base[p] == now[p]))
+
+
+def cmd_freeze_check(spath, iid, phase_arg, save=False, require_frozen=False, as_json=False):
+    """★ 只读：四分类。不建锁 / 不备份 / 不改 state 与 ACTIVE；默认恒 rc=0。"""
+    blk = parse_engine_baseline(read_text(spath).replace('\r\n', '\n'))
+    if blk is None:
+        say('SKIP(no baseline)')
+        if as_json:
+            say(json.dumps({'ok': True, 'skipped': 'no baseline', 'changed': [], 'added': [],
+                            'missing': [], 'unchanged': [], 'readonly': True}, ensure_ascii=False))
+        return 0
+    canon = resolve_side() or 'codebuddy'
+    now, why = scan_frozen_surface(canon)
+    if why:
+        say('[WARN] ' + why)
+    changed, added, missing, ok = drift_of(blk['files'], now)
+    errors, warn = [], []
+    if require_frozen and (changed or added or missing):
+        errors.append('漂移 %d（c=%d a=%d m=%d）⇒ 07 §八 须登记'
+                      % (len(changed) + len(added) + len(missing),
+                         len(changed), len(added), len(missing)))
+    ph = norm_phase(phase_arg) if phase_arg else ''
+    if ph and ph != blk['phase']:
+        say('[WARN] --phase %s ≠ 基线 %s' % (ph, blk['phase'] or '?'))
+    elif not ph:
+        say('[INFO] 基线建立于 phase=%s' % (blk['phase'] or '?'))
+    ddir, sroot = runtime_dir(canon) / 'snapshots' / iid / 'engine-drift', skill_root_of(canon)
+    for rel in (changed if save else []):
+        head, _sep, tail = rel.partition('/')
+        src = {'engine': sroot / 'engine' / tail, 'scripts': sroot / 'scripts' / tail,
+               'skill': sroot / rel[6:], 'project': sroot / rel,
+               'hooks': ROOT / ('.' + canon) / 'hooks' / tail}.get(head)
+        try:
+            (ddir / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(src), str(ddir / rel))
+        except Exception as exc:
+            warn.append('%s: %r' % (rel, exc))
+    if save and missing:
+        try:
+            ddir.mkdir(parents=True, exist_ok=True)
+            write_text(ddir / '_missing.txt', '\n'.join(missing) + '\n')
+        except Exception as exc:
+            warn.append('_missing.txt: %r' % (exc,))
+    out = {'ok': not errors, 'iteration_id': iid, 'phase': blk['phase'], 'changed': changed,
+           'added': added, 'missing': missing, 'unchanged': ok, 'warnings': warn,
+           'errors': errors, 'readonly': True, 'commit': blk['source']['commit'],
+           'baseline': {'at': blk['at'], 'files': len(blk['files'])}}
+    if as_json:
+        say(json.dumps(out, ensure_ascii=False))
+        return 1 if errors else 0
+    say('基线 at=%s phase=%s files=%d commit=%s'
+        % (blk['at'] or '?', blk['phase'] or '?', len(blk['files']),
+           blk['source']['commit'] or 'null'))
+    say('变化 %d ｜ 新增 %d ｜ 消失 %d ｜ 未变 %d'
+        % (len(changed), len(added), len(missing), len(ok)))
+    for tag, rels in (('~', changed), ('+', added), ('-', missing)):
+        if rels:
+            say(''.join('  %s %s\n' % (tag, r) for r in rels).rstrip())
+    for w in warn:
+        say('[WARN] ' + w)
+    for e in errors:
+        say('[ERROR] ' + e)
+    say('（只读：未加锁 / 未备份 / 未改 state 与 ACTIVE）')
+    return 1 if errors else 0
+
+
+def repo_blob_shas(repo, commit, paths):
+    """单次 `git cat-file --batch` → ({path: sha16}, err)。
+
+    ★ CRLF：blob 为 LF，实例 CRLF ⇒ sha 必不同（保守方向，安全）。
+    repo 空 / commit=null / 失败 ⇒ (None, err)，调用方标 UNVERIFIED。
+    """
+    if not repo or not commit or not paths:
+        return None, 'repo unreachable / commit=null'
+    try:
+        r = subprocess.run(['git', '-C', str(repo), 'cat-file', '--batch'],
+                           input=''.join('%s:%s\n' % (commit, p) for p in paths).encode('utf-8'),
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
+    except Exception as exc:
+        return None, 'cat-file failed: ' + repr(exc)
+    if r.returncode != 0:
+        return None, 'cat-file rc=%d' % r.returncode
+    out, buf, pos = {}, r.stdout, 0
+    for p in paths:
+        nl = buf.find(b'\n', pos)
+        if nl < 0:
+            break
+        parts = buf[pos:nl].split()
+        pos = nl + 1
+        if len(parts) < 3:
+            continue
+        n = int(parts[2])
+        out[p] = hashlib.sha256(buf[pos:pos + n]).hexdigest()[:16]
+        pos += n + 1
+    return out, ''
+
+
+def cmd_freeze_restore(spath, iid, dry_run=False):
+    """★ 只读：列清单不还原（§4.4）。
+
+    未回流（D9）：仓库 `commit:<path>` 的 sha16 与实例比 —— 同 = 干净；异 = 未回流；
+    仓库无该路径 = N/A (instance-only)；不可达 / null = UNVERIFIED。
+    """
+    if not dry_run:
+        say('freeze-restore 缺 --dry-run ⇒ 拒绝（rc=2）')
+        say('  ① 仓库侧回退：git -C <repo> checkout <commit> -- <path>')
+        say('  ② 实例侧：install.ps1 重新分发（或 inject-template.py 重渲染）')
+        return 2
+    blk = parse_engine_baseline(read_text(spath).replace('\r\n', '\n'))
+    if blk is None:
+        say('SKIP(no baseline)')
+        return 0
+    canon = resolve_side() or 'codebuddy'
+    now, why = scan_frozen_surface(canon)
+    if why:
+        say('[WARN] ' + why)
+    changed, added, missing, _ok = drift_of(blk['files'], now)
+    targets, commit = changed + missing, blk['source']['commit']
+    repo_p = pathlib.Path(blk['source']['repo']) if blk['source']['repo'] else None
+    if repo_p is None or not repo_p.is_dir():
+        repo_p = resolve_engine_repo(None, canon)[0]
+    shas, gerr = None, 'repo unreachable / commit=null'
+    if repo_p is not None and commit and targets:
+        shas, gerr = repo_blob_shas(repo_p, commit, targets)
+    say('待还原 %d 个 ｜ 基线 at=%s phase=%s commit=%s repo=%s'
+        % (len(targets), blk['at'] or '?', blk['phase'] or '?', commit or 'null',
+           str(repo_p).replace('\\', '/') if repo_p else '-'))
+    for rel in targets:
+        ins = now.get(rel)
+        ann = ('UNVERIFIED(repo unreachable)' if shas is None else
+               'N/A (instance-only)' if rel not in shas else
+               '⚠ 实例缺失 ⇒ 还原将恢复该文件' if ins is None else
+               '⚠ 仓库该文件 ≠ 实例（未回流，还原将丢失该改动）' if shas[rel] != ins else '')
+        say('  - ' + rel + (('   ' + ann) if ann else ''))
+    if added:
+        say('基线后新增 %d 个（还原后须手删）: %s' % (len(added), ', '.join(added)))
+    if shas is None and gerr:
+        say('[WARN] ' + gerr)
+    say('（只读：未加锁 / 未备份 / 未改 state 与 ACTIVE）')
+    return 0
+
+
+def cmd_freeze_set(lines, canon, iid, args, stamp):
+    """freeze-set（§4.2 规则 1~6）→ (rc, detail)。
+
+    (0, '') = 幂等命中：**零写入**，调用方须在 append_event **之前** return 0，此时只调 log()。
+    (0, detail) = 块已就地写进 lines，由 main 收尾落盘。(2, '') = 拒绝。
+    """
+    ph = norm_phase(opt(args, '--phase', '') or get_scalar('\n'.join(lines), 'current_phase', ''))
+    if not re.fullmatch(r'0[1-7]', ph or ''):
+        say('freeze-set: --phase <01..07> required')
+        return 2, ''
+    old = parse_engine_baseline('\n'.join(lines))
+    if old is not None and '--force' not in args:
+        at, n = old['at'] or '?', len(old['files'])
+        say('ALREADY FROZEN at=%s phase=%s files=%d' % (at, old['phase'] or '?', n))
+        log('freeze-set ALREADY FROZEN iter={} at={} files={}'.format(iid, at, n))
+        return 0, ''
+    repo, commit, anchored = resolve_engine_repo(opt(args, '--repo', ''), canon)
+    files, why = scan_frozen_surface(canon)
+    if why:
+        say('freeze-set rejected: ' + why)
+        return 2, ''
+    if not commit:
+        say('[WARN] 引擎版本未锚定（commit=null）')
+    set_block(lines, ENGINE_KEY, freeze_block(stamp, ph, repo, commit, anchored, files),
+              anchor_after='last_session_summary')
+    detail = 'engine_baseline phase=%s files=%d commit=%s' % (ph, len(files), commit or 'null')
+    if old is not None:
+        ch, ad, mi = drift_of(old['files'], files)[:3]
+        detail = ('engine_baseline refroze: old at=%s files=%d => c=%d a=%d m=%d; '
+                  'phase=%s files=%d commit=%s'
+                  % (old['at'] or '?', len(old['files']), len(ch), len(ad), len(mi),
+                     ph, len(files), commit or 'null'))
+    say('BASELINE SET at=%s phase=%s files=%d commit=%s repo=%s'
+        % (stamp, ph, len(files), commit or 'null', str(repo).replace('\\', '/') if repo else '-'))
+    return 0, detail
+
+
 def find_step_status(lines, step_id):
     """定位 phase_steps 中某 step 的 status 行 → (行号, 当前值) 或 None"""
     for i, ln in enumerate(lines):
@@ -736,6 +1060,15 @@ def main():
     if cmd == 'artifact-check':
         return cmd_artifact_check(spath, iid, opt(args, '--phase', ''),
                                   '--require-baseline' in args, as_json=('--json' in args))
+
+    # ★ F1：两命令只读（§4.1 锁前返回）；漏则建 .lock + 备份 + version+1 ⇒ AC-8 破。
+    if cmd == 'freeze-check':
+        return cmd_freeze_check(spath, iid, opt(args, '--phase', ''),
+                                save=('--save' in args),
+                                require_frozen=('--require-frozen' in args),
+                                as_json=('--json' in args))
+    if cmd == 'freeze-restore':
+        return cmd_freeze_restore(spath, iid, dry_run=('--dry-run' in args))
 
     force = os.environ.get('STATE_FORCE_WRITE') == '1'
     lock = rt(canon) / (iid + '.lock')
@@ -801,11 +1134,19 @@ def main():
                 if not reason:
                     say('step-skip 需要 --reason "…"')
                     return 2
-                if old == 'skipped':
+                # ★ D-1（2026-11-20）：旧判据窗口 lines[j-6:j+8] 含**邻居步骤**的 skip_reason
+                #   （向前含上一步、向后 8 行含下一步）⇒ 间歇性误判"已有"而漏插（实测 4 步丢失）。
+                #   修正 = 精确当前块边界：status 起到下一个 `- id:` 为止。
+                end = j + 1
+                while end < len(lines) and end < j + 10 and not lines[end].strip().startswith('- id:'):
+                    end += 1
+                blk = '\n'.join(lines[j:end])
+                has_reason = re.search(r'^\s*skip_reason:', blk, re.M) is not None
+                if old == 'skipped' and has_reason:
                     say('无需变更（幂等：{} 已是 skipped）'.format(sid))
                     return 0
                 lines[j] = re.sub(r'"[^"]*"', '"skipped"', lines[j])
-                if not re.search(r'^\s*skip_reason:', '\n'.join(lines[j - 6:j + 8]), re.M):
+                if not has_reason:
                     lines.insert(j + 1, '    skip_reason: "' + reason.replace('"', '\\"') + '"')
                 changed.append('phase_steps[{}] {} → skipped'.format(sid, old))
             new = '\n'.join(lines)
@@ -1060,6 +1401,16 @@ def main():
             new = '\n'.join(lines)
             changed.append('rotate-team: in_progress → pending（{} 条）{}'.format(
                 n, ('；原因: ' + reason) if reason else ''))
+
+        elif cmd == 'freeze-set':
+            # ★ F1：幂等命中须在 append_event 前 return（否则 version+1 破零写入）
+            frc, fdetail = cmd_freeze_set(lines, canon, iid, args, stamp)
+            if frc != 0:
+                return frc
+            if not fdetail:
+                return 0
+            new = '\n'.join(lines)
+            changed.append(fdetail)
 
         else:
             say('未知命令: ' + cmd + '（-h 查看用法）')

@@ -2,6 +2,7 @@
 
 **前置步骤**：
 1. **step-0-init-state**（仅新迭代首次进入时执行）：创建 `runtime/{ITERATION_ID}.state.yaml` + 写入 `runtime/ACTIVE` + 创建迭代目录结构 + 更新 README 迭代清单。详见 `phase-steps.md` §阶段一步骤清单。
+  - 立项后台账该条：状态 → 已排期，关联迭代列写本迭代全名（权威源 `{{SPECS_DIR}}/待排期需求登记.md`）。
 2. 读取 `{{SPECS_DIR}}/` 下的项目上下文文件清单（详见 `project/context-conventions.md` → 一、项目上下文文件清单）获取项目上下文 + 读取 `{{KB_DIR}}/` 下的 L1/L2/L3 知识库。
    - 知识库**不存在** → 执行 `python scripts/gen-knowledge-base.py` 生成
    - 知识库**过时** → 执行 `python scripts/gen-knowledge-base.py --check` 检测（**只读，任何阶段可跑**）
@@ -32,6 +33,11 @@
   - Bug 模板必须包含：根因分析、影响范围、修复方案、验证方式
 
 > **版式纪律**：产出文档须遵循 `engine/doc-style-guide.md`（表格 ≤6 列、单元格 ≤60 字、结论前置、过程进附录）；生成后自检 `python scripts/doc_lint.py <文件>`（ERROR 必修）。
+
+**引擎基线（F1，01 收口一次性）**：`python scripts/state-apply.py freeze-set [--phase NN]` 记冻结面
+（`engine/` `scripts/` `project/` `hooks/` `skill/` 五根位，键为与根位无关的逻辑前缀）的 sha16 + 仓库 `commit`。
+基线语义 = **首次触碰引擎之前**：01-03 免开闸窗口内若已改引擎，须在 04 首次写盘前补跑，不补则基线失真；
+错过该时点 ⇒ 本迭代 F1 降级为仅登记 `commit`（不做逐文件漂移归因）。
 
 **交付标准**：用户确认需求文档无误，明确表示"需求分析完成"或"进入需求评审"；**文档版式自检 ERROR 0**（`python scripts/doc_lint.py <文档>`）
 ★ 等待方式（A/B/D + 时限/退化）见 `engine/waiting-protocol.md`。

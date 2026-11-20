@@ -76,16 +76,17 @@
 | VCS 判定档（G12） | `vcs.type` 派生三张判定表（svn/git/none）；缺省**逐元素等价**（含 flags 与顺序） | `engine/gate/vcs-profile.mjs` · `gate-protocol.md` §四-A | ✅ |
 | 出站通知适配器（G11） | 三处出站统一 `send()`（静默下沉 + `mode` 分通道）；入站 ask 不入 | `engine/gate/notify-adapter.mjs` | ✅ |
 
-## 5. 状态与恢复（6）
+## 5. 状态与恢复（7）
 
 | 能力 | 说明 | 落点 | 状态 |
 |:--|:--|:--|:--:|
 | state 双副本 | 本宿主侧 canonical + 镜像面白名单（FIX-49；v2.4 = 单写本侧，跨侧一致经 `sync-runtime.py` 按需收敛） | `state-protocol.md` §三/§六/§9.0 | ✅ |
-| state-apply 意图通道 | 10 命令 | `scripts/state-apply.py` · `state-protocol.md` §9.6 | ✅ |
+| state-apply 意图通道 | 18 命令（含 ★只读 5 条：resume / artifact-check / freeze-check / freeze-restore / -h） | `scripts/state-apply.py` · `state-protocol.md` §9.6 | ✅ |
 | 严格校验 | YAML + 字段/枚举 | `scripts/validate-state.py` | ✅ |
 | 备份与留痕 | 每次写 state 自动备份 | `state-protocol.md` | ✅ |
 | ACTIVE 指针协议 | 2 行格式 + 释放铁律 | `state-protocol.md` §六 | ✅ |
 | 预估与偏差 | `estimate_*` 5 字段（[R9] 成组 / 数值 / 枚举）+ 看板三列现算（不落 state） | `scripts/validate-state.py` · `state-protocol.md` §3.3 · 项目侧 tools/gen_iteration_board.py | ✅ |
+| 引擎冻结基线 | `engine_baseline` 5 根位 sha + commit；幂等 / 四分类 / 还原清单（F1 · 2026-11-20-002） | `scripts/state-apply.py` `freeze-*` · `state-protocol.md` §9.8 | ✅ |
 
 ## 6. 协作与异步（8）
 
@@ -166,7 +167,7 @@
 | 门禁注入 | 微核/钩子安装 | `scripts/setup-gate.py` | ✅ |
 | 领域插件 | **未接线**（G02 · 2026-10-25）：规则迁至项目侧示例，不被任何代码加载 | 项目侧自建（样板见 domain-rules.example.md） | ⚠️ |
 | 回流同步 | 工作副本 → 源仓库 | `scripts/sync-back-to-engine-repo.ps1` | ✅ |
-| 引擎版本号 | 版本模板 | `engine-version.template.txt` | ✅ |
+| 引擎版本号 | 由 F1 `freeze-set` 落地（迭代 2026-11-20-002）；原 `engine-version.template.txt` 两处实例均未生成、从未生效 | `scripts/state-apply.py` `freeze-*` · `state-protocol.md` §9.8 | ✅ |
 
 ## 缺口与边界（汇总）
 

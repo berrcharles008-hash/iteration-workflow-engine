@@ -198,6 +198,12 @@ Agent 必须在 step-1-5-review 完成后，输出以下信息并等待用户确
 
 ### Step 2：创建 Team 并派发任务
 
+**Step 2 前置 · 引擎基线快照检查（F1，默认只报告）**：
+
+> 首次写盘前执行 `python scripts/state-apply.py freeze-check --phase 04`：只读 state（不建锁、不写 ACTIVE / 备份），
+> 默认 rc=0；有漂移则列出 `changed` / `added` / `missing`，无 `engine_baseline` 则单行 `SKIP(no baseline)`。
+> 结论登记到 `04-开发实现.md` 或实施记录；本迭代自举改 `engine/**`，`changed` 非空属预期，不改变派发。
+
 **Step 2.0（★ 2026-09-24 新增，派发前执行）：挂载崩溃监控采样器**
 
 > 崩溃**根因仍未定性**——平台抓的 cpu profile 存在 `%TEMP%\codebuddy-starvat*`，

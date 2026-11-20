@@ -102,6 +102,7 @@ python "scripts/state-apply.py" artifact-check --phase 07 --require-baseline   #
 | 修改代码/审查代码 | 重量 | 全量加载 | — |
 | 分析需求 | 重量 | 全量加载 | — |
 | 初始化知识库/gen-kb | 中等 | project.manifest.yaml、`gen-knowledge-base.py --check` | 核心协议文件 |
+| 需求看板/看板 | 轻量 | `docs/iterations/BOARD.md` §五、`requirements/待排期需求登记.md` | 核心协议文件 |
 
 ## ★ 门禁规则（一句话摘要）
 
