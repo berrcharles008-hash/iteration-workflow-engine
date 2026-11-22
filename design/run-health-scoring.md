@@ -376,6 +376,7 @@ curl.exe -sSL -m 600 -o LoopForge-main.zip "https://ghfast.top/https://github.co
 | 07 接入 | `engine/phase-07.md` 增一小节：脚本存在则执行并在 07 报告写入「## 运行健康度」段；不存在打印 SKIP 不阻断 |
 | 阻断力 | **不阻断归档**（R1 级阻断已由 M1 的 `artifact-check` 承担）；R1/R2 只在报告标红 |
 | 回流 | 仅 `phase-07.md` 走 `a6_reflux`；`runtime/metrics/**` 不回流 |
+| 输出扩展 | `suggestions[]` 建议回写（REQ-007，2026-11-22）：`buildSuggestions()` + `score-config.json` 的 `suggestions_map`（7 条），契约见 §4.13 |
 
 **定稿时的三条实证事实（勿重新取证）**
 
@@ -384,6 +385,37 @@ curl.exe -sSL -m 600 -o LoopForge-main.zip "https://ghfast.top/https://github.co
 | `phase-aggregates.csv` 有独立 `unphased` 行 | 001 `4/12` 轮、002 `15/52` 轮 | Token 维只用阶段内轮次；窗外轮次归 D4② |
 | 002 精度为 `date` 且窗尾含过夜 | `precision=date` | Token 维标 ⚠，不参与准入判定（§4.10） |
 | M1 在两迭代均 0 ERROR | 001 lite 7 文件 / 002 full 7 文件 | D2 在历史样本上无区分度，只能当护栏；区分度由 D1/D3/D4 承担 |
+
+### 4.13 suggestions 输出契约（REQ-007，2026-11-22）
+
+> 定位：评分→规则改进闭环的**输出层**（不参与五维计分、不触发红线、不改退出码）。
+> 实现：`runtime/metrics/score-run.mjs` 的 `buildSuggestions()`；映射表外置 `score-config.json` 的 `suggestions_map`。
+
+**输出字段（4 字段恒齐全）**：
+
+| 字段 | 说明 |
+|---|---|
+| `dim` | 命中维（`D1`~`D5`）或 `obs`（观测项） |
+| `trigger` | 静态触发标识（`attr:D4` / `obs:blocks`）；同 target 多条以 `;` 拼接 |
+| `suggest` | 改进建议文案（指向可动的规则面） |
+| `target` | 真实存在的文件/规则段（`engine/**` 下，AC-1 做 `existsSync` 断言） |
+
+**行为规则（BR-1~BR-6，SSOT = 迭代 2026-11-20-003 的 01 §4.1.1）**：
+① 触发源三类：`dims[].warn[]` / `attribution[]`（loss>0）/ `observed`（带 `min`/`max` 阈值）；
+② 去重：同 `target` 合并；③ 上限 8 条（`priority` 升序；S1~S7 的 priority 与声明顺序一致）；
+④ fail-open：映射表缺失或解析失败 ⇒ 空数组 + 一行 `[WARN] suggestions map unavailable`，退出码不变；
+⑤ 只读：不写 state/产物，`--no-write` 下同样输出；⑥ 首版 7 条映射，未命中不生成建议。
+
+**回写流程（人工留痕，不做自动回写）**：
+
+```
+score-run --json → suggestions[]
+  → 07 报告 §九「建议回写登记」逐条裁定（采纳 / 否）
+  → 采纳项人工落盘（引擎面文件）
+  → 本迭代 07 的 §八 changed 清单自然列出该文件 → §九 归因列引用 §八 行号
+```
+
+**边界**：只对新迭代生效，历史 07 不回写；`runtime/metrics/**` 按 §4.12 回流行判据不回流引擎仓库（本契约文本随 design 在引擎仓库，实现不部署）。
 
 ## 5. 明确不做
 
