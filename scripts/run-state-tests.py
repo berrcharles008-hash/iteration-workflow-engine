@@ -39,12 +39,17 @@
   T20 F1 负向：无块 ⇒ SKIP(no baseline) rc=0；缺 validate-artifacts.py ⇒ rc=2；--repo 非 git ⇒ anchored:false
   T21 D-1 防回归：连续两步 skip 各自落 skip_reason（旧窗口判据漏插第 2 步）
   T22 REQ-007 A1：phase-advance --to 07 随动置 iteration_status=completed（--to 05 不动）
+  T23 REQ-008 step-reset：in_progress/skipped 回落 pending；completed 默认拒、--force+reason 才放行
+  T24 REQ-008 phase-finish：仅 07 可执行；写 07 completed + phase_status/iteration_status=completed，幂等
+  T25 REQ-008 patch --allow-new：白名单 7 键可新建（紧随 last_updated）；块/数组键与锚缺失一律拒
+  T26 REQ-008 事件契约：step_reset / phase_finished / self_heal 三条 detail 形态
 
 退出码: 0 = 全部通过；1 = 存在失败。
 """
 import hashlib
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -71,7 +76,7 @@ TESTROOT = SKILL / 'runtime' / 'state-apply-tests'
 IID = 'TEST-STATE-APPLY'
 REL = pathlib.Path('skills') / 'iteration-workflow' / 'runtime'
 # ★ FIX-49 v2.4：canonical 侧 = `.codebuddy`（脚本自身位置 `parents[3]` 解析所得；
-#   夹具与应用**同侧**，否则 T1~T10 整组红）；另一侧 = `.claude`（仅作"零触碰"对照物）。
+#   夹具与应用**同侧**，否则 T1~T22 整组红）；另一侧 = `.claude`（仅作"零触碰"对照物）。
 CANON_IDE = 'codebuddy'
 OTHER_IDE = 'claude'
 
@@ -155,20 +160,69 @@ def seed_md5():
     return hashlib.md5(SEED.format(iid=IID).encode('utf-8')).hexdigest()
 
 
-def setup():
-    """重建隔离根 + 种子 state + ACTIVE"""
+def setup(state=None):
+    """重建隔离根 + 种子 state + ACTIVE。
+
+    ★ REQ-008（2026-11-22）：`state` 可传自定义全文 —— T23~T26 需要 `in_progress`/`skipped`
+    步骤、07 态、`self_evolve` 块、`phase_history: []`、缺锚等现有 SEED 构造不出的形态。
+    """
+    body = state if state is not None else SEED.format(iid=IID)
     if TESTROOT.exists():
         shutil.rmtree(TESTROOT, ignore_errors=True)
     for ide in ('.' + CANON_IDE, '.' + OTHER_IDE):
         d = TESTROOT / ide / REL
         d.mkdir(parents=True, exist_ok=True)
-        (d / (IID + '.state.yaml')).write_text(SEED.format(iid=IID), encoding='utf-8', newline='')
+        (d / (IID + '.state.yaml')).write_text(body, encoding='utf-8', newline='')
         (d / 'ACTIVE').write_text(IID + '\nSTATUS=in_progress PHASE=04 TASKS=0/2 BLOCKERS=0\n',
                                   encoding='utf-8', newline='')
 
 
+def seed_state(extra='', **kw):
+    """在 SEED 上覆写顶层标量 / `phase_steps` 全量替换 / 末尾追加块（T23~T26 夹具构造器）。
+
+    · 标量：`key=value`（bool → true/false，数值裸写，其余加双引号）
+    · `steps=[('id','status'), …]` ⇒ 整体替换 phase_steps 块
+    · `extra` ⇒ 原样拼到文末（造 `self_evolve:` 一类块）
+    """
+    steps = kw.pop('steps', None)
+    s = SEED.format(iid=IID)
+    for k, v in kw.items():
+        if isinstance(v, bool):
+            sv = 'true' if v else 'false'
+        elif isinstance(v, (int, float)):
+            sv = str(v)
+        else:
+            sv = '"%s"' % v
+        s = re.sub(r'(?m)^%s:.*$' % re.escape(k), '%s: %s' % (k, sv), s)
+    if steps is not None:
+        blk = []
+        for sid, st in steps:
+            blk += ['  - id: "%s"' % sid, '    name: "%s"' % sid,
+                    '    mandatory: true', '    status: "%s"' % st]
+        s = re.sub(r'(?ms)^phase_steps:\n(?:  .*\n)+', 'phase_steps:\n' + '\n'.join(blk) + '\n', s)
+    if extra:
+        s = s.rstrip('\n') + '\n' + extra.rstrip('\n') + '\n'
+    return s
+
+
+def block_text(text, key):
+    """取顶层块 `key:` 原文（含块头，到下一个顶层键为止）—— 用于「块内其余行不变」断言。"""
+    out, on = [], False
+    for ln in text.split('\n'):
+        if ln.startswith(key + ':'):
+            on = True
+            out.append(ln)
+            continue
+        if on:
+            if ln.startswith(' ') or ln.strip() == '':
+                out.append(ln)
+            else:
+                break
+    return '\n'.join(out)
+
+
 def setup_freeze_fixture():
-    """★ F1 夹具（仅 T18/T19/T20 首行调用，**不进** setup()，避免拖慢 T1~T17）。
+    """★ F1 夹具（仅 T18/T19/T20 首行调用，**不进** setup()，避免拖慢 T1~T22）。
 
     · 两侧都造（`.codebuddy` 与 `.claude`）：canon 若解析成另一侧仍能扫到同一批逻辑键；
     · **不造 git 仓库** ⇒ `resolve_engine_repo()` 得 (None, None, False) ⇒ 走 `anchored:false` 分支；
@@ -257,7 +311,7 @@ def version_of(p):
 
 
 def main():
-    say('=== state-apply 回归测试（T1~T20 · ★ FIX-49 v2.4：canonical=本宿主侧 + 单写）===')
+    say('=== state-apply 回归测试（T1~T26 · ★ FIX-49 v2.4：canonical=本宿主侧 + 单写）===')
     if not APPLY.exists():
         say('找不到 state-apply.py')
         return 1
@@ -633,6 +687,147 @@ def main():
           and 'iteration_status → completed（--to 07 随动）' in s7)
     check('T22 phase-advance --to 07 随动 iteration_status=completed（REQ-007 A1）', ok,
           'rc1={} rc2={}'.format(rc1, rc2))
+
+    # T23（★ REQ-008 · 2026-11-22）：step-reset 单步重置（AC-1~AC-4）
+    setup(seed_state(steps=[('step-A', 'in_progress'), ('step-B', 'completed')]))
+    b1 = block_text(read(cs), 'phase_steps').split('\n')
+    rc, out = run(['step-reset', '--step', 'step-A'])
+    b2 = block_text(read(cs), 'phase_steps').split('\n')
+    diff = [(x, y) for x, y in zip(b1, b2) if x != y]
+    ok = (rc == 0 and len(b1) == len(b2) and len(diff) == 1
+          and diff[0][1].strip() == 'status: "pending"')
+    check('T23a step-reset in_progress→pending（块内仅目标行变，AC-1）', ok,
+          'rc={} diff={}'.format(rc, diff[:2]))
+
+    setup(seed_state(steps=[('step-A', 'pending'), ('step-B', 'completed')]))
+    v0 = version_of(cs)
+    rc_b, _ = run(['step-reset', '--step', 'step-B'])
+    ok = rc_b == 2 and version_of(cs) == v0
+    check('T23b completed 无 --force ⇒ rc=2 且 version 不变（AC-2）', ok,
+          'rc={} v={}'.format(rc_b, version_of(cs)))
+
+    rc_c, _ = run(['step-reset', '--step', 'step-B', '--force'])
+    ok = rc_c == 2 and version_of(cs) == v0
+    check('T23c --force 缺 --reason ⇒ rc=2 零写入（AC-3）', ok, 'rc={}'.format(rc_c))
+
+    setup(seed_state(steps=[('step-A', 'completed'), ('step-B', 'completed')]))
+    rc_d, out_d = run(['step-reset', '--step', 'step-A', '--force', '--reason', 'R23'])
+    ok = (rc_d == 0 and 'reason=R23' in read(cs)
+          and 'WARN: downstream completed=' in out_d and 'step-B' in out_d)
+    check('T23d --force+reason ⇒ rc=0，事件含 reason，下游 WARN（AC-3）', ok,
+          'rc={}'.format(rc_d))
+
+    setup(seed_state(steps=[('step-A', 'pending')]))
+    v0 = version_of(cs)
+    rc_e, _ = run(['step-reset', '--step', 'step-A'])
+    ok = rc_e == 0 and version_of(cs) == v0
+    check('T23e 已 pending 再 reset ⇒ rc=0 且 version 不变（AC-4 幂等先 return）', ok,
+          'rc={} v={}'.format(rc_e, version_of(cs)))
+
+    m0 = md5(cs)
+    rc_f1, _ = run(['step-reset'])
+    rc_f2, _ = run(['step-reset', '--step', 'no-such'])
+    ok = rc_f1 == 2 and rc_f2 == 2 and md5(cs) == m0
+    check('T23f 缺 --step / id 不存在 ⇒ rc=2 零写入（AC-1）', ok,
+          'rc={}/{}'.format(rc_f1, rc_f2))
+
+    setup(seed_state(steps=[('step-A', 'skipped')]))
+    rc_g, _ = run(['step-reset', '--step', 'step-A'])
+    ok = rc_g == 0 and 'from=skipped' in read(cs)
+    check('T23g skipped 亦回落 pending（from=skipped）', ok, 'rc={}'.format(rc_g))
+
+    # T24（★ REQ-008）：phase-finish 07 完成登记（AC-5 / AC-6）
+    setup(seed_state(current_phase='07', phase_status='in_progress'))
+    rc, _ = run(['phase-finish'])
+    body = read(cs)
+    ok = (rc == 0 and 'phase: "07"' in body and 'phase_status: "completed"' in body
+          and 'iteration_status: "completed"' in body
+          and 'detail: "phase=07 status_fixed=true"' in body)
+    check('T24a 07 登记 + phase_status/iteration_status=completed（AC-5）', ok,
+          'rc={}'.format(rc))
+
+    v0 = version_of(cs)
+    rc2, _ = run(['phase-finish'])
+    ok = rc2 == 0 and version_of(cs) == v0
+    check('T24b 重复调用幂等 rc=0 且 version 不变（AC-5）', ok,
+          'rc={} v={}'.format(rc2, version_of(cs)))
+
+    setup(seed_state(current_phase='06'))
+    m0 = md5(cs)
+    rc3, _ = run(['phase-finish'])
+    ok = rc3 == 2 and md5(cs) == m0
+    check('T24c current_phase!=07 ⇒ rc=2 零写入（AC-6）', ok, 'rc={}'.format(rc3))
+
+    s_no_ph = re.sub(r'(?ms)^phase_history:\n(?:  .*\n)+', '', seed_state(current_phase='07'))
+    setup(s_no_ph)
+    m0 = md5(cs)
+    rc4, out4 = run(['phase-finish'])
+    ok = rc4 == 2 and md5(cs) == m0 and 'phase_history' in out4
+    check('T24d phase_history 块缺失 ⇒ rc=2 零写入（兜底拒绝）', ok, 'rc={}'.format(rc4))
+
+    s_inline = re.sub(r'(?ms)^phase_history:\n(?:  .*\n)+', 'phase_history: []\n',
+                      seed_state(current_phase='07'))
+    setup(s_inline)
+    rc5, _ = run(['phase-finish'])
+    ok = rc5 == 0 and 'phase: "07"' in read(cs)
+    check('T24e phase_history: [] ⇒ inline 分支追加成功', ok, 'rc={}'.format(rc5))
+
+    # T25（★ REQ-008）：patch --allow-new 白名单新建 + 块键守卫（AC-7 / AC-12）
+    setup()
+    pj = TESTROOT / '_t25new.json'
+    pj.write_text('{"complexity_actual": "T25"}', encoding='utf-8')
+    rc, _ = run(['patch', '--allow-new', '--file', str(pj)])
+    body = read(cs)
+    ok = (rc == 0 and 'complexity_actual: "T25"' in body
+          and body.index('complexity_actual:') > body.index('last_updated:'))
+    check('T25a complexity_actual 新建成功且紧随 last_updated（AC-7）', ok, 'rc={}'.format(rc))
+
+    setup()
+    pj2 = TESTROOT / '_t25bad.json'
+    pj2.write_text('{"some_new_key": "x"}', encoding='utf-8')
+    v0, m0 = version_of(cs), md5(cs)
+    rc2, out2 = run(['patch', '--allow-new', '--file', str(pj2)])
+    ok = rc2 == 2 and version_of(cs) == v0 and md5(cs) == m0 and '白名单' in out2
+    check('T25b 非白名单新键 ⇒ rc=2 零写入（AC-7）', ok, 'rc={}'.format(rc2))
+
+    setup(seed_state(extra='self_evolve:\n  last_executed: "2026-11-01"\n  patterns_written: []'))
+    pj3 = TESTROOT / '_t25blk.json'
+    pj3.write_text('{"self_evolve": "x"}', encoding='utf-8')
+    v0, m0 = version_of(cs), md5(cs)
+    rc3, out3 = run(['patch', '--allow-new', '--file', str(pj3)])
+    ok = rc3 == 2 and version_of(cs) == v0 and md5(cs) == m0 and '块/数组' in out3
+    check('T25c 块键 self_evolve 即使 --allow-new 也拒绝（AC-12）', ok, 'rc={}'.format(rc3))
+
+    s_no_anchor = re.sub(r'(?m)^last_updated:.*$\n', '', seed_state())
+    setup(s_no_anchor)
+    pj4 = TESTROOT / '_t25anchor.json'
+    pj4.write_text('{"complexity_actual": "x"}', encoding='utf-8')
+    m0 = md5(cs)
+    rc4, out4 = run(['patch', '--allow-new', '--file', str(pj4)])
+    ok = rc4 == 2 and md5(cs) == m0 and 'last_updated' in out4
+    check('T25d 锚 last_updated 缺失 ⇒ rc=2 零写入（拒绝而非兜底）', ok, 'rc={}'.format(rc4))
+
+    # T26（★ REQ-008）：新事件记账契约（AC-8）
+    setup(seed_state(steps=[('step-A', 'in_progress')]))
+    run(['step-reset', '--step', 'step-A'])
+    body = read(cs)
+    ok = ('event: "step_reset"' in body
+          and 'detail: "step=step-A from=in_progress reason=(none)"' in body)
+    check('T26a step_reset 事件 + detail 契约（AC-8）', ok, '')
+
+    setup(seed_state(current_phase='07'))
+    run(['phase-finish'])
+    body = read(cs)
+    ok = ('event: "phase_finished"' in body
+          and 'detail: "phase=07 status_fixed=true"' in body)
+    check('T26b phase_finished 事件 + detail 契约（AC-8）', ok, '')
+
+    run(['self-heal', '--class', 'compile', '--attempt', '2', '--subject', 'x.cs:1'])
+    body = read(cs)
+    rc, _ = run(['self-heal', '--class', 'bogus', '--subject', 'y'])
+    ok = ('event: "self_heal"' in body
+          and 'detail: "class=compile attempt=2/3 subject=x.cs:1"' in body and rc == 2)
+    check('T26c self_heal 事件契约 + 非白名单 class 拒绝（AC-8）', ok, 'rc={}'.format(rc))
 
     fails = [r for r in RESULTS if not r[1]]
     say('')

@@ -305,6 +305,7 @@ Agent 根据复杂度选择了 Lite 模板（文件名从映射表获取，如 "
 | `engine/naming-conflict-check.md` | 命名冲突预检规则 | 03 方案输出前（自主审查 L1） |
 | `engine/delta-marking.md` | 代码改动 Delta 标记体系 | 03 阶段（标注 ADDED/MODIFIED） |
 | `engine/team-agent-strategy.md` | Team Agent 四维并行决策算法 | 04 阶段 Team 编码时 |
+| `engine/self-heal-protocol.md` | 脚本失败限次自愈裁决（3 类白名单 / 上限 / 记账 / 禁止清单） | 04 Step 4.6 或 05 Step 3 脚本失败时 |
 | `engine/lessons-learned.md` | 事故案例库 + 自动复盘机制 | 07 阶段回顾 或 发生事故时 |
 | `project/lessons-learned.md` | 项目级模式库（活跃区 + 候选区） | 01 阶段启动注入（活跃区全量，见 `engine/phase-01.md` 前置步骤）/ 07 阶段回顾 |
 | `project/coding-conventions.md` | 项目编码规范（L5 层级） | 04 阶段编码 + 代码审查时 |

@@ -1055,6 +1055,9 @@ function write_state_yaml(iteration_id, new_content):
 | `baseline-set [--phase NN]` / `artifact-check [--phase NN] [--require-baseline] [--json]` | M1 基线（后者 ★只读） |
 | `freeze-set [--phase NN] [--force] [--repo <path>]` | F1：记 `engine_baseline`，幂等零写入（§9.8） |
 | `freeze-check [--phase NN] [--save] [--require-frozen] [--json]` / `freeze-restore [--dry-run]` | ★只读：漂移四分类 / 还原清单（§9.8） |
+| `step-reset --step <id> [--force] [--reason "…"]` | 单步回落 `pending`（`completed` 默认拒；`--force` 必须配 `--reason`；幂等零写入） |
+| `phase-finish` | 仅 `current_phase=="07"`：登记 07 completed + `phase_status`/`iteration_status` = completed（幂等零写入） |
+| `self-heal --class <compile\|artifact\|state> --attempt <1..3> --subject "<文件名:行 或 步骤id>"` | 限次自愈记账（只写 `self_heal` 事件，不改状态字段；见 `self-heal-protocol.md` §3） |
 
 **单次调用内部保证**（与 §9.1~9.4 等价）：加锁（mkdir + TTL 60s）→ 读 canonical → **幂等检查** → 文本级改字段 → `version+1` / `last_updated` → 变更前重读比对（乐观锁）→ 备份 `runtime/snapshots/` → **双副本写** → 两侧 ACTIVE Line2（含 `UPDATED`）→ **单源校验**（同进程执行 `scripts/validate-state.py`；失败 ⇒ state + ACTIVE **双侧回滚**）→ 自留痕 → 释放锁。
 环境变量：`STATE_FORCE_WRITE=1`（逃生口，跳过锁与版本比对）、`STATE_APPLY_ROOT`（演练/隔离根）、`STATE_APPLY_SESSION`（留痕 session）。
@@ -1063,7 +1066,7 @@ function write_state_yaml(iteration_id, new_content):
 
 **不覆盖**（仍走 §二-A 手工协议或文件工具）：重新打开 10 步协议、归档重命名、多 Story 全量重置、`stories[]` 深层结构。
 
-**回归**：`scripts/run-state-tests.py`（T1~T10：全链路 / 幂等 / 锁占用 / TTL 恢复 / confirm 负向 / advance 正向 / patch 未知键 / 校验失败双侧回滚 / FORCE / 自留痕），隔离根 `runtime/state-apply-tests/` 执行，不触碰真实 state。
+**回归**：`scripts/run-state-tests.py`（T1~T26：全链路 / 幂等 / 锁占用 / TTL 恢复 / confirm 负向 / advance 正向 / patch 未知键 / 校验失败回滚 / FORCE / 自留痕 / M1 基线 / F1 冻结 / D-1 跳过 / REQ-007 随动 / step-reset / phase-finish / allow-new / self_heal），隔离根 `runtime/state-apply-tests/` 执行，不触碰真实 state。
 
 ### 9.7 append-only 事件与只读 resume（★ M2 · 2026-11-19）
 
@@ -1085,7 +1088,7 @@ events:
 | **不做事件溯源** | 状态字段仍是唯一真相源，**不由 events 重放推导** state（做重放等于重写状态机，明确不做） |
 | **历史 fail-open** | 旧 state 无 `events` 属正常态，不回溯补齐；消费方输出 `—` 而非 0 |
 
-事件最小集（`state-apply.py` 的 `EVENT_OF` 映射）：`session_summary` / `step_completed` / `step_skipped` / `task_completed` / `phase_advanced` / `blocker_added` / `blocker_removed` / `defect_opened` / `defect_closed` / `state_patched` / `steps_appended` / `workflow_team_rotated` / `engine_baseline_set`。
+事件最小集（`state-apply.py` 的 `EVENT_OF` 映射）：`session_summary` / `step_completed` / `step_skipped` / `step_reset` / `phase_finished` / `self_heal` / `task_completed` / `phase_advanced` / `blocker_added` / `blocker_removed` / `defect_opened` / `defect_closed` / `state_patched` / `steps_appended` / `workflow_team_rotated` / `engine_baseline_set`。
 
 用途：① 恢复时回答「上次为什么停、停过几次、谁批准」；② 运行健康度评分「控制流健康 / 错误恢复」两维的唯一低成本数据源（此前要跨 `write-claims.jsonl` + `gate-audit.log` + 106 个快照做 diff）。
 

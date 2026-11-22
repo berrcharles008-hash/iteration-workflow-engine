@@ -94,6 +94,11 @@
 
 > ★ **执行方式注记（同 Step 0 SLIM-1 C-1 约束）**：自动用例执行默认下沉 code-explorer 子代理（prompt 同附 `build-verify.yaml` 命令与禁改约束 + 同一回报格式 + fail-open 四态）；★ **下沉派发前主 Agent 先验证 dev server/环境进程存活，不存活走既有降级**。
 
+> ★ **失败处置（REQ-008 · 2026-11-22）**：脚本类失败（`msbuild` / `validate-artifacts.py` /
+> `validate-state.py`）按 `engine/self-heal-protocol.md` §1 判定表限次自愈（3 类 × 各 3 次，
+> 经 `state-apply.py self-heal` 记账）；**白名单外失败 ⇒ 直接登记缺陷 / blocker，不重试**
+> （判断类失败、环境不可用、门禁拦截均属白名单外，见该文件 §2）。
+
 ### Step 3.5：真链路全页面矩阵 + 端点覆盖对账（★强制 · 2026-10-30 新增）
 
 > 详细命令、三级判据、棘轮口径见 `project/build-verify.yaml` → `real_link_pages`。

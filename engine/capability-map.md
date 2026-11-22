@@ -81,7 +81,8 @@
 | 能力 | 说明 | 落点 | 状态 |
 |:--|:--|:--|:--:|
 | state 双副本 | 本宿主侧 canonical + 镜像面白名单（FIX-49；v2.4 = 单写本侧，跨侧一致经 `sync-runtime.py` 按需收敛） | `state-protocol.md` §三/§六/§9.0 | ✅ |
-| state-apply 意图通道 | 18 命令（含 ★只读 5 条：resume / artifact-check / freeze-check / freeze-restore / -h） | `scripts/state-apply.py` · `state-protocol.md` §9.6 | ✅ |
+| state-apply 意图通道 | 21 命令（含 ★只读 5 条：resume / artifact-check / freeze-check / freeze-restore / -h） | `scripts/state-apply.py` · `state-protocol.md` §9.6 | ✅ |
+| 脚本失败限次自愈 | 3 类白名单 × 各 3 次 + 7 项禁止清单 + `self_heal` 事件契约 | `engine/self-heal-protocol.md` §1 | ✅ |
 | 严格校验 | YAML + 字段/枚举 | `scripts/validate-state.py` | ✅ |
 | 备份与留痕 | 每次写 state 自动备份 | `state-protocol.md` | ✅ |
 | ACTIVE 指针协议 | 2 行格式 + 释放铁律 | `state-protocol.md` §六 | ✅ |
@@ -114,7 +115,7 @@
 | 占位符扫描与归零 | 五类 schema 分类 + 未归类归零 + CSV 指标 | `scripts/scan-placeholders.py` · `template-injection.md` §2.4 | ✅ |
 | 模板覆盖校验 | R1~R5/W1~W5 | `scripts/validate-template-coverage.py` | ✅ |
 | 门禁回归 | 48 例（`run-gate-tests.mjs` 实测；"157/157" 为另一历史口径） | `scripts/run-gate-tests.mjs` | ✅ |
-| 状态机回归 | T1~T10 | `scripts/run-state-tests.py` | ✅ |
+| 状态机回归 | T1~T26 | `scripts/run-state-tests.py` | ✅ |
 | 记忆配额检查 | 索引 + 分片 | `scripts/memory_quota.py` | ✅ |
 | 文档版式 | doc_lint | `scripts/doc_lint.py` · `doc-style-guide.md` | ✅ |
 | 缺陷台账 | defects[] 即时登记 | `state-protocol.md` · `phase-05.md` | ✅ |

@@ -27,7 +27,15 @@
   defect-add  --id <D-n> --desc "…" [--severity P0|P1|P2] [--level L1|L2|L3]
                                      [--design-changed true|false]
   defect-close --id <D-n> [--verified-by user|agent]
-  patch --file <json>                       顶层标量覆盖（仅已存在键；逃生口）
+  patch [--allow-new] --file <json>         顶层标量覆盖（默认仅已存在键；--allow-new 允许白名单
+                                            7 键新建；块/数组键永不接受）
+  step-reset --step <id> [--force] [--reason "…"]
+                                            单步回落 pending（completed 默认拒绝；--force 需 reason）
+  phase-finish                              仅 current_phase=="07"：登记 07 completed +
+                                            phase_status=completed（幂等，零写入；事件 phase_finished）
+  self-heal --class <c> --attempt <1..3> --subject "<…>"
+                                            限次自愈记账（事件 self_heal；不改状态字段；
+                                            c ∈ compile|artifact|state，超限走 blocker-add）
   append-steps --steps "id|name|status|mandatory;…"
                                             phase_steps **块末追加**（替代 phase-07 内联脚本；
                                             重复 id 即拒绝；status 缺省 pending / mandatory 缺省 true）
@@ -306,6 +314,40 @@ def set_scalar(lines, key, value, quote=True):
     return False
 
 
+def insert_scalar_after(lines, key, value, quote=True, anchor='last_updated'):
+    """锚定 anchor 行之后插入一行 `key: value`（★ 仅新建键用；锚缺失返回 False ⇒ 调用方拒绝）。
+
+    为什么插在锚后而非块尾：顶层顺序有语义（`version` 恒首、`events` 恒尾），
+    `last_updated` 属 REQUIRED 字段且位置固定 ⇒ 唯一安全锚。
+    多键新建必须由调用方**按白名单顺序批量调用**，否则各自插在锚后会顺序反转。
+    """
+    for i, ln in enumerate(lines):
+        if re.match(r'^' + re.escape(anchor) + r':', ln):
+            lines.insert(i + 1, '{}: {}'.format(key, ('"' + value + '"') if quote else value))
+            return True
+    return False
+
+
+def is_non_scalar(lines, key):
+    """块/数组键判定（patch 入口守卫）：值部分为空且有缩进子行，或 inline 数组 `[...]`。
+
+    ★ 不能用 `block_span` 判：它对 `complexity: "x"` 也返回 (i, i+1)（只匹配行首 key:），
+    会把普通标量误判成块 ⇒ 正常 patch 全被拒。判据必须看**值部分**。
+    """
+    rx = re.compile(r'^' + re.escape(key) + r':\s*(.*)$')
+    for i, ln in enumerate(lines):
+        m = rx.match(ln)
+        if not m:
+            continue
+        rest = m.group(1).strip()
+        if rest.startswith('['):
+            return True
+        if rest:
+            return False
+        return i + 1 < len(lines) and lines[i + 1].startswith(' ')
+    return False
+
+
 def block_span(lines, key):
     """顶层映射块（key: 及其缩进子行）"""
     for i, ln in enumerate(lines):
@@ -392,6 +434,14 @@ def remove_list_item(lines, key, item_id):
     return False
 
 
+# ---------------- ★ REQ-008（2026-11-22）：patch --allow-new 白名单（仅真标量键）
+#   ★ 块/数组键永不进白名单：`self_evolve` 是块（last_executed / patterns_written）、
+#   `complexity_actual_factors` 是数组 ⇒ 强行走 set_scalar 会把块头换成标量、留缩进子行
+#   ⇒ YAML 解析失败 ⇒ 写后校验回滚 rc=1（交叉审查 #3 实测）。块类写入另立 TODO（走 set_block）。
+PATCH_ALLOW_NEW = ('complexity_actual', 'complexity_actual_note', 'estimate_net_h',
+                   'estimate_lo', 'estimate_hi', 'estimate_stage', 'estimate_basis')
+
+
 # ---------------- ★ M2（2026-11-19）：append-only events + 只读 resume
 EVENT_OF = {
     'summary': 'session_summary',
@@ -408,6 +458,9 @@ EVENT_OF = {
     'rotate-team': 'workflow_team_rotated',
     'baseline-set': 'artifact_baseline_set',
     'freeze-set': 'engine_baseline_set',
+    'step-reset': 'step_reset',
+    'phase-finish': 'phase_finished',
+    'self-heal': 'self_heal',
 }
 
 
@@ -1017,6 +1070,155 @@ def find_step_status(lines, step_id):
     return None
 
 
+def step_entry(lines, step_id):
+    """phase_steps 区间内定位某 step → (status 行号, 当前值) 或 None。
+
+    ★ 只在 `list_span('phase_steps')` 限定区间内查找（P-012）：`find_step_status` 取全文
+    首个同 id + 固定 7 行窗，遇同名步骤 / 邻居字段会误判。
+    """
+    kind, s, e, items = list_span(lines, 'phase_steps')
+    if kind != 'block':
+        return None
+    for a, b, iid in items:
+        if iid != step_id:
+            continue
+        for j in range(a + 1, b):
+            m = re.match(r'\s*status:\s*"([^"]*)"', lines[j])
+            if m:
+                return (j, m.group(1))
+        return None
+    return None
+
+
+def completed_steps(lines, exclude=None):
+    """phase_steps 内 status=completed 的 step id 列表（排除 exclude）"""
+    out = []
+    kind, s, e, items = list_span(lines, 'phase_steps')
+    if kind != 'block':
+        return out
+    for a, b, iid in items:
+        if not iid or iid == exclude:
+            continue
+        for j in range(a + 1, b):
+            if re.match(r'\s*status:\s*"completed"', lines[j]):
+                out.append(iid)
+                break
+    return out
+
+
+def phase_history_statuses(lines, phase):
+    """phase_history 内指定 phase 的全部 status 值；块缺失返回 None。
+
+    ★ 条目 id 恒为空（list_span 只从 `- id:` 抽取）⇒ 只能用返回区间**逐条**扫
+    `phase:` + `status:`，禁用固定行窗 j±N（会被邻居条目 review_gate 字段污染）。
+    """
+    kind, s, e, items = list_span(lines, 'phase_history')
+    if kind == 'missing':
+        return None
+    if kind == 'inline_empty':
+        return []
+    out = []
+    for a, b, iid in items:
+        ph, st = '', ''
+        for j in range(a, b):
+            # ★ 条目首行带列表前缀 `- `（`  - phase: "07"`）⇒ `\s*phase:` 匹配不到，
+            #   必须容忍可选 `- `（2026-11-22 实测：漏了它 ⇒ 幂等检测恒空 ⇒ 重复调用白写一次）。
+            m = re.match(r'\s*(?:-\s*)?phase:\s*"([^"]*)"', lines[j])
+            if m:
+                ph = m.group(1)
+            m2 = re.match(r'\s*(?:-\s*)?status:\s*"([^"]*)"', lines[j])
+            if m2:
+                st = m2.group(1)
+        if ph == phase:
+            out.append(st)
+    return out
+
+
+def cmd_step_reset(lines, args, stamp):
+    """step-reset --step <id> [--force] [--reason "…"] → (rc, event_detail)。
+
+    rc=0 + detail='' ⇒ 幂等（调用方**必须在 append_event 前 return**，否则 version 白涨）。
+    """
+    sid = opt(args, '--step', '')
+    if not sid:
+        say('step-reset 需要 --step <step-id>')
+        return 2, ''
+    hit = step_entry(lines, sid)
+    if hit is None:
+        say('phase_steps 中未找到 step id: ' + sid)
+        return 2, ''
+    j, old = hit
+    if old == 'pending':
+        say('无需变更（幂等：step {} 已是 pending）'.format(sid))
+        return 0, ''
+    forced = '--force' in args
+    reason = opt(args, '--reason', '')
+    if old == 'completed' and not forced:
+        say('step-reset 拒绝：{} 已 completed；如确需重置请加 --force --reason "…"'.format(sid))
+        return 2, ''
+    if forced and not reason:
+        say('step-reset 拒绝：--force 必须配 --reason "…"（下游已完成步骤会失去依据）')
+        return 2, ''
+    downs = completed_steps(lines, exclude=sid) if old == 'completed' else []
+    lines[j] = re.sub(r'"[^"]*"', '"pending"', lines[j])
+    if downs:
+        say('WARN: downstream completed=[{}] —— 重置会使其失去上游依据'.format(', '.join(downs)))
+    return 0, 'step={} from={} reason={}'.format(sid, old, reason or '(none)')
+
+
+def cmd_phase_finish(lines, stamp):
+    """phase-finish → (rc, event_detail)。仅 current_phase=="07" 可执行；幂等零写入。"""
+    ph = get_scalar('\n'.join(lines), 'current_phase', '')
+    if ph != '07':
+        say('phase-finish 拒绝：仅 current_phase=="07" 可执行（当前 {}）'.format(ph or '?'))
+        return 2, ''
+    sts = phase_history_statuses(lines, '07')
+    if sts is None:
+        say('未找到 phase_history 列表 → 拒绝（结构异常）')
+        return 2, ''
+    if 'completed' in sts:
+        say('无需变更（幂等：phase_history 已有 07 completed）')
+        return 0, ''
+    hist = ['  - phase: "07"', '    status: "completed"',
+            '    completed_at: "{}"'.format(stamp)]
+    if not append_list(lines, 'phase_history', hist):
+        say('未找到 phase_history 列表 → 拒绝（结构异常）')
+        return 2, ''
+    set_scalar(lines, 'phase_status', 'completed')
+    it = get_scalar('\n'.join(lines), 'iteration_status', '')
+    fixed = False
+    if it != 'completed':
+        set_scalar(lines, 'iteration_status', 'completed')
+        fixed = True
+    return 0, 'phase=07 status_fixed={}'.format('true' if fixed else 'false')
+
+
+def cmd_self_heal(args):
+    """self-heal --class <compile|artifact|state> --attempt <1..3> --subject "<…>" → (rc, detail)。
+
+    ★ 为什么必须有这个命令：`self-heal-protocol.md` §3 要求每次自愈追加 `self_heal` 事件，
+    而 M2 契约**禁止 Agent 手写 events**（绕过 version/备份/校验即失去可信度）⇒ 没有通道
+    就等于记账契约无法落地。本命令只写事件、不改任何状态字段。
+    """
+    cls = opt(args, '--class', '')
+    if cls not in ('compile', 'artifact', 'state'):
+        say('self-heal 需要 --class compile|artifact|state（白名单三类，见 self-heal-protocol.md §1）')
+        return 2, ''
+    subj = opt(args, '--subject', '')
+    if not subj:
+        say('self-heal 需要 --subject "<文件名:行 或 步骤id>"')
+        return 2, ''
+    try:
+        att = int(opt(args, '--attempt', '1'))
+    except Exception:
+        say('self-heal --attempt 必须是整数')
+        return 2, ''
+    if att < 1 or att > 3:
+        say('self-heal 拒绝：attempt 仅 1~3；超限请用 blocker-add（detail 带 escalated_from=self_heal）')
+        return 2, ''
+    return 0, 'class={} attempt={}/3 subject={}'.format(cls, att, subj)
+
+
 # ---------------------------------------------------------------- 主流程
 
 def opt(args, name, default=None):
@@ -1321,15 +1523,37 @@ def main():
             if not isinstance(data, dict):
                 say('patch JSON 必须是对象（顶层标量键值）')
                 return 2
+            # ★ REQ-008（2026-11-22）：--allow-new 白名单新建 + 块/数组入口守卫
+            allow_new = '--allow-new' in args
+            fresh = set()
             for k, v in data.items():
-                if get_scalar(new, k, None) is None:
-                    say('patch 拒绝：键不存在（仅允许覆盖已存在顶层标量）: ' + str(k))
+                if is_non_scalar(lines, k):
+                    say('patch 拒绝：{} 是块/数组键（永不接受；块类写入另走 set_block）'.format(k))
+                    return 2
+                if get_scalar('\n'.join(lines), k, None) is None:
+                    if allow_new and k in PATCH_ALLOW_NEW:
+                        fresh.add(k)
+                        continue
+                    say('patch 拒绝：键不存在且不在 --allow-new 白名单: ' + str(k))
                     return 2
                 sv = str(v)
                 if isinstance(v, bool):
                     sv = 'true' if v else 'false'
                 set_scalar(lines, k, sv, quote=not isinstance(v, (int, float, bool)))
                 changed.append('{} → {}'.format(k, sv))
+            # 新键按白名单顺序**批量**插入（各自插在锚后会导致顺序反转）
+            for k in PATCH_ALLOW_NEW:
+                if k not in fresh:
+                    continue
+                v = data[k]
+                if isinstance(v, bool):
+                    sv, q = ('true' if v else 'false'), False
+                else:
+                    sv, q = str(v), not isinstance(v, (int, float))
+                if not insert_scalar_after(lines, k, sv, quote=q):
+                    say('patch 拒绝：锚 last_updated 缺失，无法插入新键: ' + k)
+                    return 2
+                changed.append('{} 新建 = {}'.format(k, sv))
             new = '\n'.join(lines)
 
         elif cmd == 'append-steps':
@@ -1407,6 +1631,35 @@ def main():
             new = '\n'.join(lines)
             changed.append('rotate-team: in_progress → pending（{} 条）{}'.format(
                 n, ('；原因: ' + reason) if reason else ''))
+
+        elif cmd == 'self-heal':
+            # ★ REQ-008：只记事件、不改状态字段（`changed` 仅承载 detail + 人读说明）
+            shc, shdetail = cmd_self_heal(args)
+            if shc != 0:
+                return shc
+            new = '\n'.join(lines)
+            changed.append(shdetail)
+
+        elif cmd == 'step-reset':
+            # ★ REQ-008：幂等命中须在 append_event 前 return（否则 version+1 破零写入）
+            rrc, rdetail = cmd_step_reset(lines, args, stamp)
+            if rrc != 0:
+                return rrc
+            if not rdetail:
+                return 0
+            new = '\n'.join(lines)
+            changed.append(rdetail)
+            changed.append('phase_steps[{}] → pending'.format(opt(args, '--step', '')))
+
+        elif cmd == 'phase-finish':
+            prc, pdetail = cmd_phase_finish(lines, stamp)
+            if prc != 0:
+                return prc
+            if not pdetail:
+                return 0
+            new = '\n'.join(lines)
+            changed.append(pdetail)
+            changed.append('phase_history 追加 07 completed；phase_status → completed')
 
         elif cmd == 'freeze-set':
             # ★ F1：幂等命中须在 append_event 前 return（否则 version+1 破零写入）

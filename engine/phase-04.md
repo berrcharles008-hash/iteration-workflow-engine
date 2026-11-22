@@ -382,6 +382,12 @@ Start-Process powershell -WindowStyle Hidden -ArgumentList @(
 | ❌ 有 error | 停止，修复后重试（最多 3 次） |
 | ⚠️ warning | 记录但不阻塞；★ 但**项目若在 `build-verify.yaml` 配置了额外通过判据**（`success_criteria` 或专用判据段），**以项目判据为准**（项目判据可将某类 warning 升格为阻塞） |
 
+> ★ **失败先查自愈判定（REQ-008 · 2026-11-22）**：`❌ 有 error` 时的「修 → 重试」不再凭经验，
+> 一律按 `engine/self-heal-protocol.md` §1 判定表执行 —— 白名单 3 类（`compile` / `artifact` / `state`）
+> 各限 3 次，每次经 `state-apply.py self-heal` 记 `self_heal` 事件；第 4 次改 `blocker-add`
+> （detail 带 `escalated_from=self_heal`）。**判断类失败**（评审驳回 / 需求歧义 / 门禁拦截 /
+> 环境不可用）**不得进自愈**，见该文件 §2 清单。
+
 输出：**"后端构建验证：{success_criteria} — 通过 ✅"**
 
 ### Step 4.7：Spec 合规验证（★ 强制，🔴复杂级 + 有 ADDED 文件时）
