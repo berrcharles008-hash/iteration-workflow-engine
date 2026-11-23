@@ -121,6 +121,7 @@
 
 | 步骤ID | 步骤名称 | 强制 | 触发条件 |
 |--------|---------|:--:|---------|
+| step-0-baseline-05 | M1 基线记录（baseline-set --phase 05） | ✅ | 始终 |
 | step-0-frontend-build | 前端构建验证 | ✅ | 涉前端变更 |
 | step-0-5 | 合规检查（4 条通用规则：路径一致性 / 镜像面自洽〔本侧；跨侧 version 仅报告〕/ Markdown 结构 / 跨文档引用） | ✅ | 始终 |
 | step-0-6-backend-sql-smoke | 后端真库冒烟（`--sql-smoke` + `--test-schema`） | ✅ | 始终（2026-10-30 强制化） |
@@ -148,6 +149,7 @@
 
 | 步骤ID | 步骤名称 | 强制 | 触发条件 |
 |--------|---------|:--:|---------|
+| step-0-baseline-06 | M1 基线记录（baseline-set --phase 06） | ✅ | 始终 |
 | step-1-deploy-stage1 | 发布到开发测试服务器 | ✅ | 始终 |
 | step-1.2-backup-capture | 捕获客户服务器备份基线 | ✅ | `deploy-config.yaml` 中 `stage2_manual.enabled==true` |
 | step-1.5-deploy-stage2 | 生成客户部署清单 + 指导执行 | ✅ | `step-1.status=="completed"` 且 `stage2_manual.enabled==true` |
@@ -184,6 +186,7 @@
 
 | 步骤ID | 步骤名称 | 强制 | 🟢 | 🟡 | 🔴 |
 |--------|---------|:--:|:--:|:--:|:--:|
+| step-0-baseline-07 | M1 基线记录（baseline-set --phase 07） | ✅ | ✅ | ✅ | ✅ |
 | step-1-summary | 迭代总结（做了什么/做对了什么/可改进什么） | ✅ | 精简 | 标准 | 完整 |
 | step-2-issues | 问题清单（本次迭代遇到的问题） | ✅ | 精简 | 标准 | 完整 |
 | step-3-patterns | 模式沉淀（写入 lessons-learned 模式库） | — | 跳过 | 按需 | ✅ |

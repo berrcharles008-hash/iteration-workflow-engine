@@ -81,7 +81,7 @@
 | 能力 | 说明 | 落点 | 状态 |
 |:--|:--|:--|:--:|
 | state 双副本 | 本宿主侧 canonical + 镜像面白名单（FIX-49；v2.4 = 单写本侧，跨侧一致经 `sync-runtime.py` 按需收敛） | `state-protocol.md` §三/§六/§9.0 | ✅ |
-| state-apply 意图通道 | 21 命令（含 ★只读 5 条：resume / artifact-check / freeze-check / freeze-restore / -h） | `scripts/state-apply.py` · `state-protocol.md` §9.6 | ✅ |
+| state-apply 意图通道 | 22 命令（set-block 非只读；含 ★只读 5 条：resume / artifact-check / freeze-check / freeze-restore / -h） | `scripts/state-apply.py` · `state-protocol.md` §9.6 | ✅ |
 | 脚本失败限次自愈 | 3 类白名单 × 各 3 次 + 7 项禁止清单 + `self_heal` 事件契约 | `engine/self-heal-protocol.md` §1 | ✅ |
 | 严格校验 | YAML + 字段/枚举 | `scripts/validate-state.py` | ✅ |
 | 备份与留痕 | 每次写 state 自动备份 | `state-protocol.md` | ✅ |

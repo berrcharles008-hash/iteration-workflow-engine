@@ -59,6 +59,7 @@
 
 | 步骤ID | 步骤名称 | 强制 | 🟢 | 🟡 | 🔴 |
 |--------|---------|:--:|:--:|:--:|:--:|
+| step-0-baseline-07 | M1 基线记录（baseline-set --phase 07） | ✅ | ✅ | ✅ | ✅ |
 | step-1-summary | 迭代总结（做了什么/做对了什么/可改进什么） | ✅ | 精简 | 标准 | 完整 |
 | step-2-issues | 问题清单（本次迭代遇到的问题） | ✅ | 精简 | 标准 | 完整 |
 | step-3-patterns | 模式沉淀（写入 lessons-learned 模式库） | — | 跳过 | 按需 | ✅ |
@@ -282,13 +283,25 @@ lines[end:end] = out          # ★ 块末追加（唯一正确形态）
 
 **6.3 自进化健康度记录**：
 
-将本次自进化执行情况写入 state.yaml：
-```yaml
-self_evolve:
-  last_executed: "{日期}"
-  patterns_written: ["P-xxx", "P-xxx"]
-  patterns_deferred: 0   # 必须为 0；不允许推迟
+将本次自进化执行情况经 `state-apply.py` 的 `set-block` 通道写入 `self_evolve` 块（禁止 `write_to_file` 直写 state.yaml）：
+
+```bash
+python "scripts/state-apply.py" set-block --file <json>
 ```
+
+入参 JSON 恰好一个顶层键 `self_evolve`，值为对象：
+
+```json
+{
+  "self_evolve": {
+    "last_executed": "{日期}",
+    "patterns_written": ["P-xxx", "P-xxx"],
+    "patterns_deferred": 0
+  }
+}
+```
+
+`patterns_deferred` 必须为 `0`；不允许推迟。
 
 **6.4 运行健康度评分（S4 · 可选 · ★ 不阻断归档）**：
 

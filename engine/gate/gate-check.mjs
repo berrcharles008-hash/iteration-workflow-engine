@@ -875,6 +875,10 @@ function stripQuotedText(s) {
     .replace(/"[^"]*"/g, ' ')
     .replace(/'[^']*'/g, ' ');
 }
+const NULL_REDIRECT_RE = /(?:^|\s)(?:[12]|\*)?>\s*(?:\$null|\/dev\/null|nul)\b(?=\s|$)/gi;
+function stripNullRedirects(s) {
+  return String(s || '').replace(NULL_REDIRECT_RE, ' ');
+}
 
 /**
  * ★ GATE-A①（2026-10-01）：shell 包装剥壳 —— `powershell|pwsh … -Command|-c "…"` 与 `cmd /c "…"`。
@@ -1148,7 +1152,7 @@ function textHasGitChange(text) {
 function dangerousSegmentReason(seg) {
   const raw = String(seg || '').trim();
   if (!raw) return null;
-  const s = stripQuotedText(raw);                              // ★ GATE-A②：引号内 = 数据
+  const s = stripNullRedirects(stripQuotedText(raw));                              // ★ GATE-A②：引号内 = 数据
   const head = s.replace(CMD_WRAPPER_PREFIX_RE, ' ').trim();
   if (SHORT_ALIAS_AT_CMD_POS_RE.test(head)) {
     return { rule: 'SHORT-ALIAS@CMD-POS', detail: head.slice(0, 80) };

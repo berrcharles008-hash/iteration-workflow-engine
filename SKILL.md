@@ -78,11 +78,26 @@ python "scripts/build-stage-prompt.py" --stage 04 --root . --request "<本次需
 python "scripts/state-apply.py" baseline-set --phase 07                        # 阶段开始（phase-advance 之后）
 python "scripts/validate-artifacts.py" --phase 07                             # 内容合同 + 跨迭代复用
 python "scripts/state-apply.py" artifact-check --phase 07 --require-baseline   # finish：未变即拒
+python "scripts/state-apply.py" set-block --file <json>                        # 块写入（self_evolve 等；入参恰一个顶层键）
 ```
 
 - 合同 SSOT = `templates/manifest.json` 的 `content_concepts`；档位按 state 的 `complexity` 自动选（🟢 = lite 档，首版 lite 只查最低要求）
 - `validate-artifacts.py --root . --json` = **全阶段**巡检（仍需 `--iteration` 或活跃迭代；缺失产物只 SKIP）
 - 判据分四类：`no-concept` 缺章节 / `empty` 只写标题 / `placeholder` 整节占位 / `reuse` 复制更早迭代的产物
+
+## ★ F1 引擎冻结快照（01 收口 / 04 写盘前 / 07 收口）
+
+> 01 收口跑 `freeze-set` 记 `engine_baseline`（5 根位 sha + commit）；04 首次写盘前跑 `freeze-check`（默认只报告 rc=0）；07 收口按漂移清单写「八、引擎变更清单」。**脚本或仓库不可用 ⇒ SKIP 并登记 `runtime/TOOLING-TODO.md`，不阻断。**
+
+```bash
+python "scripts/state-apply.py" freeze-set --phase NN [--repo <引擎仓库>]   # 01 收口：一次性锚（幂等零写入）
+python "scripts/state-apply.py" freeze-check [--save]                       # 04 写盘前 / 07 收口：漂移四分类（★只读）
+python "scripts/state-apply.py" freeze-restore --dry-run                    # 只出还原清单；真实回滚走引擎仓库 git
+```
+
+- 冻结面 5 根位：`engine/` `scripts/` `project/` `hooks/` `skill/`（SKILL 双文件）；重复执行恒 `ALREADY FROZEN` 零写入
+- `commit=null` ⇒ `anchored: false` + `[WARN] 引擎版本未锚定`：07 报告须注明，不得当作已锚定
+- 历史无块属正常态 ⇒ `SKIP(no baseline)` 不阻断 07；口径 SSOT = `engine/state-protocol.md` §9.8
 
 ## ★ 第一优先级：轻量查询快速退出
 

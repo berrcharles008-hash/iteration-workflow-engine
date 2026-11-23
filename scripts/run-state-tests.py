@@ -829,6 +829,44 @@ def main():
           and 'detail: "class=compile attempt=2/3 subject=x.cs:1"' in body and rc == 2)
     check('T26c self_heal 事件契约 + 非白名单 class 拒绝（AC-8）', ok, 'rc={}'.format(rc))
 
+    # T27（★ #29）：set-block 块键整块写入通道（幂等 / 拒绝护栏）
+    setup()
+    pj27a = TESTROOT / '_t27a.json'
+    pj27a.write_text('{"self_evolve": {"last_executed": "2026-11-22", "patterns_written": []}}', encoding='utf-8')
+    rc, out = run(['set-block', '--file', str(pj27a)])
+    body = read(cs)
+    ok = (rc == 0 and version_of(cs) == 2
+          and 'self_evolve:' in body
+          and '  last_executed: "2026-11-22"' in body
+          and '  patterns_written: []' in body)
+    check('T27a set-block 写入新块（self_evolve）且 version+1', ok, 'rc={}'.format(rc))
+
+    v0 = version_of(cs)
+    rc2, out2 = run(['set-block', '--file', str(pj27a)])
+    ok = rc2 == 0 and version_of(cs) == v0 and '无需变更' in out2
+    check('T27b set-block 幂等零写入（version 不变）', ok, 'rc={}'.format(rc2))
+
+    pj27c = TESTROOT / '_t27c.json'
+    pj27c.write_text('{"self_evolve": "x"}', encoding='utf-8')
+    v0 = version_of(cs)
+    rc3, out3 = run(['set-block', '--file', str(pj27c)])
+    ok = rc3 == 2 and version_of(cs) == v0 and '值必须是对象' in out3
+    check('T27c set-block 标量键拒绝 rc=2（零写入）', ok, 'rc={}'.format(rc3))
+
+    pj27d = TESTROOT / '_t27d.json'
+    pj27d.write_text('{"self_evolve": {"last_executed": {"nested": true}}}', encoding='utf-8')
+    v0 = version_of(cs)
+    rc4, out4 = run(['set-block', '--file', str(pj27d)])
+    ok = rc4 == 2 and version_of(cs) == v0 and '不支持' in out4
+    check('T27d set-block 嵌套对象拒绝 rc=2（零写入）', ok, 'rc={}'.format(rc4))
+
+    pj27e = TESTROOT / '_t27e.json'
+    pj27e.write_text('{"phase_steps": {"a": "b"}}', encoding='utf-8')
+    v0 = version_of(cs)
+    rc5, out5 = run(['set-block', '--file', str(pj27e)])
+    ok = rc5 == 2 and version_of(cs) == v0 and '黑名单' in out5
+    check('T27e set-block 黑名单键拒绝 rc=2（零写入）', ok, 'rc={}'.format(rc5))
+
     fails = [r for r in RESULTS if not r[1]]
     say('')
     say('RESULT: {} passed / {} failed (of {})'.format(len(RESULTS) - len(fails), len(fails), len(RESULTS)))

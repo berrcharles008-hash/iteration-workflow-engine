@@ -78,6 +78,7 @@ python "scripts/build-stage-prompt.py" --stage 04 --root . --request "<本次需
 python "scripts/state-apply.py" baseline-set --phase 07                        # 阶段开始（phase-advance 之后）
 python "scripts/validate-artifacts.py" --phase 07                             # 内容合同 + 跨迭代复用
 python "scripts/state-apply.py" artifact-check --phase 07 --require-baseline   # finish：未变即拒
+python "scripts/state-apply.py" set-block --file <json>                        # 块写入（self_evolve 等；入参恰一个顶层键）
 ```
 
 - 合同 SSOT = `templates/manifest.json` 的 `content_concepts`；档位按 state 的 `complexity` 自动选（🟢 = lite 档，首版 lite 只查最低要求）

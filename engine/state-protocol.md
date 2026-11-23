@@ -432,7 +432,7 @@ rollback_checks:
 4. **偏差归因**：`|deviation_pct| > 50` ⇒ 07 回顾强制写归因（规模误判/缺陷返工/需求变更）。
 
 **写入后自检流程**：
-1. `write_to_file` 或 `replace_in_file` 写入 state.yaml
+1. 经 `state-apply.py` 写入 state.yaml
 2. 立即执行校验：**优先跑 `validate-state.py` 脚本**；脚本不可用（PyYAML 缺失等）时降级 `read_file` 人工校验（fail-open）
 3. 若校验失败，回退到写入前内容并报告错误
 
@@ -1053,6 +1053,7 @@ function write_state_yaml(iteration_id, new_content):
 | `resume [--json]` | ★只读：返回下一步行动（§9.7） |
 | `rotate-team [--reason "…"]` | `in_progress` 步骤回落 `pending`（§9.7） |
 | `baseline-set [--phase NN]` / `artifact-check [--phase NN] [--require-baseline] [--json]` | M1 基线（后者 ★只读） |
+| `set-block --file <json>` | 块写入：入参恰一个顶层键（值为对象），整体替换该块；供 `self_evolve` 等块键使用（§4） |
 | `freeze-set [--phase NN] [--force] [--repo <path>]` | F1：记 `engine_baseline`，幂等零写入（§9.8） |
 | `freeze-check [--phase NN] [--save] [--require-frozen] [--json]` / `freeze-restore [--dry-run]` | ★只读：漂移四分类 / 还原清单（§9.8） |
 | `step-reset --step <id> [--force] [--reason "…"]` | 单步回落 `pending`（`completed` 默认拒；`--force` 必须配 `--reason`；幂等零写入） |

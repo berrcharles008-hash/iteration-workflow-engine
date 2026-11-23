@@ -386,6 +386,23 @@ const TESTS = [
     '01', `Remove-Item '${RT_ABS}/x.tmp' '${PROJ_ABS}/${F.bizCs}'`, 2),
   bashCase('F26-H', '04阶段 runtime/ 归档 → 放行（与旧行为一致）',
     '04', `Rename-Item -LiteralPath '${RT_ABS}/y.state.yaml' -NewName 'y.state.archived.yaml'`, 0),
+
+  // ── ★ 2026-11-22-004：null 设备重定向剥离（2>$null / > $null 属只读数据，不再误拦）──
+  //   ★ 锚定：A-D 组=放行（重定向到 $null），E-G 组=负向对照（重定向到真实文件 / 写删动词必须仍拦）。
+  bashCase('F27-A', '01阶段 Get-ChildItem 2>$null → 放行',
+    '01', `Get-ChildItem . 2>$null`, 0),
+  bashCase('F27-B', '01阶段 Get-ChildItem > $null → 放行',
+    '01', `Get-ChildItem . > $null`, 0),
+  bashCase('F27-C', '01阶段 Get-ChildItem 2>$null | Select-String → 放行',
+    '01', `Get-ChildItem . 2>$null | Select-String abc`, 0),
+  bashCase('F27-D', '01阶段 $r = Get-ChildItem 2>$null → 放行',
+    '01', `$r = Get-ChildItem . 2>$null`, 0),
+  bashCase('F27-E', '01阶段 重定向到真实文件（Get-ChildItem > out.txt）→ 阻止',
+    '01', `Get-ChildItem > out.txt`, 2),
+  bashCase('F27-F', '01阶段 重定向到真实文件 2> err.txt → 阻止',
+    '01', `2> err.txt`, 2),
+  bashCase('F27-G', '01阶段 foreach { Remove-Item } → 阻止',
+    '01', `foreach { Remove-Item }`, 2),
 ];
 
 // ── S8：阶段推进留痕观测（RESUME-3 批次 3 路线 I · ALLOW+NOTIFY · 2026-10-01）──

@@ -52,6 +52,7 @@
                                            ★只读：变化/新增/消失/未变 四分类；默认恒 rc=0
                                            --require-frozen 且漂移 ⇒ rc=1
   freeze-restore [--dry-run]                ★只读：列出待还原文件，**不执行还原**；缺参 ⇒ rc=2
+  set-block --file <json>                   块键整块写入（#29 唯一通道；详见 §4.2 契约）
 
 ★ F1（2026-11-20）engine_baseline：引擎冻结快照（engine/、scripts/ 全量 + 3 个单文件根位 sha256
   前 16 位 + source.commit）。「一次性锚 + 四分类」= 07「八、引擎变更清单」唯一数据源。记 commit
@@ -373,6 +374,48 @@ def set_block(lines, key, block_lines, anchor_after=None):
     return True
 
 
+def serialize_block(key, obj):
+    """块键序列化：顶层 key: + 子行 2 空格缩进；str→双引号转义；list→内联 ["a","b"]；bool/int/float 原样。"""
+    lines = [key + ':']
+    def _val(v):
+        if isinstance(v, str):
+            return '"' + v.replace('\\', '\\\\').replace('"', '\\"') + '"'
+        if isinstance(v, bool):
+            return 'true' if v else 'false'
+        if isinstance(v, (int, float)):
+            return str(v)
+        if isinstance(v, list):
+            return '[' + ', '.join(_val(x) for x in v) + ']'
+        raise ValueError('unsupported scalar type')
+    for k, v in obj.items():
+        lines.append('  ' + k + ': ' + _val(v))
+    return lines
+
+
+def _parse_val(s):
+    """解析标量/内联数组（JSON 子集：字符串、布尔、数值、内联数组）。"""
+    return json.loads(s)
+
+
+def parse_block_subset(lines, key):
+    """解析现有块为 dict（支持上述子集）；解析失败返回 None（退化为文本比对）。"""
+    try:
+        sp = block_span(lines, key)
+        if not sp:
+            return None
+        items = lines[sp[0] + 1:sp[1]]
+        result = {}
+        for ln in items:
+            ln = str(ln)
+            m = re.match(r'^  ([A-Za-z_][A-Za-z0-9_]*): (.*)$', ln)
+            if not m:
+                return None
+            result[m.group(1)] = _parse_val(m.group(2))
+        return result
+    except Exception:
+        return None
+
+
 def list_span(lines, key, indent=2):
     """顶层列表：('inline_empty', s, e, []) | ('block', s, e, [(s,e,id)…]) | ('missing',-1,-1,[])"""
     rx = re.compile(r'^' + re.escape(key) + r':\s*(.*)$')
@@ -461,6 +504,7 @@ EVENT_OF = {
     'step-reset': 'step_reset',
     'phase-finish': 'phase_finished',
     'self-heal': 'self_heal',
+    'set-block': 'block_set',
 }
 
 
@@ -1670,6 +1714,44 @@ def main():
                 return 0
             new = '\n'.join(lines)
             changed.append(fdetail)
+
+        elif cmd == 'set-block':
+            import json as _json
+            path = opt(args, '--file', '')
+            if not path or not os.path.exists(path):
+                say('set-block 需要 --file <json>（文件不存在或未提供）')
+                return 2
+            try:
+                with io.open(path, encoding='utf-8') as _f:
+                    _data = _json.load(_f)
+            except Exception as _e:
+                say('set-block JSON 非法: ' + str(_e))
+                return 2
+            if not isinstance(_data, dict) or len(_data) != 1:
+                say('set-block 入参须恰好一个顶层键（dict）')
+                return 2
+            (_k, _v), = _data.items()
+            if not isinstance(_v, dict):
+                say('set-block 值必须是对象（dict）')
+                return 2
+            _blocked = ('artifact_baseline', 'engine_baseline', 'events', 'phase_steps',
+                        'phase_history', 'defects', 'blockers')
+            if _k in _blocked:
+                say('set-block 命中黑名单: ' + _k + '（走 baseline-set / freeze-set / patch）')
+                return 2
+            _cur = parse_block_subset(lines, _k)
+            if _cur == _v:
+                say('无需变更（幂等）')
+                return 0
+            try:
+                _blk = serialize_block(_k, _v)
+            except ValueError as _e:
+                say('set-block 拒绝：值仅支持标量/内联数组（发现不支持类型: ' + str(_e) + '）')
+                return 2
+            set_block(lines, _k, _blk, anchor_after='last_session_summary')
+            changed.append(_k)
+            new = '\n'.join(lines)
+            say('set-block: ' + _k + ' 已写入（替换/新增）')
 
         else:
             say('未知命令: ' + cmd + '（-h 查看用法）')

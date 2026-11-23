@@ -91,6 +91,7 @@ python scripts/gen-knowledge-base.py --force     # ② 无条件全量刷新
 
 | 步骤ID | 步骤名称 | 强制 | 触发条件 |
 |--------|---------|:--:|---------|
+| step-0-baseline-06 | M1 基线记录（baseline-set --phase 06） | ✅ | 始终 |
 | step-1-deploy-stage1 | 发布到开发测试服务器 | ✅ | 始终 |
 | step-2-spec-update | Spec活文档更新 | ✅ | 始终 |
 | step-2-5-kb-refresh | 知识库刷新（无条件 `--force`，代码已为最终态） | ✅ | 始终 |

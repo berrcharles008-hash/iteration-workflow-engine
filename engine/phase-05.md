@@ -162,6 +162,7 @@ NUnit 直调 BLL **不经 Web 路由**（只做反射断形参）。于是「HTT
 
 | 步骤ID | 步骤名称 | 强制 | 触发条件 |
 |--------|---------|:--:|---------|
+| step-0-baseline-05 | M1 基线记录（baseline-set --phase 05） | ✅ | 始终 |
 | step-0-frontend-build | 前端构建验证 | ✅ | 涉前端变更 |
 | step-0-5 | 合规检查（4条规则集） | ✅ | 始终 |
 | step-0-6-backend-sql-smoke | 后端真库冒烟（`--sql-smoke` + `--test-schema`） | ✅ | 始终（2026-10-30 强制化） |
