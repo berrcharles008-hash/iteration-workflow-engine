@@ -55,13 +55,13 @@
 
 > 详细命令与判据见 `project/build-verify.yaml` → `sql_smoke`。
 
-**为什么强制**：NUnit 跑在独立测试 schema（`SJ_PIVAS_TEST`），E2E 全桩化（`installMock` 拦 `/webapi/**`）⇒
+**为什么强制**：NUnit 跑在独立测试 schema（`<项目>_TEST`），E2E 全桩化（`installMock` 拦 `/webapi/**`）⇒
 「真库 SQL 语法 / 列名 / 映射」这一层曾**没有任何自动手段**，D-3（`as ROWID` ⇒ ORA-00923）在四道防线全绿时完全不可见。
 
 ```
-1. 编译 Console：msbuild "back-end/IntravenousAdmixtureCenter/SJ.PIVAS.AdmixtureCenter.Console.sln" /p:Configuration=Debug /t:Build /v:minimal
-2. 业务库只读冒烟：bin\Console.SJ.PIVAS.AdmixtureCenter.exe --sql-smoke
-3. 测试库写路径闭环：bin\Console.SJ.PIVAS.AdmixtureCenter.exe --sql-smoke --test-schema
+1. 编译 Console：msbuild "<后端工程>/<Console 工程>.csproj" /p:Configuration=Debug /t:Build /v:minimal
+2. 业务库只读冒烟：bin\Console.<项目>.exe --sql-smoke
+3. 测试库写路径闭环：bin\Console.<项目>.exe --sql-smoke --test-schema
 ```
 
 **判据**：两条均 EXIT 0 且输出无 `FAIL` 行。`SKIP` 允许但必须附原因（鉴权前置 / 数据前置不足）。
@@ -108,9 +108,9 @@ NUnit 直调 BLL **不经 Web 路由**（只做反射断形参）。于是「HTT
 2026-10-30 实跑取证：界面调用 **138 个端点**，真链路仅覆盖 **35 个（25.36%）**。
 
 ```
-1. node tools/gen-pivas-endpoints.mjs --check     # 端点清单与源码漂移 ⇒ 必须先重建再跑，否则分母错
+1. node tools/gen-<项目>-endpoints.mjs --check     # 端点清单与源码漂移 ⇒ 必须先重建再跑，否则分母错
 2. npx playwright test r_real_smoke_pages --output ../../.codebuddy/temp/pw-results-<唯一后缀>
-   （cwd = front-end/pivas_admixture_center；需 dev server 8080 + 后端 6337 同时常驻）
+   （cwd = front-end/<前端工程目录>；需 dev server 8080 + 后端 6337 同时常驻）
 3. npx playwright test r_real_smoke               # 深链路（点动作）2 例
 ```
 

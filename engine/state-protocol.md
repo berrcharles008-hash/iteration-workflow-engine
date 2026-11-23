@@ -381,7 +381,7 @@ rollback_checks:
 | 字段 | 允许值 |
 |------|--------|
 | `phase_confirm.from` / `phase_confirm.to` | `"01"` ~ `"07"`（字符串，`to` = `from` + 1） |
-| `phase_confirm.by` | `qq#N`（QQ 确认门登记已消费）/ `ide`（本会话通过语）/ `handoff`（headless 继承 `{SHORT_NAME}_HANDOFF_OWNER`，旧名 `PIVAS_HANDOFF_OWNER` 兼容一版，见 G03）/ `bypass`（逃生口） |
+| `phase_confirm.by` | `qq#N`（QQ 确认门登记已消费）/ `ide`（本会话通过语）/ `handoff`（headless 继承 `{SHORT_NAME}_HANDOFF_OWNER`；该名为上一代硬编码旧名，全称见 `engine/evolution-safety.md` 变更记录、实现见 `engine/gate/gate-check.mjs`）/ `bypass`（逃生口） |
 | `phase_confirm.at` | ISO 时间戳（`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}` 包容式匹配，同 `phase_history` 口径） |
 | `phase_confirm.quote` | 自由文本（`by: "ide"` 时**必填** = 用户通过语**逐字原文**；其他取值可省） |
 

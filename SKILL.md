@@ -85,6 +85,8 @@ python "scripts/state-apply.py" set-block --file <json>                        #
 - `validate-artifacts.py --root . --json` = **全阶段**巡检（仍需 `--iteration` 或活跃迭代；缺失产物只 SKIP）
 - 判据分四类：`no-concept` 缺章节 / `empty` 只写标题 / `placeholder` 整节占位 / `reuse` 复制更早迭代的产物
 
+> 模式库蒸馏义务由 `runtime/check-distill.mjs` 机检（三码 0/1/3），消费方见 `engine/phase-07.md` §6.1 第 4 项。
+
 ## ★ F1 引擎冻结快照（01 收口 / 04 写盘前 / 07 收口）
 
 > 01 收口跑 `freeze-set` 记 `engine_baseline`（5 根位 sha + commit）；04 首次写盘前跑 `freeze-check`（默认只报告 rc=0）；07 收口按漂移清单写「八、引擎变更清单」。**脚本或仓库不可用 ⇒ SKIP 并登记 `runtime/TOOLING-TODO.md`，不阻断。**

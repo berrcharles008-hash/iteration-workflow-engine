@@ -118,7 +118,7 @@ Agent 准备修改文件
 > 缺键**或空串**一律回落现值。对账入口 = `node engine/gate/derive-exempt.mjs --print`（`schema:1`），
 > 由 `audit-engine.py` 的 **A10-c** 校验（Python 独立算期望 + 冻结基线 + 变异沙箱）。
 > 另：headless 身份变量名改由 `project.short_name` 派生（`{SHORT_NAME}_HANDOFF_OWNER`），
-> 旧名 `PIVAS_HANDOFF_OWNER` 兼容一版（G03）。
+> 上一代硬编码旧名兼容一版（G03；全称见 `engine/evolution-safety.md` 变更记录，实现见 `engine/gate/gate-check.mjs`）。
 
 ### 04 阶段的删除类操作校验（★ FIX-9 · 2026-09-14 用户定）
 
@@ -595,7 +595,7 @@ ALLOW 后的推进写入 = **同一次写入**中更新 `current_phase` + 落 `p
 phase_confirm:
   from: "04"
   to: "05"
-  by: "ide"              # qq#N（QQ 确认门登记已消费）/ ide（本会话通过语）/ handoff（headless 继承 PIVAS_HANDOFF_OWNER）/ bypass（逃生口，走 BYPASS 审计）
+  by: "ide"              # qq#N（QQ 确认门登记已消费）/ ide（本会话通过语）/ handoff（headless 继承上一代硬编码旧名，见 engine/gate/gate-check.mjs）/ bypass（逃生口，走 BYPASS 审计）
   at: "2026-10-01T01:40:00"
   quote: "通过，进入05"   # ★ by=ide 时必填：用户通过语**逐字原文**（无 quote 视为无效留痕；
                           #   引用无授权答复 / 含 answer= 等元数据会被 state-apply 拒绝，见 waiting-protocol §5/§8）
