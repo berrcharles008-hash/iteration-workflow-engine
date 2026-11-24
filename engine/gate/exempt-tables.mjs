@@ -66,6 +66,10 @@ const rawLiteral = {
   ],
   exemptPathsMdOnly: ['requirements/iteration-context/'],
   stageExempt: {
+    // ★ 2026-11-24（R-5 决议 · 台账是权威源）：01/03 允许写 `requirements/*.md`（立项即改台账，
+    //   否则台账滞后 4 个阶段）。★ 只放 `.md`，不给 `dirs` ⇒ 非 md 仍拦（02/07 亦未加，守卫不变）。
+    '01': { mdDirs: ['requirements/'] },
+    '03': { mdDirs: ['requirements/'] },
     '05': { dirs: ['docs/iterations/', 'docs/knowledge-base/'], mdDirs: ['requirements/'] },
     '06': {
       dirs: ['docs/iterations/', 'docs/knowledge-base/'],
@@ -112,6 +116,9 @@ export function deriveExemptTables(cfg) {
     exemptPaths: [...SELF_REF_DIRS, docs, kb, ...MEMORY_DIRS],
     exemptPathsMdOnly: [specs + 'iteration-context/'],
     stageExempt: {
+      // ★ 键位置必须与 LITERAL 完全一致（flattenStage 按序展开，顺序≠即 A10-c 报错）
+      '01': { mdDirs: [specs] },
+      '03': { mdDirs: [specs] },
       '05': { dirs: [docs, kb], mdDirs: [specs] },
       '06': { dirs: [docs, kb], mdDirs: [specs, FEASIBILITY_DIR], files: [...STAGE_FILES] },
       '07': { dirs: [docs], files: [...STAGE_FILES] },

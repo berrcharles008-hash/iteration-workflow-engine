@@ -867,6 +867,46 @@ def main():
     ok = rc5 == 2 and version_of(cs) == v0 and '黑名单' in out5
     check('T27e set-block 黑名单键拒绝 rc=2（零写入）', ok, 'rc={}'.format(rc5))
 
+    # ── T28：缺块自愈 + defect-add --status（2026-11-24 · 迭代 2026-11-24-002 D-1/D-2 实需）──
+    #   背景：该迭代 state 由**手工最小模板**建出，无 `blockers:`/`defects:` ⇒ `defect-add` 直接
+    #   拒绝；而 `set-block` 又把这两键列入黑名单 ⇒ 缺陷台账没有合法写入通道（实测撞墙）。
+    #   修法 = `append_list` 在 `missing` 时自建块（本次改动），本组即该分支的回归。
+    _no_blocks = SEED.format(iid=IID).replace('blockers: []\n', '').replace('defects: []\n', '')
+    setup(state=_no_blocks)
+    cs = canon_state()
+    _t0 = read(cs)
+    check('T28a 夹具本身缺 blockers/defects 块',
+          'blockers:' not in _t0 and 'defects:' not in _t0)
+    v0 = version_of(cs)
+    rc1, _ = run(['defect-add', '--id', 'D-9', '--desc', '缺块自愈', '--severity', 'P1', '--level', 'L1'])
+    _t1 = read(cs)
+    ok = rc1 == 0 and 'defects:' in _t1 and 'D-9' in _t1 and version_of(cs) == v0 + 1
+    check('T28b 缺 defects 块 ⇒ defect-add 自建块并写入（validate 通过）', ok,
+          'rc={} v={}'.format(rc1, version_of(cs)))
+    rc2, _ = run(['blocker-add', '--id', 'B-9', '--desc', '占位阻塞', '--type', 'compile'])
+    _t2 = read(cs)
+    ok = rc2 == 0 and 'blockers:' in _t2 and 'B-9' in _t2
+    check('T28c 缺 blockers 块 ⇒ blocker-add 自建块并写入', ok, 'rc={}'.format(rc2))
+    rc3, _ = run(['blocker-rm', '--id', 'B-9'])
+    # ★ 只断言「列表项已消失且块回落 inline empty」—— `events[]` 的 detail 会留 `B-9` 字样，
+    #   用整文件 `'B-9' not in text` 会假红（首跑实测）。
+    _t3 = read(cs)
+    ok = rc3 == 0 and re.search(r'- id: "B-9"', _t3) is None and 'blockers: []' in _t3
+    check('T28d 自建块内条目可正常移除（回落 `blockers: []`）', ok, 'rc={}'.format(rc3))
+    rc4, _ = run(['defect-add', '--id', 'D-10', '--desc', '转下轮', '--severity', 'P1', '--level', 'L1',
+                  '--status', 'deferred'])
+    ok = rc4 == 0 and re.search(r'- id: "D-10".*?status: "deferred"', read(cs), re.S) is not None
+    check('T28e defect-add --status deferred（承接下轮）', ok, 'rc={}'.format(rc4))
+    v0 = version_of(cs)
+    rc5, _ = run(['defect-add', '--id', 'D-11', '--desc', 'x', '--status', 'fixed'])
+    ok = rc5 == 2 and version_of(cs) == v0 and 'D-11' not in read(cs)
+    check('T28f --status fixed 拒绝 rc=2（零写入，fixed 只走 defect-close）', ok, 'rc={}'.format(rc5))
+    rc6, _ = run(['defect-close', '--id', 'D-9', '--verified-by', 'agent'])
+    _t6 = read(cs)
+    ok = (rc6 == 0 and _t6.count('defects:') == 1
+          and re.search(r'- id: "D-9".*?status: "fixed".*?fixed_at:', _t6, re.S) is not None)
+    check('T28g 自建块内 defect-close 生效且块头不重复', ok, 'rc={}'.format(rc6))
+
     fails = [r for r in RESULTS if not r[1]]
     say('')
     say('RESULT: {} passed / {} failed (of {})'.format(len(RESULTS) - len(fails), len(fails), len(RESULTS)))

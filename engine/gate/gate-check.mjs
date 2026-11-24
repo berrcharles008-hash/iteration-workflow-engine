@@ -360,6 +360,8 @@ const EXEMPT_PATHS_MD_ONLY = EXEMPT_RESOLUTION.tables.exemptPathsMdOnly;
  * 导致每次归档都需人工开逃生口（2026-09-17 实证：06/07 各需开闸一次）。
  *
  * 最小授权（仅文档路径，绝不含业务代码；★ GATE-7 2026-09-27 对齐实际产出）：
+ *   01/03 → requirements/*.md（★ 2026-11-24 R-5：立项/方案阶段即改需求台账与需求记录，
+ *           台账是权威源；只放 .md，非 md 与 02 阶段仍拦）
  *   05 → docs/iterations/ · docs/knowledge-base/ · requirements/*.md   （测试报告/知识库刷新/规格回写）
  *   06 → docs/iterations/ · docs/knowledge-base/ · requirements|feasibility 的 .md
  *        · project/lessons-learned.md
@@ -368,7 +370,7 @@ const EXEMPT_PATHS_MD_ONLY = EXEMPT_RESOLUTION.tables.exemptPathsMdOnly;
  *   NONE → docs/iterations/ · requirements|feasibility 的 .md      （立项前需求登记 / 迭代文档预写）
  *
  * 明确仍拦（fail-closed）：00 全部、none 态的 knowledge-base 与业务区（back-end/ front-end/ sql/ …）、
- * requirements 非 .md 文件（全阶段）、07 的 project/ 其它文件、以及所有 Bash 命令。
+ * 02 的 requirements/ 全部、requirements 非 .md 文件（全阶段）、07 的 project/ 其它文件、以及所有 Bash 命令。
  */
 // ★ 2026-10-24（G01）：数据迁至 exempt-tables.mjs 的 stageExempt（保序、逐字节等价，见附录 E-3）。
 // 下面历史依据保留 —— 它解释「为什么这样放行」，与数据存放位置无关。
@@ -1751,7 +1753,8 @@ async function gateCheck(fsPath, cmdCtx) {
   }
 
   // ★ FIX-12②（2026-09-17）：05/06/07 阶段化文档豁免（本职产出放行 + STAGE_ALLOW 审计留痕）。
-  //   置于 01-03 分支之前：三阶段互斥，无重叠风险；未命中者继续走下方各分支（fail-closed）。
+  //   ★ 2026-11-24（R-5）：01/03 亦走本表（仅 `requirements/*.md`，见 exempt-tables 的 mdDirs）。
+  //   置于 01-03 分支之前：各阶段键互斥，无重叠风险；未命中者继续走下方各分支（fail-closed）。
   const stagePattern = matchStageExempt(currentPhase, fsPath);
   if (stagePattern) {
     audit('STAGE_ALLOW', `[${currentPhase}] ${fsPath} (pattern=${stagePattern})`);
@@ -1805,6 +1808,7 @@ async function gateCheck(fsPath, cmdCtx) {
       '',
       '允许写入的目录:',
       `  ${ITER_DOCS_DIR.padEnd(24, ' ')}— 迭代文档（需求/评审/方案）`,
+      '  requirements/*.md         — 需求台账 / 需求记录（仅 .md；01/03 阶段）',
       '  {IDE}/skills/.../         — Skill 自身文件',
       '  {IDE}/memory/             — 工作记忆',
       '',

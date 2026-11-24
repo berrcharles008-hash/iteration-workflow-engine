@@ -893,6 +893,9 @@ def _a10_expected(cfg):
         'exemptPaths': self_ref + [docs, kb] + mem,
         'exemptPathsMdOnly': [specs + 'iteration-context/'],
         'stageExempt': {
+            # ★ 三处同序：本表 / exempt-tables.mjs 的 LITERAL / deriveExemptTables（A10-c 逐项比对）
+            '01': {'mdDirs': [specs]},
+            '03': {'mdDirs': [specs]},
             '05': {'dirs': [docs, kb], 'mdDirs': [specs]},
             '06': {'dirs': [docs, kb], 'mdDirs': [specs, feas], 'files': list(files)},
             '07': {'dirs': [docs], 'files': list(files)},

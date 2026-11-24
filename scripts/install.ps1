@@ -26,15 +26,6 @@
 #            自启注册/计划任务/启动服务 —— 那三项是单机单实例（快捷方式名 / 计划任务名 /
 #            端口 18765 全局唯一，第二个项目会静默顶掉第一个）。
 #          · Step 2b 承载拷贝（沿用既有 7b 的「b 步不进分母」约定）⇒ 8 步文案零改动。
-# v2.7.0 — ★ TOOL-SESSIONHUB-DIST（2026-11-19）：新增**共享型**可选组件开关
-#          -WithSessionHub（委托 tools\session-hub\install-all.ps1 -CopyOnly）。
-#          与 qqbot 的三点结构差异（design/optional-component-distribution.md L5）：
-#            ① **不指定目标**：活实例固定在宿主层 %LOCALAPPDATA%\codebuddy-hub（install-all 自带
-#               默认值）；绝不拷到 <安装根>\tools\ —— 第二份代码会与运行实例抢 18766 端口；
-#            ② **不追加 .gitignore**：项目侧零落盘，没有凭据入库面；
-#            ③ **三态换本项目视角**：代码在宿主层只是前提，「本项目 id 在 projects[] 且
-#               /p/<id>/health 200」才算 enabled ⇒ 判据与 install-all 的 Get-StateOf 同款。
-#          · 只分发代码：登记项目 / 启动服务 / 注册自启一律留给用户显式执行。
 # ============================================================
 
 param(
@@ -43,10 +34,8 @@ param(
     [switch]$NoBackup = $false,
     [switch]$Force = $false,
     [string]$SpecsDir = $null,
-    # 可选组件：QQ 通知通道（tools/qqbot，per-project 型）。默认不装，必须显式开关。
+    # 可选组件：QQ 通知通道（tools/qqbot）。默认不装，必须显式开关。
     [switch]$WithQqbot = $false,
-    # 可选组件：会话监控中心（tools/session-hub，共享型 —— 只把代码同步到宿主层实例目录）。
-    [switch]$WithSessionHub = $false,
     # 轻量后装模式：只做可选组件，跳过后 8 步（不备份 IDE 目录、不重装 engine/scripts）。
     [switch]$ComponentsOnly = $false
 )
@@ -83,12 +72,6 @@ $DetectedIde = Detect-IDE
 
 # ── 引擎源目录（基于 $PSScriptRoot，无论从哪个目录运行都能找到源文件）──
 $EngineDir = (Get-Item (Split-Path $PSScriptRoot -Parent)).FullName
-
-# ── 共享型组件的唯一判定位置：宿主层实例目录 ──────────────────────────────
-# 共享型（规范 L5）：**一份代码服务 N 个项目**，活实例固定在 `%LOCALAPPDATA%\codebuddy-hub`，
-# 不属于任何项目根 ⇒ 本文件只在宿主层一个地方判定状态，且**不提供目标覆盖**
-# （真实清单含 4 类密钥，换目录等于换实例；install-all.ps1 自带同一默认值）。
-$HubInstanceDir = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'codebuddy-hub' } else { $null }
 
 # ── 可选组件：QQ 通知通道（tools/qqbot）────────────────────────────────
 # 动因（2026-10-28）：本脚本原本全文不含 tools/ ⇒ 新项目装完 skill **永远**拿不到
@@ -188,74 +171,6 @@ function Get-QqbotComponentState {
     return 'staged'
 }
 
-# 共享型组件：拷贝（**只委托，不指定目标**）
-#   ① 目标恒为宿主层（install-all.ps1 自带默认值）—— 传 cwd / 项目根都会造出第二份代码，
-#      与运行实例抢 18766 端口（L5.5 明文禁项目层副本）；
-#   ② 不追加 .gitignore：项目侧零落盘，无凭据入库面；
-#   ③ 拷贝后断言 server.js 真在宿主层，否则「装完没有组件」会被当成成功。
-function Install-SessionHubComponent {
-    $srcEntry = Join-Path $EngineDir 'tools\session-hub\install-all.ps1'
-    if (-not (Test-Path $srcEntry)) {
-        # 与 -WithQqbot / Step 4 的 F3 同款：源不合法必须硬失败
-        Write-Host "  ❌ optional component source missing: $srcEntry"
-        Write-Host "     The install source must be the engine repo (it carries the top-level tools/session-hub)."
-        Write-Host "     An already-installed skill copy does NOT carry tools/ (by design)."
-        exit 1
-    }
-
-    if (-not $DryRun -and $HubInstanceDir -and (Test-Path (Join-Path $HubInstanceDir 'server.js'))) {
-        Write-Host "  ✅ session-hub already present: $($HubInstanceDir)（merge 拷贝，实例文件 hub.config.json / sessions / logs 不受影响）"
-    }
-
-    $argv = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $srcEntry, '-CopyOnly')
-    if ($DryRun) { $argv += '-DryRun' }
-    & powershell.exe @argv
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  ❌ optional component copy failed (install-all.ps1 -CopyOnly exit $LASTEXITCODE)"
-        exit 1
-    }
-    if ($DryRun) { return }
-
-    if (-not $HubInstanceDir -or -not (Test-Path (Join-Path $HubInstanceDir 'server.js'))) {
-        Write-Host "  ❌ optional component missing after copy: $($HubInstanceDir)\server.js"
-        exit 1
-    }
-}
-
-# 共享型状态探针（四态）：missing / staged / enabled / enabled-degraded
-# 判据与 tools\session-hub\install-all.ps1 的 Get-StateOf **同款**（规范 §四.5：同一事实只认一个形状）：
-#   missing          = 宿主层无 server.js（代码未分发）
-#   staged           = 代码在，但本项目不在 projects[]（本项目 id 由 projects[].root == 安装根反查）
-#   enabled          = 在清单 且 GET /p/<id>/health 200
-#   enabled-degraded = 在清单但探活失败（端口冲突 / 进程未起）—— L5.3 要求显式降级，不得当正常
-# ★ 不能只探无前缀 /health：那只代表 config.default 那个项目（L5.3 明文）。
-function Get-SessionHubState {
-    $r = [pscustomobject]@{ State = 'missing'; Id = ''; Port = 18766; TargetDir = $HubInstanceDir }
-    if (-not $HubInstanceDir) { return $r }
-    if (-not (Test-Path (Join-Path $HubInstanceDir 'server.js'))) { return $r }
-    $r.State = 'staged'
-
-    $cfgFile = Join-Path $HubInstanceDir 'hub.config.json'
-    if (-not (Test-Path $cfgFile)) { return $r }
-    try { $cfg = Get-Content $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return $r }
-    if ($cfg.port) { $r.Port = [int]$cfg.port }
-
-    $want = ((Get-Location).Path -replace '\\', '/').TrimEnd('/').ToLower()
-    foreach ($p in @($cfg.projects)) {
-        $rootNorm = ([string]$p.root -replace '\\', '/').TrimEnd('/').ToLower()
-        if ($rootNorm -eq $want) { $r.Id = [string]$p.id; break }
-    }
-    if (-not $r.Id) { return $r }
-
-    try {
-        Invoke-RestMethod -Method Get -Uri ('http://127.0.0.1:' + $r.Port + '/p/' + $r.Id + '/health') -TimeoutSec 2 | Out-Null
-        $r.State = 'enabled'
-    } catch {
-        $r.State = 'enabled-degraded'
-    }
-    return $r
-}
-
 # ── Step 1: 确定 SKILL_TARGET 和 HOOK_TARGET ──
 switch ($DetectedIde) {
     "claude-code" {
@@ -311,21 +226,6 @@ if ($DryRun) {
             default   { Write-Host "    状态: 未分发 —— 需要 QQ 通知时加 -WithQqbot（后装: -WithQqbot -ComponentsOnly）" }
         }
     }
-    if ($WithSessionHub) {
-        Write-Host "    + tools\session-hub\  → %LOCALAPPDATA%\codebuddy-hub\   (委托 install-all.ps1 -CopyOnly)"
-        Write-Host "      * 只拷贝：排除 hub.config.json / sessions / logs / inputs / dialog-archive / node_modules"
-        Write-Host "      * 不做：登记项目 / 启动服务 / 注册自启（单机单实例，须你显式执行）"
-        Write-Host "      * 不写 .gitignore、不在 <安装根>\tools\ 留副本（共享型禁项目层副本，L5.5）"
-        Write-Host "      > 装后下一步: powershell -NoProfile -ExecutionPolicy Bypass -File `"$($HubInstanceDir)\install-all.ps1`" -ProjectRoot <项目根> -ProjectId <id>"
-    } else {
-        $hubDry = Get-SessionHubState
-        switch ($hubDry.State) {
-            'enabled'          { Write-Host "    · session-hub: 已启用（本项目 id=$($hubDry.Id)，/p/$($hubDry.Id)/health 200）—— 未加 -WithSessionHub，本次不动" }
-            'enabled-degraded' { Write-Host "    · session-hub: 已登记但探活失败（id=$($hubDry.Id)，端口 $($hubDry.Port) 无响应）—— powershell -File `"$($HubInstanceDir)\start-hub.ps1`"" }
-            'staged'           { Write-Host "    · session-hub: 已分发**未启用**（代码在 $($HubInstanceDir)，本项目不在 projects[]）—— 登记见 `"$($HubInstanceDir)\install-all.ps1`" -ProjectRoot/-ProjectId" }
-            default            { Write-Host "    · session-hub: 未分发 —— 需要会话监控面板时加 -WithSessionHub（后装: -WithSessionHub -ComponentsOnly）" }
-        }
-    }
     Write-Host ""
     Write-Host "  Step 3 (IDE adapter — 简化模式：仅差异文件):"
     switch ($DetectedIde) {
@@ -379,7 +279,7 @@ if ($DryRun) {
 #   做备份（下方 Backup 段）再整目录替换 engine/scripts —— 代价与风险都不匹配「只加一个组件」。
 # 故在此**早退**：只跑组件拷贝，不备份、不查依赖、不动 engine/scripts/manifest/hooks。
 if ($ComponentsOnly) {
-    if ((-not $WithQqbot) -and (-not $WithSessionHub)) {
+    if (-not $WithQqbot) {
         # 无参调用 = 组件状态探针（可随时随地查；输出三态，避免"目录在 = 已生效"的误读）
         switch (Get-QqbotComponentState) {
             'enabled' {
@@ -396,45 +296,12 @@ if ($ComponentsOnly) {
                 Write-Host "     （安装期一并装: 加 -WithQqbot 即可；默认不装）"
             }
         }
-
-        # 共享型探针：宿主层一份代码 + 本项目是否在 projects[] + per-project 探活（L5.3）
-        $hubProbe = Get-SessionHubState
-        switch ($hubProbe.State) {
-            'enabled' {
-                Write-Host "  ✅ session-hub 已启用：本项目 id=$($hubProbe.Id) 在 projects[]，/p/$($hubProbe.Id)/health 200"
-                Write-Host "     面板: http://127.0.0.1:$($hubProbe.Port)/p/$($hubProbe.Id)/"
-            }
-            'enabled-degraded' {
-                Write-Host "  ◐  session-hub 已登记但**探活失败**（id=$($hubProbe.Id)，端口 $($hubProbe.Port)）"
-                Write-Host "     启动: powershell -NoProfile -ExecutionPolicy Bypass -File `"$($HubInstanceDir)\start-hub.ps1`""
-                Write-Host "     （端口被占 / 进程未起；无前缀 /health 只代表缺省项目，不能作为本项目已启用的证据）"
-            }
-            'staged' {
-                Write-Host "  ◐  session-hub 已分发但**本项目未登记**：代码在 $($HubInstanceDir)，projects[] 里没有本项目"
-                Write-Host "     登记: powershell -NoProfile -ExecutionPolicy Bypass -File `"$($HubInstanceDir)\install-all.ps1`" -ProjectRoot <项目根> -ProjectId <id>"
-            }
-            default {
-                Write-Host "  ○  session-hub 未分发。安装: scripts\install.ps1 -WithSessionHub -ComponentsOnly"
-                Write-Host "     （共享型：代码装到 %LOCALAPPDATA%\codebuddy-hub，项目侧不留副本）"
-            }
-        }
         exit 0
     }
-    if ($WithQqbot) {
-        Write-Host "[components] Installing optional component: qqbot ..."
-        Install-QqbotComponent -Root (Get-Location).Path
-        Write-Host "  ℹ   下一步（需你在本项目执行）:"
-        Write-Host "      powershell -NoProfile -ExecutionPolicy Bypass -File tools\qqbot\install-all.ps1"
-    }
-    if ($WithSessionHub) {
-        Write-Host "[components] Staging optional component: session-hub (shared instance) ..."
-        Install-SessionHubComponent
-        # 注意：字符串里 `$(...).Path` 的 `.Path` 不会被求值（子表达式到右括号就结束）⇒ 先取变量
-        $hubProjectRoot = (Get-Location).Path
-        Write-Host "  ℹ   下一步（需你显式执行 —— 本安装器不代跑）:"
-        Write-Host "      1) 登记本项目: powershell -NoProfile -ExecutionPolicy Bypass -File `"$($HubInstanceDir)\install-all.ps1`" -ProjectRoot `"$hubProjectRoot`" -ProjectId <id>"
-        Write-Host "      2) 启动服务  : powershell -NoProfile -ExecutionPolicy Bypass -File `"$($HubInstanceDir)\start-hub.ps1`""
-    }
+    Write-Host "[components] Installing optional component: qqbot ..."
+    Install-QqbotComponent -Root (Get-Location).Path
+    Write-Host "  ℹ   下一步（需你在本项目执行）:"
+    Write-Host "      powershell -NoProfile -ExecutionPolicy Bypass -File tools\qqbot\install-all.ps1"
     exit 0
 }
 
@@ -589,26 +456,6 @@ if ($WithQqbot) {
     }
 }
 
-# 共享型：只把代码同步到宿主层实例目录（排除清单在组件内一处，hub.config.json 不被覆盖）。
-# 不登记项目、不起服务、不注册自启 —— 那三件事改的是全机唯一实例，必须用户显式执行。
-if ($WithSessionHub) {
-    Write-Host "[Step 2b/8] Optional component: session-hub (shared instance)..."
-    Install-SessionHubComponent
-    Write-Host "  ℹ   本步只同步代码到 $($HubInstanceDir)（hub.config.json / sessions / logs 不受影响）。"
-    Write-Host "      登记项目 / 启动 / 自启请显式执行："
-    $hubRootForHint = (Get-Location).Path
-    Write-Host "      powershell -NoProfile -ExecutionPolicy Bypass -File `"$($HubInstanceDir)\install-all.ps1`" -ProjectRoot `"$hubRootForHint`" -ProjectId <id>"
-} else {
-    $hubLive = (Get-SessionHubState).State
-    if ($hubLive -eq 'enabled') {
-        Write-Host "[Step 2b/8] Optional component session-hub present and enabled (not updated without -WithSessionHub)"
-    } elseif ($hubLive -eq 'enabled-degraded') {
-        Write-Host "[Step 2b/8] Optional component session-hub registered but health probe failed (run start-hub.ps1)"
-    } elseif ($hubLive -eq 'staged') {
-        Write-Host "[Step 2b/8] Optional component session-hub staged but this project is NOT registered (install-all.ps1 -ProjectRoot <root> -ProjectId <id>)"
-    }
-}
-
 # ── Step 3: IDE 专属 adapter（简化：仅差异文件）────
 Write-Host "[Step 3/8] Installing IDE adapter..."
 New-Item -ItemType Directory -Force -Path "$SkillTarget\rules" | Out-Null
@@ -678,7 +525,10 @@ if ($DetectedIde -eq "codebuddy" -and $HookTarget) {
                 $json.hooks.PreToolUse = @($json.hooks.PreToolUse) + $entry
             }
             $out = $json | ConvertTo-Json -Depth 20
-            [IO.File]::WriteAllText([IO.Path]::GetFullPath($settingsPath), $out, (New-Object System.Text.UTF8Encoding($false)))
+            # ★ D-1（2026-11-24 夹具实测）：原写法 `[IO.Path]::GetFullPath($相对路径)` 以**进程启动 CWD**
+            #   为基准（.NET 不认 PowerShell 的 Set-Location/Push-Location）⇒ 从非项目根运行安装会把
+            #   settings.json 写到**错误目录**（目标侧漏注册 = 门禁静默失效，且污染 CWD）。改用 $PWD 解析。
+            [IO.File]::WriteAllText([IO.Path]::GetFullPath((Join-Path $PWD.ProviderPath $settingsPath)), $out, (New-Object System.Text.UTF8Encoding($false)))
             Write-Host "  ✅ Gate hook merged into settings.json（backup: $backup）"
         } catch {
             Write-Host "  ❌ Failed to merge settings.json: $_"
@@ -705,7 +555,7 @@ if ($DetectedIde -eq "codebuddy" -and $HookTarget) {
   }
 }
 '@
-        [IO.File]::WriteAllText([IO.Path]::GetFullPath($settingsPath), $template, (New-Object System.Text.UTF8Encoding($false)))
+        [IO.File]::WriteAllText([IO.Path]::GetFullPath((Join-Path $PWD.ProviderPath $settingsPath)), $template, (New-Object System.Text.UTF8Encoding($false)))
         Write-Host "  ✅ settings.json created with gate hook registration"
     }
 } elseif ($HookTarget) {
@@ -761,7 +611,7 @@ if ($DetectedIde -eq "codebuddy" -and $HookTarget -and (Test-Path $settingsPath)
         if ($changed) {
             $backup = "$settingsPath.bak-$(Get-Date -Format yyyyMMdd-HHmmss)"
             Copy-Item $settingsPath $backup -Force
-            [IO.File]::WriteAllText([IO.Path]::GetFullPath($settingsPath), ($json | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false)))
+            [IO.File]::WriteAllText([IO.Path]::GetFullPath((Join-Path $PWD.ProviderPath $settingsPath)), ($json | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false)))
             Write-Host "     (backup: $backup)"
             # 写回后自校验：单元素数组塌陷会让 IDE 读不到 hook ⇒ 静默失效，必须当场暴露
             $chk = Get-Content $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -929,13 +779,6 @@ if ($WithQqbot -and -not (Test-Path 'tools\qqbot\install-all.ps1')) {
     Write-Host "     Refusing to report success (silent half-install)."
     exit 1
 }
-# 共享型同理：代码该落在**宿主层**（不在项目根）⇒ 断言点换成 %LOCALAPPDATA%\codebuddy-hub\server.js。
-$hubServerPath = if ($HubInstanceDir) { Join-Path $HubInstanceDir 'server.js' } else { $null }
-if ($WithSessionHub -and (-not $hubServerPath -or -not (Test-Path $hubServerPath))) {
-    Write-Host "  ❌ -WithSessionHub was requested but $hubServerPath is missing."
-    Write-Host "     Refusing to report success (silent half-install)."
-    exit 1
-}
 $gateTestScript = "$SkillTarget\scripts\run-gate-tests.mjs"
 $installedHook = if ($HookTarget) { Join-Path $HookTarget 'gate-check.mjs' } else { $null }
 if (-not (Test-Path $gateTestScript)) {
@@ -965,13 +808,5 @@ if (Test-Path 'tools\qqbot\install-all.ps1') {
     Write-Host "   3. 📱 Optional QQ channel: copied → powershell -NoProfile -ExecutionPolicy Bypass -File tools\qqbot\install-all.ps1"
 } else {
     Write-Host "   3. 📱 Optional QQ channel (not installed): add -WithQqbot, or run scripts\install.ps1 -WithQqbot -ComponentsOnly later."
-}
-# 共享型同理：宿主层有代码 ≠ 本项目已启用 —— 必须「本项目在 projects[] 且 /p/<id>/health 200」。
-$hubNow = Get-SessionHubState
-switch ($hubNow.State) {
-    'enabled'          { Write-Host "   4. 🖥  Session hub: enabled (project $($hubNow.Id)) → http://127.0.0.1:$($hubNow.Port)/p/$($hubNow.Id)/" }
-    'enabled-degraded' { Write-Host "   4. 🖥  Session hub: registered but health probe failed → powershell -NoProfile -ExecutionPolicy Bypass -File `"$($HubInstanceDir)\start-hub.ps1`"" }
-    'staged'           { Write-Host "   4. 🖥  Session hub staged (code only, this project not registered) → `"$($HubInstanceDir)\install-all.ps1`" -ProjectRoot <root> -ProjectId <id>" }
-    default            { Write-Host "   4. 🖥  Session hub (not installed): add -WithSessionHub, or run scripts\install.ps1 -WithSessionHub -ComponentsOnly later." }
 }
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

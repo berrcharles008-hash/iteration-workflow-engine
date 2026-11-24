@@ -503,11 +503,62 @@ const TESTS = [
   );
 }
 
+// ── ST：01/03 阶段 `requirements/*.md` 放行面（R-5 · 2026-11-24 · 迭代 2026-11-24-002）──
+//   背景：需求台账是权威源 ⇒ 01/03 立项当时就要能改台账，原实现要等 4 个阶段（05 才放行）。
+//   放行面**只 `.md`**（`exempt-tables.mjs` 的 `mdDirs`，且不给 `dirs`）⇒ 非 md 仍拦；
+//   02 / 07 两侧均未加表 ⇒ 本组含两条**守卫断言**（防放行面外溢，属反造假断言，同一改动内配套）。
+//   ★ 禁用「04 阶段仍拦」做断言：04 在无 dispatch_whitelist 时无条件放行，断言必假红。
+{
+  TESTS.push(
+    { // ST-01-A：01 期写 requirements 台账 ⇒ 放行（走阶段豁免，记 STAGE_ALLOW）
+      id: 'ST-01-A', name: '01阶段 写 requirements/台账.md → 放行(STAGE_ALLOW)',
+      phase: '01', active: true,
+      tool: 'write_to_file', file: 'requirements/ST-01-A.md',
+      expectExit: 0, expectBlock: false
+    },
+    { // ST-01-B：同目录 .cs ⇒ 仍拦（放行面 mdDirs 只认 .md）
+      id: 'ST-01-B', name: '01阶段 写 requirements/台账.cs → 拦截(.md 限定)',
+      phase: '01', active: true,
+      tool: 'write_to_file', file: 'requirements/ST-01-B.cs',
+      expectExit: 2, expectBlock: true
+    },
+    { // ST-03-A：03 期写 requirements ⇒ 放行（02 评审期的台账回归写）
+      id: 'ST-03-A', name: '03阶段 写 requirements/方案.md → 放行',
+      phase: '03', active: true,
+      tool: 'write_to_file', file: 'requirements/ST-03-A.md',
+      expectExit: 0, expectBlock: false
+    },
+    { // ST-02-A：02 期未加表 ⇒ 仍拦（守卫：防「顺手也放 02」的越权）
+      id: 'ST-02-A', name: '02阶段 写 requirements/台账.md → 仍拦截(未加表·守卫)',
+      phase: '02', active: true,
+      tool: 'write_to_file', file: 'requirements/ST-02-A.md',
+      expectExit: 2, expectBlock: true
+    },
+    { // ST-07-A：07 的表无 mdDirs ⇒ 仍拦（守卫：阶段清单补文档不等于放行）
+      id: 'ST-07-A', name: '07阶段 写 requirements/台账.md → 仍拦截(07 表无 mdDirs)',
+      phase: '07', active: true,
+      tool: 'write_to_file', file: 'requirements/ST-07-A.md',
+      expectExit: 2, expectBlock: true
+    }
+  );
+}
+
 // ── SHIM：转发层「反推 / fail-closed」三态（FIX-48 · 2026-10-11；四件套见 runtime/FIX-48-四件套.md v2）──
 //   背景：CLI bg worktree 隔离区缺 engine/** ⇒ 原 5 候选全空 ⇒ fail-closed 拦死 headless job；
 //   修复 = shim 从 `<根>/.git`（`gitdir: <主仓库>/.git/worktrees/<id>`）反推主仓库实现。
 //   ★ 用例直调「sandbox 内 shim 副本」+ 显式 projectDirOverride —— 否则本地候选会命中真实项目实现，测不到边界。
-if (!IS_PROJECT_LAYOUT) console.log('  [SHIM] ⏭ 非项目布局（HOOK 不在 <proj>/.{ide}/hooks/）⇒ 整组 SKIP（不计入分母）');
+// ── 整组 SKIP 计数（2026-11-24 · T5a）────────────────────
+//   原实现只在跳过时打印一行，SKIP 数不可见 ⇒ 仓库直跑被误读成「全覆盖」。
+//   口径：按**实际未注册的用例条数**累加（组内是多例，禁按「组 = 1」计）。
+// ★ 整组跳过 = 该组**全部** id 都未注册，含条件入列的 SHIM-1（实测校准：写 2 会少记 1，
+//   非项目布局下 99−14=85 ≠ 实际注册 84）；项目布局但无实现时 SHIM-1 走下方 else 分支单记 +1。
+const SHIM_GROUP_SKIP = 3;    // SHIM-1/2/3
+const HOST_GROUP_SKIP = 12;   // H1~H11 + H10b
+let SKIPPED = 0;
+if (!IS_PROJECT_LAYOUT) {
+  console.log('  [SHIM] ⏭ 非项目布局（HOOK 不在 <proj>/.{ide}/hooks/）⇒ 整组 SKIP（不计入分母）');
+  SKIPPED += SHIM_GROUP_SKIP;
+}
 if (IS_PROJECT_LAYOUT) {
   const implRel = join('.codebuddy', 'skills', 'iteration-workflow', 'engine', 'gate', 'gate-check.mjs');
   const implProj = dirname(dirname(dirname(HOOK)));   // 项目布局：<proj>/.codebuddy/hooks/x → <proj>
@@ -548,6 +599,7 @@ if (IS_PROJECT_LAYOUT) {
     });
   } else {
     console.log('  [SHIM] ⚠ 未能定位项目实现（' + join(implProj, implRel) + '），SHIM-1 跳过（SHIM-2/3 仍跑）');
+    SKIPPED += 1;                                   // 单例跳过：SHIM-1 未注册
   }
   TESTS.push(...cases);
 }
@@ -560,7 +612,10 @@ if (IS_PROJECT_LAYOUT) {
 //     ⇒ **exit code 即可判定"读的是哪一侧"**（0=读本侧 / 2=读另一侧）。
 //   组内统一**白名单式清 4 变量**：GATE_TEST_RUNTIME_DIR（第一优先级短路）/ GATE_HOST_IDE /
 //     CODEBUDDY_PROJECT_DIR / CLAUDE_PROJECT_DIR（身份源）—— 随后各用例按需显式设置（hostEnv）。
-if (!IS_PROJECT_LAYOUT) console.log('  [HOST] ⏭ 非项目布局（HOOK 不在 <proj>/.{ide}/hooks/）⇒ 整组 SKIP（不计入分母）');
+if (!IS_PROJECT_LAYOUT) {
+  console.log('  [HOST] ⏭ 非项目布局（HOOK 不在 <proj>/.{ide}/hooks/）⇒ 整组 SKIP（不计入分母）');
+  SKIPPED += HOST_GROUP_SKIP;
+}
 if (IS_PROJECT_LAYOUT) {
   const HOST_SB = join(SANDBOX, 'host');
   const RUNTIME_REL = join('skills', 'iteration-workflow', 'runtime');
@@ -615,6 +670,7 @@ if (IS_PROJECT_LAYOUT) {
   const cases = [];
   if (!HAS_IMPL) {
     console.log('  [HOST] ⚠ 未能定位项目实现（' + IMPL_SRC + '）—— HOST 组跳过');
+    SKIPPED += HOST_GROUP_SKIP;
   } else {
     // H1 注入层（本侧）
     {
@@ -1228,7 +1284,11 @@ if (ISOLATED) {
 // ── 汇总 ──────────────────────────────────────────────
 
 console.log(`\n───────────────────────────────────────────────────`);
-console.log(`  TOTAL: ${TESTS.length}  |  ✅ ${passed}  |  🟡 ${knownFails}  |  ❌ ${failed}`);
+console.log(`  TOTAL: ${TESTS.length}  |  ✅ ${passed}  |  🟡 ${knownFails}  |  ❌ ${failed}  |  SKIP: ${SKIPPED}`);
+if (SKIPPED > 0) {
+  console.log(`  ⚠ SKIP: ${SKIPPED} 例整组未注册（非项目布局 / 未定位实现）⇒ 本结果**不代表全量覆盖**，`
+    + `禁用它与项目根全量结果互比；SKIP 必须为 0 才是全量口径`);
+}
 console.log(`  通过率: ${((passed + knownFails) / TESTS.length * 100).toFixed(0)}%（含已知漏洞 ${knownFails} 例）`);
 console.log(`───────────────────────────────────────────────────\n`);
 

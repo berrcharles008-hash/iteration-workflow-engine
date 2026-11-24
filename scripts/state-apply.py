@@ -25,7 +25,8 @@
   blocker-add --id <B-n> --desc "…" [--type <t>]
   blocker-rm  --id <B-n>
   defect-add  --id <D-n> --desc "…" [--severity P0|P1|P2] [--level L1|L2|L3]
-                                     [--design-changed true|false]
+                                     [--design-changed true|false] [--status open|deferred]
+                                     ★ 缺 `defects:` 块时自建（2026-11-24 缺块自愈）
   defect-close --id <D-n> [--verified-by user|agent]
   patch [--allow-new] --file <json>         顶层标量覆盖（默认仅已存在键；--allow-new 允许白名单
                                             7 键新建；块/数组键永不接受）
@@ -460,7 +461,23 @@ def append_list(lines, key, item_lines):
     if kind == 'block':
         lines[e:e] = item_lines
         return True
-    return False
+    # ★ 2026-11-24（缺块自愈 · 迭代 2026-11-24-002）：key 完全缺失时**自建块**再追加。
+    #   原实现直接 return False ⇒ 手工建的最小 state（无 `blockers:` / `defects:`）永远登记不了
+    #   缺陷与阻塞；而 `set-block` 又把这两键列入黑名单 ⇒ 唯一合法通道被自己堵死（2026-11-24 实测）。
+    #   落点：`events:` 之前（events 恒为尾部块）；无 events ⇒ 追加到文件末并留一空行。
+    at = None
+    for i, ln in enumerate(lines):
+        if re.match(r'^events:\s*$', ln):
+            at = i
+            break
+    block = [key + ':'] + list(item_lines) + ['']
+    if at is None:
+        while lines and lines[-1].strip() == '':
+            lines.pop()
+        lines.extend([''] + block)
+    else:
+        lines[at:at] = block
+    return True
 
 
 def remove_list_item(lines, key, item_id):
@@ -1515,12 +1532,18 @@ def main():
                 sev = opt(args, '--severity', 'P2')
                 lvl = opt(args, '--level', 'L1')
                 dc = str(opt(args, '--design-changed', 'false')).lower()
+                # ★ 2026-11-24：新增 --status —— 「已立项/转下个迭代」的缺陷应记 deferred 而非 open，
+                #   否则 gate §三-C「存在 open 缺陷禁止推进 06」会把正常承接的缺陷变成阻塞项。
+                st = opt(args, '--status', 'open')
                 if sev not in ('P0', 'P1', 'P2') or lvl not in ('L1', 'L2', 'L3') or dc not in ('true', 'false'):
                     say('defect-add 参数非法（severity P0-P2 / level L1-L3 / design-changed true|false）')
                     return 2
+                if st not in ('open', 'deferred'):
+                    say('defect-add --status 仅支持 open|deferred（fixed 走 defect-close）')
+                    return 2
                 item = ['  - id: "' + did + '"', '    desc: "' + desc.replace('"', '\\"') + '"',
                         '    severity: "' + sev + '"', '    root_cause_level: "' + lvl + '"',
-                        '    design_changed: ' + dc, '    status: "open"',
+                        '    design_changed: ' + dc, '    status: "' + st + '"',
                         '    opened_at: "' + stamp + '"']
                 if not append_list(lines, 'defects', item):
                     say('未找到 defects 列表 → 拒绝')
