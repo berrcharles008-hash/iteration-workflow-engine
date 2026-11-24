@@ -34,7 +34,7 @@ const SELF = fileURLToPath(import.meta.url);
 const GATE_DIR = dirname(SELF);
 // ★ 变量名**不可回退为 IDE_DIR**（2026-10-27 实测 · audit A10-f 踩坑）：
 //   audit-engine.py 的 A10-f 把「文档反引号内的 UPPER_SNAKE」∩「engine/gate/*.mjs 顶层 const」
-//   做「只拦新增」的计数守门；而既有文档 template-injection.md:111 里就写着 `IDE_DIR` ⇒
+//   做「只拦新增」的计数守门；而既有文档 ../context/template-injection.md:111 里就写着 `IDE_DIR` ⇒
 //   本目录一旦出现同名 const，耦合计数 17→18 立即 ERR（本次正是因此红）。
 //   推论：**在 engine/gate/ 新增顶层 UPPER_SNAKE 前，先 grep engine/**/*.md 的反引号词**，
 //   否则会无声扩大符号域并让 audit 变红。

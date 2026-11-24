@@ -34,7 +34,7 @@
 // 配套：`tools/qqbot/wait-answer.ps1 -Id <n> -TimeoutSec 300`（轮询答案文件，拿到即返回 JSON）
 // 典型流程（agent 不停机等待）：
 //   ask.js 登记（默认已等待）→ 你在 QQ 回「确认#N」→ 服务写答案文件 → 同一进程返回 → agent 继续
-// ★ **登记 ≠ 等待**（waiting-protocol.md §2 铁律）：只登记不等待 = 本次登记无效。
+// ★ **登记 ≠ 等待**（engine/collab/waiting-protocol.md §2 铁律）：只登记不等待 = 本次登记无效。
 //   三种合法等待形态只取其一：① 本脚本默认等待或登记后立即挂 wait-answer.ps1（模式 A）
 //   ② 登记后立即派 waiter 成员（模式 D）③ 登记时带 `--handoff`（模式 B）。
 //   只登记然后结束回合 ⇒ 答复必然无人消费（IDE 会话唯一唤醒通道 = 成员 send_message）。

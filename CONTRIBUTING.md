@@ -63,7 +63,7 @@ docs(readme): 更新快速入门指南
 ### 4. 代码规范
 
 - Markdown 文档使用中文 + 英文双语（如适用）
-- 文件名使用 kebab-case（如 `gate-protocol.md`）
+- 文件名使用 kebab-case（如 `engine/gate/gate-protocol.md`）
 - 引擎文件放在 `engine/` 目录下
 - 项目配置放在 `project/` 目录下
 - 新增协议文件需在 `SKILL.md` 中注册引用
@@ -141,7 +141,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/) format:
 ### 4. Code Standards
 
 - Markdown docs in bilingual (Chinese + English) where applicable
-- File names in kebab-case (e.g., `gate-protocol.md`)
+- File names in kebab-case (e.g., `engine/gate/gate-protocol.md`)
 - Engine files go under `engine/`
 - Project config goes under `project/`
 - New protocol files must be registered in `SKILL.md`

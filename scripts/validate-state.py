@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 validate-state.py — state.yaml §3.3 Schema 强制校验（SLIM-4 / D-1 脚本化）
-SSOT：engine/state-protocol.md §3.3（规则本体）；本脚本为执行通道，规则逐条对应如下
+SSOT：engine/state/state-protocol.md §3.3（规则本体）；本脚本为执行通道，规则逐条对应如下
 （★ 锚 = §3.3 标题词；禁写行号——SLIM-5 ST-6 去行号化：state-protocol 节序可能对调、行号必漂移）：
   [R1] 必填字段 7 项            → §3.3「必填字段检查」
   [R2] started_at/ended_at 可选 → §3.3「必填字段检查」下 ★ 可选度量字段注记（缺失不报错，向后兼容）

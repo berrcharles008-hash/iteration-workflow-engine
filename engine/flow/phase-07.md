@@ -1,0 +1,360 @@
+# 阶段七：07-迭代回顾（★ 所有复杂度强制）
+
+**目标**：每个迭代结束后的强制回顾，反思过程、沉淀经验、形成改进行动项。
+
+**对应 Scrum**：Sprint Retrospective
+
+**触发条件**：06 阶段归档完成（`iteration_status = "completed"`, `current_phase = "07"`）
+
+**回顾对象**：**过程**（工作方式、流程、协作、工具），不是**产品**（那是 05 Review 干的）
+
+**适用复杂度**：全部等级都不能跳过——Bug 修复迭代更必须做
+
+### 与现有复盘机制的关系
+
+| 现有机制 | 07-回顾 |
+|---------|--------|
+| `lessons-learned.md`（被动复盘） | 主动回顾（每个迭代强制） |
+| 原 06 阶段 `step-3-lessons`（正向提炼） | 合并吸收：正向模式提炼迁移到 07 的 step-5 |
+| 触发条件：出错时 | 触发条件：每个迭代结束 |
+| 产出：单条记录 | 产出：回顾报告（结构化） |
+
+### 各复杂度等级的执行模板
+
+| 等级 | 执行深度 | 最小产出 | 时间盒 |
+|:----:|---------|---------|:--:|
+| 🟢 简单 | 精简版 | 独立 `07-迭代回顾/07-迭代回顾.md`（300字以内，精简三段式） | 5分钟反思 |
+| 🟡 中等 | 标准版 | 独立 `07-迭代回顾报告.md`（含问题清单+改进措施） | 15分钟反思 |
+| 🔴 复杂 | 完整版 | 独立 `07-迭代回顾报告.md` + 模式库更新 + lessons-learned沉淀 | 30分钟反思 |
+
+### 回顾报告模板
+
+#### 精简版（🟢 简单）
+
+创建独立文件 `07-迭代回顾/07-迭代回顾.md`（目录结构完整，内容精简）：
+
+```markdown
+# 07-迭代回顾
+
+> 迭代：{迭代ID}  归档时间：{日期}
+
+## 本次迭代总结
+- 做了什么：{一句话}
+- 耗时：{估算}
+- 返工：有/无（{说明}）
+- 测试结果：{N/N 通过}
+
+## 改进点
+- {0~1个改进点}
+
+## 正向模式提炼
+{有/无}
+```
+
+#### 标准版/完整版（🟡 中等 + 🔴 复杂）
+
+独立文件 `07-迭代回顾报告.md`，模板：`phase-07-迭代回顾报告.md`，🟢简单用 `phase-07-迭代回顾-lite.md`（优先级见启动协议 §模板解析优先级）。
+
+### 步骤清单（进入阶段时写入 phase_steps）
+
+| 步骤ID | 步骤名称 | 强制 | 🟢 | 🟡 | 🔴 |
+|--------|---------|:--:|:--:|:--:|:--:|
+| step-0-baseline-07 | M1 基线记录（baseline-set --phase 07） | ✅ | ✅ | ✅ | ✅ |
+| step-1-summary | 迭代总结（做了什么/做对了什么/可改进什么） | ✅ | 精简 | 标准 | 完整 |
+| step-2-issues | 问题清单（本次迭代遇到的问题） | ✅ | 精简 | 标准 | 完整 |
+| step-3-patterns | 模式沉淀（写入 lessons-learned 模式库） | — | 跳过 | 按需 | ✅ |
+| step-3-5-workflow-audit | 工作流一致性审计（`scripts/audit-engine.py`） | ✅ | ✅ | ✅ | ✅ |
+| step-3-6-attribution | 偏差归因 | — | 跳过 | ✅ | ✅ |
+| step-4-actions | 行动项（改进措施落实到人） | — | 跳过 | ✅ | ✅ |
+| step-5-lessons | 正向模式提炼（从原 06 step-3 迁移过来） | ✅ | ✅ | ✅ | ✅ |
+| step-6-archive | 回顾归档（更新 state.yaml 完成 07，释放 ACTIVE） | ✅ | ✅ | ✅ | ✅ |
+
+**★ 写入方式（M2 · 2026-11-19 起：唯一通道 = `state-apply.py append-steps`）**：`phase_steps` 是**跨阶段累积**的，初始化本阶段只能**块末追加**。
+
+| # | 硬约束 | 违反后果 |
+|---|---|---|
+| 1 | 禁整块替换（块区间一次性赋值的形态） | 删掉前序阶段全部步骤记录（2026-11-01 删 35 条、11-04 删 12 条） |
+| 2 | **禁从 `runtime/_steps_*.py` 复制** | 该目录正反两类历史脚本并存，形态不可辨 |
+| 3 | 追加后必须打印 total 并核对 | 期望值 = 各阶段步骤数之和 |
+| 4 | **禁内联 python 直改 `state.yaml`**（M2） | 绕过 version/backup/events/validate 四道关；手写路径已由门禁拦截 |
+
+```bash
+python .codebuddy/skills/iteration-workflow/scripts/state-apply.py append-steps \
+  --steps "step-1-summary|迭代总结|pending|true;step-2-issues|问题清单|pending|true;step-3-patterns|模式沉淀|pending|false;step-3-5-workflow-audit|工作流一致性审计|pending|true;step-3-6-attribution|偏差归因|pending|false;step-4-actions|行动项|pending|false;step-5-lessons|正向模式提炼|pending|true;step-6-archive|回顾归档（释放 ACTIVE）|pending|true"
+```
+
+- 条目格式 `id|name|status|mandatory`；`status` 缺省 `pending`、`mandatory` 缺省 `true`
+- 脚本内部一次完成：块末追加 → 重复 id 拒绝 → `version+1` → **`events` 追加** → 备份 → ACTIVE 同步 → `validate-state.py`（失败自动回滚）
+- 输出 `phase_steps 块末追加 N 条（total=…）`，据此核对硬约束 #3
+
+<details>
+<summary>历史内联模板（仅供理解 YAML 结构；<b>已禁止用于写盘</b>）</summary>
+
+```python
+# 不再使用：块末追加 + 去重已由 append-steps 承接
+STEPS = [('step-1-summary', '迭代总结', 'pending', True)]
+lines[end:end] = out          # ★ 块末追加（唯一正确形态）
+```
+</details>
+
+### Step 3 执行标准（🟡 "按需"的判断规则）
+
+> 🟡 中等级"按需"不等于"可选"。满足以下任一条件即为"需要写入"：
+
+| 条件 | 示例 |
+|------|------|
+| 出现了跨迭代可复现的错误模式 | 编号不一致、定义缺失、同步断裂等 |
+| 发现了新的流程缺失/断裂 | 某强制步骤被绕过、检查点缺失 |
+| 验证了某个重要假设 | 某个机制首次被验证有效 |
+
+> "按需"仅指：当以上条件全部不满足时，本迭代不产生新模式 → 跳过 step-3。
+> **禁止**：Agent 以"按需"为借口统一跳过。必须在报告中说明判断过程。
+> **禁止**：将模式写入列为"候选/建议/待后续迭代"。写报告 ≠ 写模式库。
+
+### Step 3 附：知识资产抽取（B2/B3 · 骨架/问答 → 项目层模板）
+
+**触发**：🟡 按需 / 🔴 执行——本迭代 01/02/03 产物中出现"可跨需求复用的骨架或问答模式"时。
+
+**流程**：
+1. 提取候选：从 `01-需求记录.md` / `02-需求评审.md` / `03-技术方案.md` 提取通用结构
+   （反复出现的段落组织、有效问答序列、方案骨架）。
+2. 对账：与项目层**同名**模板 diff 对比（不存在 ⇒ 首次抽取时以 engine 版为基底创建）。
+3. 改写：以 engine 版为基底**增量改写**（只增不改引擎既有章节语义）。
+4. ★ **落盘窗口（v2，评审 B#1）**：07 阶段写入面不含项目层模板目录 ⇒ 07 内**只产出
+   "抽取清单 + 改写草案"**（落 07 回顾报告附录）；实际改写/创建动作在**下迭代 01-03 窗口**
+   （免开闸）或用户开闸时执行。
+5. 兜底：无法归入阶段模板形态的产物 ⇒ 形成知识资产文档（项目层，首次产出时创建；
+   引用处不写全路径反引号，防 audit A4 WARN）。
+6. 无增量 ⇒ 跳过并注明"本迭代无模板增量"。
+
+**维护义务**：engine 版更新后（引擎演进），项目层同名模板须做一次 diff 对账（防分叉漂移）。
+
+**候选区处理（B1 配套）**：对 `project/lessons-learned.md`「模式候选区」逐条处置——
+转正（分配 P-编号入活跃表，带置信度）或丢弃（删除）；不允许无期限保留。
+
+### Step 3.5：工作流一致性审计（★ 强制 · 各复杂度）
+
+**执行**：`python scripts/audit-engine.py`（纯读、不写文件、< 5s；规范页 = `engine/governance/consistency-checklist.md`）。
+
+| 情况 | 动作 |
+|------|------|
+| 全部通过 | 报告中写一行「工作流一致性审计：通过」 |
+| 有 WARN | 报告记录 WARN 摘要 + 登记 `runtime/TOOLING-TODO.md` |
+| 有 ERR | 同上，**但不阻断归档**（ERR = 确定性不一致，属元层待办） |
+
+> ★ **两个维度勿混**：本步骤 `mandatory = true` 指**「必须执行」**；「ERR/WARN 不为空」**不阻塞归档**。
+> 禁止把「审计未清零」当作归档的前置条件（那会造成"引擎有问题 ⇒ 业务迭代无法归档"的死锁）。
+> ★ **范围限定（2026-11-05）**：本条只约束**本步骤**的审计结果；`§6.1` 第 4 项（蒸馏义务）不属此列 ——
+> 它的补救动作（就地蒸馏）在归档前可做，见 §6.1 三码分流，不会形成闭环。
+
+> **禁止**以"本次迭代与引擎无关"为由跳过 —— 该步骤检查的正是**引擎自身是否被改坏 / 改乱**。
+
+### Step 3.6：偏差归因（`|dev| > 50` 必写，否则标注"未触发"）
+
+> `mandatory` 取值以 `complexity-scoring.md` §二为准（🟢=`false` 跳过、🟡/🔴=`true`）。
+
+**取值来源（★ 不依赖 state 字段）**：看板（`docs/iterations/BOARD.md` / `board.html`）或 `phase-aggregates.csv` 的「预估 / 实际 / 偏差」三列；
+- 实际 = 该迭代窗口行的 `Σ sumElapsedMs`（净工时口径，含等待 ⇒ 日历跨度上界）；
+- 偏差 = `(实际 − 预估) / 预估 × 100`（看板渲染时现算，不落 state）。
+
+**判定与回写**：
+- **偏差绝对值 > 50**（即 `|dev| > 50`）：回顾报告**必写**归因（规模误判 / 缺陷返工 / 需求变更），并回喂基线；
+- **偏差绝对值 ≤ 50**：回顾报告中标注「未触发」；
+- **预估或实际缺失（`—`）**：标注「不可算」，不写归因。
+
+> ★ 归因结论写入 `07-迭代回顾/07-迭代回顾.md`；仅**已结束**迭代参与对账（进行中迭代不参与）。
+> ★ 判据为「看板 / CSV 取值」而非 state 字段（03 §4.5）。
+
+### Step 5：正向模式提炼（★ 强制，60秒反思）
+
+**Step 5 执行流程**：
+
+1. **反思判断**（60秒）：本次迭代有没有"首次跑通"的路径？
+   判断标准（满足任一即为正向模式）：
+   - 之前没有先例，这次摸索出了正确做法
+   - 之前靠猜测，这次验证了某个技术决策是对的
+   - 之前流程模糊，这次明确了某个步骤的正确顺序
+
+2. **有 → 立即写入文件**（不可推迟到后续迭代）：
+   - 文件：`project/lessons-learned.md`
+   - 位置：`## 六、已知模式库` → 活跃模式 表格末尾
+   - 操作：新增一行，`type="success"`，分配 P-编号
+   - 执行步骤：① `read_file` project/lessons-learned.md ② 确定最新 P 编号 ③ `replace_in_file` 在活跃模式表格末尾新增行 ④ 更新 `最后更新` 时间戳
+
+3. **无 → 跳过**，在回顾报告中注明"本迭代无正向模式可提炼"。
+
+4. **★ 禁止行为**：
+   - ❌ 在报告中写"P-xxx~P-xxx 建议下一个迭代写入"——写报告 ≠ 写模式库
+   - ❌ 用"详见报告 §3.1"替代实际修改 `project/lessons-learned.md`
+   - ❌ 07 阶段结束时 lessons-learned.md 无新增行但报告声称"已沉淀"
+
+> 区别于错误模式（来自失败复盘），正向模式来自成功路径，同样有复用价值。
+
+### Step 6：回顾归档
+
+**6.1 前置自检 — 模式库落地验证（★ 强制执行，不可跳过）**：
+
+| 检查项 | 验证方法 | 通过标准 |
+|--------|---------|---------|
+| step-3 声称需写入错误模式 | 回顾报告 §3 节 | 若声称"需写入"，则 `project/lessons-learned.md` 必须已有对应新增行 |
+| step-5 声称有正向模式 | 回顾报告 §5 节 | 若声称"有"，则 `project/lessons-learned.md` 必须已有 P-xxx（success）行 |
+| lessons-learned.md 实际内容 | `search_content` 搜索最新 P 编号 | 确认新增行存在于文件中，非仅在报告中 |
+| 模式库蒸馏义务（第 4 项） | `node runtime/check-distill.mjs` 退出码 | 0 通过 / 3 需蒸馏 / 1 工具故障 |
+| 产物内容合同（M1） | `python scripts/validate-artifacts.py --phase 07` 退出码 | 0 通过 / 1 未过（缺概念·空章节·只剩占位·复制旧报告） |
+| 基线相对变化（M1） | `python scripts/state-apply.py artifact-check --phase 07 --require-baseline` 退出码 | 0 通过（有新增或变化）/ 1 未变（沿用旧文件）或基线缺失 |
+| 引擎变更清单（F1） | `freeze-check --json` 退出码与输出 | `SKIP(no baseline)` 或漂移清单与 `engine_baseline.at` 一致 |
+
+> ★ **F1 两项口径**：① 无 `engine_baseline`（001/002 及更早的 state）⇒ 单行 `SKIP(no baseline)`、rc=0，
+> **不阻断归档**（同「环境不足 ⇒ SKIP 不阻断」例）；② 本迭代自举（自身在改 `engine/**`）⇒
+> `changed` 非空属**预期**，如实登记 `07-迭代回顾.md` §八即可，不据此判该项失败。
+
+> **若任何一项检查失败**：不更新 state.yaml、不释放 ACTIVE。先执行缺失的写入操作，再重新自检。
+
+> ★ **M1 基线的两个时点（勿混）**：
+> - **阶段开始时**（`phase-advance --to NN` 之后立刻）：`python scripts/state-apply.py baseline-set --phase NN`
+>   —— 记下该阶段目录当时的产物 hash（目录还不存在也照记，`files: []`）。漏记 ⇒ 归档时 `--require-baseline` 会拒。
+> - **归档（finish）时**：上面表格后两行。`未变` 的语义是「阶段开始就有这份文件、到结束一个字没改」
+>   ⇒ 该产物不是本阶段产出的，故拒；`新增 / 变化` 才放行。
+> - 两类失败原因不同、修法不同：内容合同红 = 产物本身不合格（去补写/重写）；基线红 = 产物没产出（去写或重跑）。
+> - 环境不足（`scripts/validate-artifacts.py` 或 `templates/manifest.json` 缺失、脚本异常）⇒ **SKIP 不阻断**，
+>   登记 `runtime/TOOLING-TODO.md`；不得因为"跑不了校验"就跳过归档自检。
+
+> ★ **第 4 项三码分流（2026-11-05 BATCH-B 新增）** —— 退出码由 `runtime/check-distill.mjs` 给出：
+> - `0` ⇒ 通过（活跃条目 ≤15 **且** 活跃表 ≤6000 字符）。
+> - `3` ⇒ **不得归档**：就地按 `engine/governance/lessons-learned.md` §七 蒸馏至 ≤10，重跑得 `0` 再继续。
+>   07 归档前是本步的**兜底蒸馏窗口**（门禁在 07 阶段放行该文件；蒸馏工序同 01-03，含 `.bak` 备份 + 留痕）。
+> - `1` ⇒ 工具故障（文件不可读 / 结构变更 / 脚本异常）：登记 `runtime/TOOLING-TODO.md`，**不阻断归档**。
+>   （故 3 与 1 必须分码：node 未捕获异常同为 `1`，混用会把一次崩溃读成「活跃超阈值」。）
+> ★ **为何 `3` 不构成死锁**：Step 5 强制「有则立即写入」⇒ 归档时活跃数必然上抬；若此处只判「超阈值 ⇒ 拒绝」，
+> 而蒸馏又只能在「下一次 01-03」，正好闭合成「归档被拒 ⇒ 没有下一迭代 ⇒ 没有 01-03 窗口」。
+> ⇒ 补救动作必须在本步可用，这是把阈值红灯接上「当场可做的动作」而非只接拒绝。
+
+**6.2 归档操作**：
+
+- **① 登记 07 完成条目**（★ 必须先于 ACTIVE 释放）：
+  缺此步 ⇒ `phase_history` 无 07 条目 ⇒ `phase-align.mjs` 无法构成 07 窗
+  ⇒ 阶段消耗表永无 07 行、07 轮次落 unphased 尾隙（实证 TOOL-07PH / 迭代 2026-10-08-001）。
+  在 canonical state（**`{IDE}/skills/iteration-workflow/runtime/<迭代ID>.state.yaml`** —— ★ FIX-49 v2.4：
+  canonical = **本宿主侧**，原硬编码 `.claude` 已废止）的 `phase_history` 末尾**手写**追加 3 行
+  （格式红线：条目行 2 空格缩进 + `- `、字段行 4 空格缩进、值带双引号、`completed_at` 精确到分——错一个字符 metrics 解析器即漏）：
+  `  - phase: "07"` / `    status: "completed"` / `    completed_at: "{YYYY-MM-DDTHH:MM}"`；
+  同笔将 `phase_status` 改为 `"completed"`。然后两步收口：
+  - a. `python scripts/validate-state.py {IDE}/skills/iteration-workflow/runtime/<迭代ID>.state.yaml`
+    → ERROR 0 才继续。★ 必须显式传 canonical 路径（**本侧**，FIX-49）：省略 path 时
+      解析口径见 `validate-state.py`（脚本自身侧）；
+  - b. `python scripts/state-apply.py summary --text "<回顾完成的新总结>"`（**单写本侧**：写 state + 本侧 ACTIVE Line2
+      + validate + 留痕；★ FIX-49 v2.4 起**不再镜像另一侧** —— 跨宿主接力前跑 `scripts/sync-runtime.py` 收敛）。
+    ★ 文本必须更新 ⇒ 非幂等 ⇒ 才走通用收尾补锁/写入/备份/validate/留痕；
+    幂等 return 0 时既不校验也不写入（模式先例 P-130 + 演练 2026-10-09）。
+- `iteration_status` 保持为 `"completed"`（`phase_status` 已在 ① 改为 `"completed"`）
+- **② 释放 ACTIVE 指针**：将 `runtime/ACTIVE` 写入 `"none"`
+- **③ 刷新机器投影**（★ 归档后执行；全部写入走脚本通道，勿用文件工具直改 docs/）：
+  投影数据源含 `phase-aggregates.csv`（由 `phase-align` 从 state + 消息库重算）——07 条目刚写入 state
+  ⇒ 必须**先重算聚合**再刷投影；只重刷看板不足（除非其后恰有一次全量刷新，不可依赖）。
+  命令（CWD 无关，脚本自推导路径）：
+  - `node .codebuddy/skills/iteration-workflow/runtime/metrics/refresh-metrics.mjs --force`
+    （全链：扫描 → 迭代对齐 → 阶段聚合 → board 强刷；`--force` 绕过 board 6h 节流）
+  - `python tools/gen_doc_index.py`（同族索引；`--check` 为只读核验）
+  - `python tools/gen_iteration_board.py --report`（汇报看板 `项目管理/一期汇报看板.html`；
+    ★ 语义：其渲染失败 = 源文档表格定位缺失（`render_report()` 返回 `not missing`）⇒ 打印「未定位到…」且 **exit 2**
+    ⇒ 登记 `runtime/TOOLING-TODO.md`，**不阻断归档**；阶段消耗/执行看板/索引不受影响，因三者为前两条命令产物）
+  **自检判据（四条全中才算完成）**：
+  a. docs/iterations/<迭代ID>/阶段消耗.md 出现本迭代 07 行；
+  b. docs/iterations/BOARD.md 的"当前正在做"不再指向本迭代
+     （可执行核对：`Select-String -Path docs/iterations/BOARD.md -Pattern "<迭代ID>" -Quiet` 应无命中）；
+  c. docs/iterations/INDEX.md 的阶段矩阵与缺口清单与本迭代终态一致。
+  d. 偏差归因已落定：看板 / `phase-aggregates.csv` 的「预估 / 实际 / 偏差」三列可取；缺 `estimate_*`
+     或无 agg 行 ⇒ 输出 `—`（「不可算」，不阻断归档）；`|dev| > 50` ⇒ 回顾报告已写归因
+     （规模误判 / 缺陷返工 / 需求变更）并回喂基线，否则标注「未触发」（判据见 Step 3.6）。
+  ★ 口径备忘（两类"看不到行"须分清）：
+  ① **有窗 0 轮**（06 发布动作跳过等）⇒ 投影输出该阶段**占位行**（`rounds=0` + 备注「该阶段窗内无模型轮次」；
+     轮已归相邻阶段，**非数据丢失**；占位行各列恒 0 ⇒ 不破坏 Σ 对账恒等）；
+  ② **零宽窗**（阶段 `completed_at` 与前序同值，多为 date 级时间戳的历史迭代，如 2026-09-20-001）
+     ⇒ 该阶段**无窗可占位**（`phase-align` 设计上跳过零宽/倒挂窗 + WARN）⇒ 仍无逐阶段行，属已知欠账（工单 METRICS-7）。
+  ★ 失败处置：输出 SKIP(lock held by live pid) ⇒ 约 1 分钟后重跑；仍失败 ⇒ 登记 `runtime/TOOLING-TODO.md`
+  并补跑 `--board-only`（仅补投影；下次 hook 全量亦会自动补）。
+  ★ 次序：本步在 ② 之后（判据 b 要求投影反映"无活跃迭代"终态）；其写入经脚本子进程完成，不受门禁影响
+  （P-088 语境）——若确需人工修补 docs/ 文件，须临时恢复 ACTIVE 或改走脚本通道。
+  ★ 手工索引：`docs/iterations/README.md`（人工写主题/范围，非生成物）的更新属 P-088 收口清单，
+  须在释放 ACTIVE **前**完成。
+  ★ 时机：须在本迭代全部 state 写入完成后执行（含 §6.3 `self_evolve`）。
+- 此时迭代才算**真正完成**
+- ★ 回退：① 执行后若回顾被用户推翻，先回退该条目（`status` → `in_progress`、删 `completed_at`、`phase_status` → `in_progress`）再重做回顾，勿直接重跑
+
+**6.3 自进化健康度记录**：
+
+将本次自进化执行情况经 `state-apply.py` 的 `set-block` 通道写入 `self_evolve` 块（禁止 `write_to_file` 直写 state.yaml）：
+
+```bash
+python "scripts/state-apply.py" set-block --file <json>
+```
+
+入参 JSON 恰好一个顶层键 `self_evolve`，值为对象：
+
+```json
+{
+  "self_evolve": {
+    "last_executed": "{日期}",
+    "patterns_written": ["P-xxx", "P-xxx"],
+    "patterns_deferred": 0
+  }
+}
+```
+
+`patterns_deferred` 必须为 `0`；不允许推迟。
+
+**6.4 运行健康度评分（S4 · 可选 · ★ 不阻断归档）**：
+
+> 时点：在 §6.2 ① 写入 07 完成条目**之后**（否则 07 产物无从判「阶段后回改」）。显式传 `--iteration`
+> ⇒ 不依赖 ACTIVE 是否已释放，放在 ② 前后皆可。
+
+```powershell
+$score = ".codebuddy/skills/iteration-workflow/runtime/metrics/score-run.mjs"
+if (Test-Path $score) { node $score --iteration "<迭代ID>" } else { Write-Output "SKIP(no metrics)" }
+```
+
+- **输出**：stdout 的「## 运行健康度」Markdown 段原样粘进 `07-迭代回顾/07-迭代回顾*.md` 末尾；
+  同笔落 `runtime/metrics/scores/<迭代ID>.json` + `scores.csv`（脚本只读，不改任何产物）。
+- **口径**：唯一事实源 `design/run-health-scoring.md` §4；权重/阈值在 `runtime/metrics/score-config.json`。
+  **禁止手工改分**——要改口径先改 §4 并取得用户拍板。
+- **三种非阻断态，一律照常归档**：`SKIP(no metrics)`（未装度量底座）/ 某维 `—`（取不到数，不写 0）/
+  `judged=false`（缺数权重 >30% 或处于观察期）。
+- ★ **为何不阻断**：R1 级阻断已由 §6.1 的 `artifact-check` 承担；评分是反馈信号，不是门禁（对标 §5「不自动回写」）。
+- ★ **同一迭代只追加一次**：追加段会让 07 报告 mtime 晚于 `completed_at` ⇒ 重算该迭代时 D4① 会把它计成
+  「阶段后回改」。要复算历史迭代用 `--no-write` 只看 stdout，不要再追加。
+
+**产出**：🟢 简单 = `07-迭代回顾/07-迭代回顾.md`（精简三段式）；🟡 中等 / 🔴 复杂 = `07-迭代回顾/07-迭代回顾报告.md`（均为独立文件）
+
+> **版式纪律**：产出文档须遵循 `engine/domain/doc-style-guide.md`（模式条目用"编号 + 要点列表"，不塞表格）；生成后自检 `python scripts/doc_lint.py <文件>`（ERROR 必修）。
+
+**交付标准**：回顾报告完成，模式库已实际写入，**知识资产抽取已评估（有增量 / 无）+ 候选区已清池**，ACTIVE 释放，用户确认"回顾完成"；**投影已刷新**（阶段消耗明细出现 07 行 + 看板/索引终态一致）；**文档版式自检 ERROR 0**（`python scripts/doc_lint.py <文档>`）；**产物内容合同与基线比对均 0 ERROR**（`validate-artifacts.py --phase 07` + `state-apply.py artifact-check --phase 07`）
+★ 等待方式（A/B/D + 时限/退化）见 `engine/collab/waiting-protocol.md`。
+
+### ★ 流程变更说明
+
+```
+原流程：01 → 02 → 03 → 04 → 05 → 06 → (结束，06 归档时释放 ACTIVE)
+新流程：01 → 02 → 03 → 04 → 05 → 06 → 07 → (结束，07 归档时释放 ACTIVE)
+
+06 阶段变更：
+- step-3-lessons（正向模式提炼）从 06 移除，迁移到 07 step-5
+- 06 归档后 iteration_status 设为 "completed"，current_phase 推进到 "07"
+- 06 归档不再释放 ACTIVE 指针
+
+07 阶段结束后：
+- 07 归档后才释放 ACTIVE（写入 "none"）
+- 防止新迭代在回顾完成前抢占
+```
+
+### ★ 自进化铁律（Anti-Pattern 禁止清单）
+
+> 以下行为已在历次迭代中反复出现，明确禁止：
+
+| 编号 | 禁止行为 | 正确做法 | 来源迭代 |
+|:--:|---------|---------|:--:|
+| AP-1 | 报告中写"建议下一个迭代写入模式库" | 本迭代 07 阶段结束时必须实际写入 `project/lessons-learned.md` | 028 |
+| AP-2 | step-3 标记为"按需"后全部跳过不评估 | 逐条对照 §Step 3 执行标准 评估，不应写入时需在报告中说明理由 | 015, 028 |
+| AP-3 | step-6 归档时不验证模式库是否实际更新 | 执行 §6.1 前置自检的 7 项检查（第 4 项 = 蒸馏义务退出码），失败则补写 | 015, 028 |
+| AP-4 | 正向模式只写在回顾报告中，不修改 lessons-learned.md | step-5 流程第 2 步：有则立即 `replace_in_file` | 028 |
+
+> **违反以上铁律 = step-6 自检不过 → ACTIVE 不释放 → 迭代不能结束。**

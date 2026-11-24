@@ -25,7 +25,7 @@
 //     ② `--id` 用于精确消费本会话登记的编号（首选；id 来自 `ask.js` 返回的 `#id=`）；
 //     ③ 消费后回显「已消费 #N …」清单（替代只报条数）。
 //
-// ★ TOOL-QQWAIT invariant（2026-10-19，引擎侧 waiting-protocol.md §4 同文）：
+// ★ TOOL-QQWAIT invariant（2026-10-19，引擎侧 engine/collab/waiting-protocol.md §4 同文）：
 //   `ask.js` 命中答复后**不得**同回合再跑本脚本 `--consume` —— `ask.js` 不写 `consumedAt`，
 //   重复消费会让同一答复被再次读到（`ask.js` 判 JSON 内 `ts`，本脚本判 `consumedAt`，
 //   `wait-answer.ps1` 判文件 mtime ⇒ 三套新鲜度判据并存，勿混用）。

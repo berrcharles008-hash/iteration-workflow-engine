@@ -41,51 +41,17 @@
 
 ```
 sj-iteration-workflow-engine/
-├── engine/                          ← 核心引擎文件
-│   ├── startup-protocol.md          ← 启动协议（Step A-E）
-│   ├── workflow-engine.md           ← 七阶段流程详细定义
-│   ├── gate-protocol.md             ← 门禁协议
-│   ├── state-protocol.md            ← 状态文件读写规范
-│   ├── complexity-scoring.md        ← 复杂度自适应评估
-│   ├── phase-steps.md               ← 各阶段步骤清单
-│   ├── phase-01.md ~ phase-07.md    ← 各阶段详细定义
-│   ├── cross-review-protocol.md     ← 独立 Agent 交叉审查
-│   ├── context-discipline.md        ← 上下文纪律（定点读 · 反全文入上下文）
-│   ├── waiting-protocol.md          ← 确认等待点统一等待方式（A/B/D + 时限/退化；RESUME-3）
-│   ├── multi-story-workflow.md      ← 多 Story 并行模式
-│   ├── naming-conflict-check.md     ← 命名冲突预检
-│   ├── team-agent-strategy.md       ← Team Agent 并行决策
-│   ├── delta-marking.md             ← Delta 标记体系
-│   ├── template-injection.md        ← 变量注入协议
-│   ├── consistency-checklist.md     ← 文件一致性检查清单
-│   ├── lessons-learned.md           ← 事故案例库 + 复盘机制
-│   ├── capability-map.md             ← ★ 能力地图（11 域 · 状态标记 · 能力索引层）
-│   ├── doc-style-guide.md            ← 文档版式规范（drift 修复：原漏列）
-│   ├── evolution-safety.md          ← 自修改安全协议（快照/回滚）
-│   ├── gate-decision-table.md       ← 门禁决策表
-│   ├── startup-protocol-step-e.md   ← 每日工作日志协议
-│   ├── startup-protocol-step-a5.md  ← Step A.5 自检详情（惰性）
-│   ├── gate/                        ← 门禁实现（gate-check.mjs；drift 修复：原未收录）
-│   └── templates/                   ← 阶段文档模板
-│       ├── phase-01-需求记录.md
-│       ├── phase-01-需求文档-lite.md
-│       ├── phase-02-需求评审.md
-│       ├── phase-03-技术方案.md
-│       ├── phase-04-开发任务清单.md
-│       ├── phase-05-测试验证报告.md
-│       ├── phase-05-测试报告-lite.md
-│       ├── phase-06-发布上线记录.md
-│       ├── phase-06-上线记录-lite.md
-│       ├── phase-07-迭代回顾报告.md
-│       ├── phase-07-迭代回顾-lite.md
-│       ├── bug-requirement-template.md
-│       ├── L1-overview.example.md   ← 知识库 L1 模块总览模板
-│       ├── L2-module.example.md     ← 知识库 L2 模块 Wiki 模板
-│       ├── L3-glossary.example.md   ← 知识库 L3 术语映射模板
-│       ├── project-lessons-learned.example.md
-│       ├── review-models.example.json
-│       ├── cold-start-gate-nucleus.md ← 冷启动门禁微核模板 (P-045)
-│       └── agent-prompt-examples.example.md ← Agent 派发示例（drift 修复：原漏列）
+├── engine/                          ← 核心引擎文件（2026-11-24 起按 8 组分区）
+│   ├── flow/                        ← 主流程：workflow-engine · phase-steps · phase-01~07 · complexity-scoring
+│   ├── startup/                     ← 启动协议：startup-protocol（+ step-a5 / step-e）
+│   ├── gate/                        ← 门禁协议 + 实现：gate-protocol · gate-decision-table · *.mjs（7 个）
+│   ├── state/                       ← 状态读写规范：state-protocol
+│   ├── collab/                      ← 协作：waiting · team-agent · cross-review · multi-story · self-heal
+│   ├── governance/                  ← 治理：evolution-safety · consistency-checklist · capability-map · lessons-learned
+│   ├── context/                     ← 上下文纪律：context-discipline · template-injection
+│   ├── domain/                      ← 领域规范：naming-conflict-check · delta-marking · doc-style-guide
+│   ├── rules/                       ← 规则注入清单（manifest.json，唯一事实源）
+│   └── templates/                   ← 阶段文档模板（18 个 md + manifest.json）
 ├── design/                          ← 设计文档（分层架构、方案分析等）
 ├── scripts/                         ← 工具脚本
 │   ├── review-models-configurator.py
@@ -100,7 +66,7 @@ sj-iteration-workflow-engine/
 
 ### 核心机制
 
-> ★ `engine/capability-map.md` = 全部能力的索引层（11 域 · 78 项 · 状态标记）；本 README 只列目录与核心机制，新增/变更机制后须同批更新能力地图。
+> ★ `engine/governance/capability-map.md` = 全部能力的索引层（11 域 · 78 项 · 状态标记）；本 README 只列目录与核心机制，新增/变更机制后须同批更新能力地图。
 
 #### 三道门禁
 
@@ -228,32 +194,17 @@ Structure code changes into a disciplined iteration process, solving the "AI mod
 
 ```
 sj-iteration-workflow-engine/
-├── engine/                          ← Core engine files
-│   ├── startup-protocol.md          ← Startup protocol (Step A-E)
-│   ├── workflow-engine.md           ← 7-phase workflow definition
-│   ├── gate-protocol.md             ← Gate check protocol
-│   ├── state-protocol.md            ← State file R/W specification
-│   ├── complexity-scoring.md        ← Adaptive complexity scoring
-│   ├── phase-steps.md               ← Phase step checklist (SSOT)
-│   ├── phase-01.md ~ phase-07.md    ← Phase detailed definitions
-│   ├── cross-review-protocol.md     ← Cross-review protocol
-│   ├── context-discipline.md        ← Context discipline (targeted reads)
-│   ├── waiting-protocol.md          ← Unified waiting protocol for confirmation gates (RESUME-3)
-│   ├── multi-story-workflow.md      ← Multi-story parallel mode
-│   ├── naming-conflict-check.md     ← Naming conflict pre-check
-│   ├── team-agent-strategy.md       ← Team Agent strategy
-│   ├── delta-marking.md             ← Delta marking system
-│   ├── template-injection.md        ← Variable injection protocol
-│   ├── consistency-checklist.md     ← Consistency check list
-│   ├── lessons-learned.md           ← Incident case library
-│   ├── capability-map.md             ← Capability map (11 domains · status marks · capability index layer)
-│   ├── doc-style-guide.md            ← Document style guide (drift fix: previously missing)
-│   ├── evolution-safety.md          ← Self-modification safety
-│   ├── gate-decision-table.md       ← Gate decision table
-│   ├── startup-protocol-step-e.md   ← Daily work log protocol
-│   ├── gate/                        ← Gate implementation (gate-check.mjs; drift fix: previously missing)
-│   └── templates/                   ← Phase document templates
-│       └── agent-prompt-examples.example.md ← Agent dispatch examples (drift fix: previously missing)
+├── engine/                          ← Core engine files (8 groups since 2026-11-24)
+│   ├── flow/                        ← Flow: workflow-engine · phase-steps · phase-01~07 · complexity-scoring
+│   ├── startup/                     ← Startup protocol: startup-protocol (+ step-a5 / step-e)
+│   ├── gate/                        ← Gate protocol + implementation: gate-protocol · gate-decision-table · *.mjs
+│   ├── state/                       ← State file R/W specification: state-protocol
+│   ├── collab/                      ← Collaboration: waiting · team-agent · cross-review · multi-story · self-heal
+│   ├── governance/                  ← Governance: evolution-safety · consistency-checklist · capability-map · lessons-learned
+│   ├── context/                     ← Context discipline: context-discipline · template-injection
+│   ├── domain/                      ← Domain rules: naming-conflict-check · delta-marking · doc-style-guide
+│   ├── rules/                       ← Rule injection manifest (manifest.json, single source of truth)
+│   └── templates/                   ← Phase document templates (18 md + manifest.json)
 ├── design/                          ← Design documents (layering, analysis, etc.)
 ├── scripts/                         ← Tool scripts
 │   ├── review-models-configurator.py
@@ -268,7 +219,7 @@ sj-iteration-workflow-engine/
 
 ### Core Mechanisms
 
-> ★ `engine/capability-map.md` = the index layer of all capabilities (11 domains · 78 items · status marks); this README lists only the directory tree and core mechanisms — update the capability map in the same batch as any mechanism change.
+> ★ `engine/governance/capability-map.md` = the index layer of all capabilities (11 domains · 78 items · status marks); this README lists only the directory tree and core mechanisms — update the capability map in the same batch as any mechanism change.
 
 #### Three Gates
 

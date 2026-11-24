@@ -1,6 +1,6 @@
 # 01-需求记录 · {迭代名称}
 
-<!-- 填写纪律（SSOT：engine/doc-style-guide.md）
+<!-- 填写纪律（SSOT：engine/domain/doc-style-guide.md）
      ① 表格列 ≤6、单元格 ≤60 字；超长内容改"小标题 + 缩进列表"（见规范 §5）
      ② 正文只写当前生效结论；过程痕迹（"XX 阶段修正""已修订"）进附录 A/B
      ③ 结构增强：>200 行加 `## 目录`；引用写相对链接；图示用 Mermaid（SSOT §7）
@@ -24,7 +24,7 @@
 - **要做什么**：
 - **为什么**：
 - **范围**：做 N 项（A/B/C…）；不做 M 项
-- **待用户拍板**：Q1…（无则写"无"）<!-- 拍板等待方式见 engine/waiting-protocol.md -->
+- **待用户拍板**：Q1…（无则写"无"）<!-- 拍板等待方式见 engine/collab/waiting-protocol.md -->
 - **下一步**：02-需求评审
 - **模式注入**：N 条（P-xxx…）<!-- B6：01 阶段一次性注入 project/lessons-learned.md 活跃区全量 -->
 

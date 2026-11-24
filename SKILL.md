@@ -35,23 +35,23 @@ config:
 ### 启动读取顺序
 
 ```
-1. 读 engine/startup-protocol.md Step A-D（通用启动流程）
-2. 读 engine/startup-protocol-step-e.md Step E（每日工作日志）
+1. 读 engine/startup/startup-protocol.md Step A-D（通用启动流程）
+2. 读 engine/startup/startup-protocol-step-e.md Step E（每日工作日志）
 3. 模板路径：按启动协议 §模板解析优先级 解析（先 project/templates/ 后 engine/templates/）
-4. 文档版式：engine/doc-style-guide.md（01~07 阶段产出统一遵循；生成后跑 scripts/doc_lint.py 自检）
+4. 文档版式：engine/domain/doc-style-guide.md（01~07 阶段产出统一遵循；生成后跑 scripts/doc_lint.py 自检）
 ```
 
 ## ★ 上下文纪律（定点读 · 反全文入上下文）
 
 > **"读什么"由启动协议规定；"读多少"由本条约束。** 读入内容会**逐轮重放**，故大文件一律定点读。
-> 完整细则与各阶段应用要点见 `engine/context-discipline.md`。
+> 完整细则与各阶段应用要点见 `engine/context/context-discipline.md`。
 
 | # | 对象 | 纪律 |
 |:--:|------|------|
 | 1 | 规格/计划类（`requirements/`、`03-技术方案.md`、任务清单） | 先 `search_content` 定位 → 再 `read_file offset/limit` 只读命中区间 |
-| 2 | 状态文件（`state.yaml`） | 只读 `current_phase` / `phase_steps` / `tasks_*` 区间（~50 行），禁全文回读；★ **写入优先走 `scripts/state-apply.py`**（意图式命令，省 1 个 step；见 `state-protocol.md` §9.6）|
+| 2 | 状态文件（`state.yaml`） | 只读 `current_phase` / `phase_steps` / `tasks_*` 区间（~50 行），禁全文回读；★ **写入优先走 `scripts/state-apply.py`**（意图式命令，省 1 个 step；见 `engine/state/state-protocol.md` §9.6）|
 | 3 | 源码 | 仅在"即将编辑 / 落盘前核对"时读，只读待替换片段，禁预读整个类文件 |
-| 4 | 引擎文件 | 只读**当前步骤**涉及的文件，禁"预读全套"；**到达确认等待点时**读 `engine/waiting-protocol.md`（全确认点统一等待细则） |
+| 4 | 引擎文件 | 只读**当前步骤**涉及的文件，禁"预读全套"；**到达确认等待点时**读 `engine/collab/waiting-protocol.md`（全确认点统一等待细则） |
 | 5 | 大产物（>300 行） | 要求产出方给"摘要 + diff 片段" |
 
 **自检指标**：单轮 `read_file` 合计 **≤ 500 行**（跨阶段整段重读等例外须注明理由）。
@@ -66,7 +66,7 @@ python "scripts/build-stage-prompt.py" --stage 04 --root . --request "<本次需
 ```
 
 - 输出三段：**基础规则（全阶段）** / **阶段必读** / **命中规则（附证据）**，证据形如 `exts:.cs=489`、`path_parts:back-end`、`deps:vue`、`terms:接口`
-- `--stage 00` = 轻量查询路径（仅 `startup-protocol.md` + `context-discipline.md`，不含任何 `phase-0X`）
+- `--stage 00` = 轻量查询路径（仅 `engine/startup/startup-protocol.md` + `engine/context/context-discipline.md`，不含任何 `phase-0X`）
 - 判定依据：`engine/rules/manifest.json`（唯一事实源）；**未命中的规则不读**，这是本机制的全部收益
 - `--json` 供程序消费；`evidence.scanned_files/truncated` 用于判断是否降级
 
@@ -85,7 +85,7 @@ python "scripts/state-apply.py" set-block --file <json>                        #
 - `validate-artifacts.py --root . --json` = **全阶段**巡检（仍需 `--iteration` 或活跃迭代；缺失产物只 SKIP）
 - 判据分四类：`no-concept` 缺章节 / `empty` 只写标题 / `placeholder` 整节占位 / `reuse` 复制更早迭代的产物
 
-> 模式库蒸馏义务由 `runtime/check-distill.mjs` 机检（三码 0/1/3），消费方见 `engine/phase-07.md` §6.1 第 4 项。
+> 模式库蒸馏义务由 `runtime/check-distill.mjs` 机检（三码 0/1/3），消费方见 `engine/flow/phase-07.md` §6.1 第 4 项。
 
 ## ★ F1 引擎冻结快照（01 收口 / 04 写盘前 / 07 收口）
 
@@ -99,7 +99,7 @@ python "scripts/state-apply.py" freeze-restore --dry-run                    # �
 
 - 冻结面 5 根位：`engine/` `scripts/` `project/` `hooks/` `skill/`（SKILL 双文件）；重复执行恒 `ALREADY FROZEN` 零写入
 - `commit=null` ⇒ `anchored: false` + `[WARN] 引擎版本未锚定`：07 报告须注明，不得当作已锚定
-- 历史无块属正常态 ⇒ `SKIP(no baseline)` 不阻断 07；口径 SSOT = `engine/state-protocol.md` §9.8
+- 历史无块属正常态 ⇒ `SKIP(no baseline)` 不阻断 07；口径 SSOT = `engine/state/state-protocol.md` §9.8
 
 ## ★ 第一优先级：轻量查询快速退出
 
@@ -123,8 +123,8 @@ python "scripts/state-apply.py" freeze-restore --dry-run                    # �
 
 ## ★ 门禁规则（一句话摘要）
 
-**任何代码修改前必须先过门禁。** 门禁协议完整规则见 `engine/gate-protocol.md`。
-Agent 准备调用写入类工具时 → **必须先读 `engine/gate-protocol.md` 的修改门禁决策树并逐字执行**。
+**任何代码修改前必须先过门禁。** 门禁协议完整规则见 `engine/gate/gate-protocol.md`。
+Agent 准备调用写入类工具时 → **必须先读 `engine/gate/gate-protocol.md` 的修改门禁决策树并逐字执行**。
 不得自行解释门禁触发条件（如"ACTIVE=none 即非迭代态可放行"）、不得以任何理由绕过门禁。
 
 门禁体系：**三道独立门禁**（修改门禁 / 迭代门禁 / 步骤门禁）。
@@ -133,19 +133,19 @@ Agent 准备调用写入类工具时 → **必须先读 `engine/gate-protocol.md
 
 ### 门禁来源标记
 
-> gate-protocol.md 拦截模板默认含 `[gate: agent]` 标记。Skill 模式输出拦截模板时，
+> engine/gate/gate-protocol.md 拦截模板默认含 `[gate: agent]` 标记。Skill 模式输出拦截模板时，
 > **必须将模板中的 `[gate: agent]` 替换为 `[gate: skill]`**（区分 Skill 触发 vs Agent 触发）。
 
 ## ★ 启动协议（摘要）
 
 | 步骤 | 动作 | 详址 |
 |------|------|------|
-| Step A | 读取 `project/project.manifest.yaml`，输出运行时变量表 | `engine/startup-protocol.md` Step A |
-| Step A.5 | **自检本地配置文件**，引导创建缺失文件 | `engine/startup-protocol.md` Step A.5 |
-| Step B | 检查 `runtime/` 恢复迭代状态，执行迭代门禁 | `engine/startup-protocol.md` Step B |
-| Step C | 复杂度评估（新迭代时） | `engine/complexity-scoring.md` |
-| Step D | 进入对应阶段执行 | `engine/workflow-engine.md` |
-| Step E | **对话结束前：写入每日工作日志** | `engine/startup-protocol-step-e.md` |
+| Step A | 读取 `project/project.manifest.yaml`，输出运行时变量表 | `engine/startup/startup-protocol.md` Step A |
+| Step A.5 | **自检本地配置文件**，引导创建缺失文件 | `engine/startup/startup-protocol.md` Step A.5 |
+| Step B | 检查 `runtime/` 恢复迭代状态，执行迭代门禁 | `engine/startup/startup-protocol.md` Step B |
+| Step C | 复杂度评估（新迭代时） | `engine/flow/complexity-scoring.md` |
+| Step D | 进入对应阶段执行 | `engine/flow/workflow-engine.md` |
+| Step E | **对话结束前：写入每日工作日志** | `engine/startup/startup-protocol-step-e.md` |
 
 ## 七阶段概览
 
@@ -173,25 +173,25 @@ Agent 准备调用写入类工具时 → **必须先读 `engine/gate-protocol.md
 9. **能跑则跑，不能则降级**：05 阶段自动生成用例 → 探测环境 → 能自动的执行 → 不能的标记为手动。
 10. **命名冲突预检强制**：涉及在已有代码中新增符号时，03 和 04 阶段各执行一次命名冲突扫描。
 11. **★ 图优先原则**：涉及架构图、时序图等可视化内容时，优先使用 Mermaid 图表嵌入文档。
-12. **★ 独立Agent交叉审查（自审+互审双保险）**：🔴 复杂级 02/03/04 阶段启动独立 Agent 交叉审查；🟡 中等级 03/04 强制、02 可选。主 Agent 在需要时先启动独立 Agent，再立即执行自审。详见 `engine/cross-review-protocol.md`。
-★ **"应执行" ≠ "mandatory"（两个维度）**：03/04 的交叉审查 = `mandatory=true`（门禁强制、不做即拦）；**02 = `mandatory=false`**（🔴 应执行但**不阻塞推进**）。`mandatory` 的**唯一权威源 = `complexity-scoring.md` §二**。
+12. **★ 独立Agent交叉审查（自审+互审双保险）**：🔴 复杂级 02/03/04 阶段启动独立 Agent 交叉审查；🟡 中等级 03/04 强制、02 可选。主 Agent 在需要时先启动独立 Agent，再立即执行自审。详见 `engine/collab/cross-review-protocol.md`。
+★ **"应执行" ≠ "mandatory"（两个维度）**：03/04 的交叉审查 = `mandatory=true`（门禁强制、不做即拦）；**02 = `mandatory=false`**（🔴 应执行但**不阻塞推进**）。`mandatory` 的**唯一权威源 = `engine/flow/complexity-scoring.md` §二**。
 ★ 派发前须组装**锚点包**（符号→绝对路径→行号）并按模块/维度**分片**（🟡2 路 / 🔴2~3 路，每路限工具调用次数），禁止子 Agent 无目标全库探索（协议 §二-B / §三-A）。
-  ★ **同批并行硬上限 ≤3 路**、单路上下文 ≤15 万 token（`engine/team-agent-strategy.md` §二维度五）：宿主过载会异常终止并连带停止所有 Team 成员。
-13. **★ 外部模型审查路由（v2.0.0）**：🔴 复杂级的 02 阶段强制使用，03/04 阶段优先使用。详见 `engine/cross-review-protocol.md` §八。
+  ★ **同批并行硬上限 ≤3 路**、单路上下文 ≤15 万 token（`engine/collab/team-agent-strategy.md` §二维度五）：宿主过载会异常终止并连带停止所有 Team 成员。
+13. **★ 外部模型审查路由（v2.0.0）**：🔴 复杂级的 02 阶段强制使用，03/04 阶段优先使用。详见 `engine/collab/cross-review-protocol.md` §八。
 14. **★ 每个阶段必须有独立目录产出**：复杂度只决定内容详细程度，不决定文件位置。🟢 简单：独立文件，内容极简（02 ~200字 / 03 ~300字 / 07 精简三段式）；🟡🔴：独立文件，标准/完整内容。
 15. **★ 知识库自动兜底**：`docs/knowledge-base` 下 L1/L2/L3 由 `scripts/gen-knowledge-base.py` 维护（`--check` 检测缺失/过时 + **文件指纹**（mtime_ns+size，检出既有文件被改动），`--force` 刷新）。01 前置步骤与 step-1.6-dir-diff 发现缺失/过时时**自动刷新**（读前兜底，不等待用户确认）；03 step-1.2 读取 L2 前做新鲜度校验；**04 不刷新**（代码未验证、无消费者）；**06 `step-2-5-kb-refresh` 无条件刷新 = 最终态**（归档前）。人工编辑文件（`auto-generated: false`）永不被覆盖。
-16. **★ 缺陷处置分档（2026-09-23 DEFECT-1）**：05 发现缺陷先**判根因档**（判据见 `workflow-engine.md` §缺陷根因判定判据）—— L1 实现缺陷（`design_changed=false`）→ 回退 04 走 `step-fix-1-register` ~ `step-fix-5-reclose` 窗口；L2 方案缺陷 → 回退 03（**先改 03 再改码**）；L3 需求缺陷 → 回退 01/02。
+16. **★ 缺陷处置分档（2026-09-23 DEFECT-1）**：05 发现缺陷先**判根因档**（判据见 `engine/flow/workflow-engine.md` §缺陷根因判定判据）—— L1 实现缺陷（`design_changed=false`）→ 回退 04 走 `step-fix-1-register` ~ `step-fix-5-reclose` 窗口；L2 方案缺陷 → 回退 03（**先改 03 再改码**）；L3 需求缺陷 → 回退 01/02。
     - ★ **不得**用 `03-技术方案` 的 `needs_update` 判档 —— 实践中它被当**修复流水台账**用，恒 `true`、丧失区分力（2026-09-23 评审实证 9/9）。
-    - ★ 缺陷台账 SSOT = `state.yaml` 的 `defects[]`，与 05 报告「缺陷记录」节按 `D-xx` **双向对账**；存在 `open` 缺陷时**禁止推进 06**（`gate-protocol.md` §三-C）。
+    - ★ 缺陷台账 SSOT = `state.yaml` 的 `defects[]`，与 05 报告「缺陷记录」节按 `D-xx` **双向对账**；存在 `open` 缺陷时**禁止推进 06**（`engine/gate/gate-protocol.md` §三-C）。
     - ★ `step-fix-*` 与原则 3 / 6 的边界：小改动豁免 Team Agent，但**涉后端码必须重跑构建验证**（`/t:Rebuild`）。
       窗口 = **双窗口（2026-10-02 α 口径）**：① **04 侧** `step-fix-1-register` ~ `-5-reclose` = 唯一**免开闸**窗口；
       ② **05 侧** `step-fix-05-1-register` ~ `-4-reclose` = **仅 L1 且不涉后端码**的小修，须**用户开闸**，
-      且 `defects[].gate_window` 与 `fix_files` **成对留痕**（机器校验 = `state-protocol.md` §3.3 [R8] / `validate-state.py`）。
+      且 `defects[].gate_window` 与 `fix_files` **成对留痕**（机器校验 = `engine/state/state-protocol.md` §3.3 [R8] / `validate-state.py`）。
       ★ **不新增写放行面**（方案 α，用户 2026-10-02 QQ#7 裁定）。
       ★ **04 侧免开闸窗口系历史豁免先例**（QQ#17 裁定②，2026-10-02 加注 · GATE-TRV-DEL 同批）：
       本条仅为既成事实的**定位声明**，不构成新增写放行面的立法先例——后续任何新放行面仍须走 α 口径审批。
-17. **★ 上下文纪律（定点读）**：大文件禁全文入上下文 —— 先定位后定点读、状态文件只读关键区间、源码只读待改片段、单轮 `read_file` ≤ 500 行。详见 `engine/context-discipline.md`。
-18. **★★ 引擎自身修改 = 「引擎演进安全协议」**（用户 2026-09-20 立法，最高优先级）：**任何**对本 skill 的修改（`engine/**`、`scripts/**`、`hooks/**`、`SKILL.md`、模板等）**禁止"先改后报"** —— 四件套前置审批、核心文件快照、收口验证（3 脚本 + 回流水位）**全部**见 `engine/evolution-safety.md`，此处**不再复述**（★ 单点权威，防两份口径漂移）。
+17. **★ 上下文纪律（定点读）**：大文件禁全文入上下文 —— 先定位后定点读、状态文件只读关键区间、源码只读待改片段、单轮 `read_file` ≤ 500 行。详见 `engine/context/context-discipline.md`。
+18. **★★ 引擎自身修改 = 「引擎演进安全协议」**（用户 2026-09-20 立法，最高优先级）：**任何**对本 skill 的修改（`engine/**`、`scripts/**`、`hooks/**`、`SKILL.md`、模板等）**禁止"先改后报"** —— 四件套前置审批、核心文件快照、收口验证（3 脚本 + 回流水位）**全部**见 `engine/governance/evolution-safety.md`，此处**不再复述**（★ 单点权威，防两份口径漂移）。
 
-> 完整流程定义见 `engine/workflow-engine.md`，门禁规则见 `engine/gate-protocol.md`。
-> 能力全貌（11 域 · 状态标记）见 `engine/capability-map.md`。
+> 完整流程定义见 `engine/flow/workflow-engine.md`，门禁规则见 `engine/gate/gate-protocol.md`。
+> 能力全貌（11 域 · 状态标记）见 `engine/governance/capability-map.md`。

@@ -12,7 +12,7 @@
  *
  * 分工（本脚本**不含**任何注入动作，也不做自由判断）：
  *   本脚本只做「监控 → 归因 → 判定」，输出一行 JSON；`send_message` 由派出的常驻 waiter **成员**执行
- *   （waiter 零判据自由度，照 JSON 办事）。派发协议见 `engine/phase-04.md` Step 2 ⑦。
+ *   （waiter 零判据自由度，照 JSON 办事）。派发协议见 `engine/flow/phase-04.md` Step 2 ⑦。
  *
  * 归因（工单 §方案①，补 MEMBERSTALL-2 遗留缺口「暂停信号行不带 conversationId」）：
  *   ① **reporter → conv 映射**：`onAgentStart/onAgentEnd` 行**同时**含 reporter id 与 conversationId

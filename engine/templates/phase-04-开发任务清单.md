@@ -1,9 +1,9 @@
 # 04-开发任务清单 · {迭代名称}
 
-<!-- 填写纪律（SSOT：engine/doc-style-guide.md）
+<!-- 填写纪律（SSOT：engine/domain/doc-style-guide.md）
      ① 表格只放 5 列（编号/类型/文件/状态/模式）；细节写"条目块"，验证证据进 §3 或附录
         ★ 「模式」列填 `[模式: P-xxx]`（本任务采纳了 01 注入或 03 交接卡里的哪条模式）或 `—`；
-          04+05 合计 ≥3 条（判据见 phase-04.md Step 1.5，2026-11-05 BATCH-B）
+          04+05 合计 ≥3 条（判据见 ../flow/phase-04.md Step 1.5，2026-11-05 BATCH-B）
      ② 阶段划分与层名按项目实际裁剪（分层映射见 project/project.manifest.yaml）
      ③ 结构增强：>200 行加 `## 目录`；引用写相对链接；支线依据下沉脚注；依赖图用 Mermaid（SSOT §7）
      ④ 生成后自检：python scripts/doc_lint.py <本文件> -->
@@ -59,7 +59,7 @@
 |:--:|:--:|:--|:--:|:--:|
 | 示例-T3-1 | 同步 | 03 §2.3.1 列定义表 / §2.3.2 检索条件表逐项落地核对（无页面改动 ⇒ `not_applicable`） | ⬜ | — |
 
-> ★ 上行为**示例行（04 期须替换为真实编号）**：本项与 `phase-04.md` Step 1.5「页面契约落地（强制）」
+> ★ 上行为**示例行（04 期须替换为真实编号）**：本项与 `../flow/phase-04.md` Step 1.5「页面契约落地（强制）」
 > 是同一判据，模板只给落笔位、**不复述判据措辞**（防两处口径漂移，2026-11-01 批 2）。
 
 ### 1.5 阶段五：缺陷修复（DEFECT-FIX）· 仅当存在 `open` 缺陷且 `design_changed=false`
@@ -70,7 +70,7 @@
 
 > ★ 缺陷编号须与 `state.yaml` 的 `defects[]` 的 `D-xx` **一一对应** —— 本段是缺陷在任务清单中的**从属视图**，
 > 不改变「任务清单是唯一真相源」：缺陷**状态**的 SSOT 是 `state.yaml`，代码**改动范围**的 SSOT 是本清单。
-> 窗口六步 = `step-fix-1-register` ~ `step-fix-5-reclose`（含 `step-fix-1-5-handoff` 交接卡）（见 `engine/phase-04.md` §Step F）。
+> 窗口六步 = `step-fix-1-register` ~ `step-fix-5-reclose`（含 `step-fix-1-5-handoff` 交接卡）（见 `engine/flow/phase-04.md` §Step F）。
 
 ## 2. 依赖关系
 
@@ -84,7 +84,7 @@ flowchart TD
 ```
 
 > 同批 / 强约束用虚线 `-.-` 或 `-.->` 标注；关键路径在「结论摘要」中声明
-> （并行决策见 engine/team-agent-strategy.md）。单图节点 ≤ 25 个，超出拆多图。
+> （并行决策见 engine/collab/team-agent-strategy.md）。单图节点 ≤ 25 个，超出拆多图。
 
 ## 3. 验证结果
 

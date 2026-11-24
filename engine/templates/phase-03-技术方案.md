@@ -1,6 +1,6 @@
 # 03-技术方案 · {迭代名称}
 
-<!-- 填写纪律（SSOT：engine/doc-style-guide.md）
+<!-- 填写纪律（SSOT：engine/domain/doc-style-guide.md）
      ① 代码骨架、完整 SQL、审查处置记录一律进附录；正文只留签名与结论
      ② 表格 ≤6 列、单元格 ≤60 字；超长改"小标题 + 缩进列表"；编号统一 1./1.1
      ③ 结构增强：>200 行加 `## 目录`；引用写相对链接；图示用 Mermaid（SSOT §7）
@@ -11,7 +11,7 @@
 | 迭代 ID | `YYYY-MM-DD-NNN-{名称}` |
 | 阶段 | 03-技术方案 |
 | 状态 | ⏳ 进行中 |
-| 影响等级 | 🟢 Standard / 🟡 Normal / 🔴 Emergency（见 gate-protocol.md） |
+| 影响等级 | 🟢 Standard / 🟡 Normal / 🔴 Emergency（见 ../gate/gate-protocol.md） |
 | 上游文档 | [01-需求记录](../01-需求分析与设计/01-需求记录.md) · [02-需求评审](../02-需求评审/02-需求评审.md) |
 | 更新时间 | YYYY-MM-DD |
 
@@ -70,7 +70,7 @@ flowchart LR
 
 ## 3. 代码改动范围 *必填
 
-> Delta 标记：ADDED / MODIFIED-🔵追加 / MODIFIED-🟡修改 / MODIFIED-🔴替换 / REMOVED（见 engine/delta-marking.md）
+> Delta 标记：ADDED / MODIFIED-🔵追加 / MODIFIED-🟡修改 / MODIFIED-🔴替换 / REMOVED（见 engine/domain/delta-marking.md）
 > 表列固定 4 列。
 
 ### 3.0 改动点锚点表 *必填（★ 04 期执行索引）
@@ -128,7 +128,7 @@ flowchart LR
 | 目标文件 | 搜索方法名 | 结果 | 处理 |
 |:--|:--|:--:|:--|
 
-> 对所有 MODIFIED 类型的目标文件，验证新方法名不冲突（见 engine/naming-conflict-check.md）。
+> 对所有 MODIFIED 类型的目标文件，验证新方法名不冲突（见 engine/domain/naming-conflict-check.md）。
 
 ## 7. 开发阶段拆解
 

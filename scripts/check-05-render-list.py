@@ -232,7 +232,7 @@ def judge(iter_dir):
 
 TEMPLATE_CHECKS = [
     ('engine/templates/phase-05-测试验证报告.md', '### 平台渲染验收清单', '05 模板的渲染清单节名'),
-    ('engine/phase-05.md', 'check-05-render-list.py', '05 通过条件块的机器挂载点'),
+    ('engine/flow/phase-05.md', 'check-05-render-list.py', '05 通过条件块的机器挂载点'),
 ]
 
 

@@ -206,8 +206,8 @@ def judge(path):
 TEMPLATE_CHECKS = [
     ('engine/templates/phase-04-开发任务清单.md', '逐项落地核对', '04 清单模板的「页面契约落地」条目'),
     ('engine/templates/phase-05-测试验证报告.md', '### 平台渲染验收清单', '05 模板的平台渲染验收清单节'),
-    ('engine/phase-05.md', '[MECH:', '05 缺陷登记步骤的机制标记要求'),
-    ('engine/phase-03.md', 'check-03-page-tables.py', '03 通过条件块的机器前置挂载点'),
+    ('engine/flow/phase-05.md', '[MECH:', '05 缺陷登记步骤的机制标记要求'),
+    ('engine/flow/phase-03.md', 'check-03-page-tables.py', '03 通过条件块的机器前置挂载点'),
 ]
 
 

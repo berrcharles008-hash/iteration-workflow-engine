@@ -1,0 +1,333 @@
+# 启动协议
+
+> 从 SKILL.md 提取。定义每次对话加载 Skill 后的初始化流程（Step A-D）。
+
+---
+
+## Step A：加载项目配置（必须第一步）
+
+读取 `project/project.manifest.yaml`，提取所有路径和技术栈信息。
+
+**完成后立即输出运行时变量表**（此输出不可省略）：
+
+```
+✅ 运行时变量已加载：
+- PROJECT_ROOT    = {workspace_root 的值}
+- FRONTEND_ROOT   = {PROJECT_ROOT}/{paths.frontend_root}
+- BACKEND_SLN     = {PROJECT_ROOT}/{paths.backend_solution}
+- ITERATIONS_DIR  = {PROJECT_ROOT}/{paths.docs_iterations}
+- SPECS_DIR       = {PROJECT_ROOT}/{paths.specs_dir}
+- KB_DIR          = {PROJECT_ROOT}/{paths.kb_dir}
+- IDE             = {当前宿主 IDE 目录：CodeBuddy → .codebuddy；Claude Code → .claude}
+```
+
+> 后续所有步骤读取 engine/ 或 project/ 文件时，Agent 在内存中将 `{{占位符}}` 替换为以上具体值（变量注入协议详见 `engine/context/template-injection.md`），**绝不输出占位符字符串本身**。`{{KB_DIR}}` 指向活文档知识库（L1/L2/L3），与冻结态 `{{SPECS_DIR}}` 分离。若 `{{KB_DIR}}` 下的知识库文件不存在，可执行 `python scripts/gen-knowledge-base.py` 生成。
+
+**★ `{IDE}` 单花括号占位符解析约定（2026-09-29 新增；引擎文档 `{IDE}/…` 一律按此解析）**：
+
+1. `{IDE}` = 当前宿主 IDE 目录（= 上表 `IDE` 值）。取值表本轮承诺 **CodeBuddy `.codebuddy` / Claude Code `.claude`** 两值；
+   Cursor `.cursor` / Codex `.codex` 已被 hook 识别，但**不承诺**其引擎副本存在。
+2. 实现层路径白名单**必须逐宿主枚举**（`engine/gate/gate-check.mjs` 的数组字面量），故**不变量化**；`{IDE}` 仅用于文档指代，
+   读到「实现未跟随文档」时按本理解读，不得据此改 hook。
+   ★ **2026-10-11 FIX-49 起该禁令解除**（2026-10-15 实施）：宿主侧解析已在实现层落地
+   （shim 注入 `GATE_HOST_IDE` + 三级解析 + 解析失败 fail-closed），`engine/gate/gate-check.mjs`
+   按宿主自适应取 `{IDE}/skills/iteration-workflow/runtime/`；`{IDE}` 仍仅用于文档指代。
+3. ★ **派发时主 Agent 必须把 `{IDE}` 解析为实际目录后再嵌入成员 prompt** —— 成员 prompt 内**不得残留字面量**
+   （成员无解析义务，残留会导致照字面创建目录）。
+4. 同一文件内**禁止**与 `{{IDE_DIR}}` 混用；后者仅限脚本渲染的模板（渲染实现见 `scripts/setup-gate.py`）。
+
+---
+
+## Step A.5：本地配置文件自检
+
+> 解决首次 clone 后 `project/lessons-learned.md` 和 `project/review-models.json` 缺失的问题。
+> P-045：冷启动门禁微核存在于 `MEMORY.md`（项目文件），Skill 安装到新项目时静默缺失；本步第三项自检覆盖 CodeBuddy IDE 环境下的微核注入。
+
+自检在 Step A 完成之后、Step B 之前执行。**自检目标（3 项）**：
+1. `project/lessons-learned.md` —— 项目级模式库
+2. `project/review-models.json` —— 外部审查模型 API 配置
+3. `.codebuddy/memory/MEMORY.md` [CodeBuddy IDE 专属] —— 冷启动门禁微核；★ 环境判断以 `.codebuddy/memory/` 目录存在性为准（非 CodeBuddy IDE → 静默跳过，Hook 层已提供硬拦截）；文件已存在但微核版本过旧 → 提示更新
+
+**触发时机**：检测到缺失文件**或微核版本过旧**时 → 按 `engine/startup/startup-protocol-step-a5.md`（检查逻辑 / 提示框模板×2 / 用户响应处理）执行。
+
+### 与 Step A 的关系
+
+| 步骤 | 用途 | 触发条件 |
+|:----:|------|---------|
+| Step A | 加载项目配置 | 每次 Skill 加载 |
+| **Step A.5** | **创建缺失的本地文件** | **文件不存在或微核过旧时（初次使用）** |
+| Step B | 恢复迭代状态 | 每次 Skill 加载 |
+
+> Step A.5 是**自检向导**，不是门禁。用户拒绝后不阻塞流程，下次加载仍会检测，后续仍可手动创建。
+> 第 3 项（冷启动微核）也可通过 `python scripts/setup-gate.py` 独立执行。
+
+---
+
+## Step B：恢复或新建迭代状态
+
+检查 `runtime/` 目录：
+
+### B.1 存在 `.state.yaml` 文件
+
+→ 读取最新文件（按字典序最后一个，忽略 `.archived.yaml`）
+→ 按 `engine/state/state-protocol.md` 第四节格式输出恢复摘要
+→ ★ 执行迭代门禁检查（强制，不可跳过）：
+
+```
+├── 若当前迭代 iteration_status = "abandoned" → 同 completed 跳过 Step C（不阻塞），提示：
+│       ⚠️ 迭代「{ITERATION_ID}」已废弃（{abandon_reason}），不阻塞新迭代创建。
+│       如需重启此需求请创建新迭代。
+├── 若当前迭代 iteration_status ≠ "completed" 且 iteration_status ≠ "abandoned" 且用户请求包含「新迭代/新开迭代/下一个迭代/开始新需求/计入新的迭代」→ 触发门禁 BLOCK
+│   按 [迭代门禁协议](../flow/workflow-engine.md#迭代门禁协议) 输出选项：
+│   1️⃣ 继续当前迭代  2️⃣ 归档当前迭代  3️⃣ 强制跳过（需说明理由）
+│   等待用户选择，不得自作主张跳进新迭代
+│   ★ 等待方式（A/B/D + 时限/退化）见 `engine/collab/waiting-protocol.md`。
+├── 若当前迭代 iteration_status = "completed" 或用户请求与开新迭代无关
+│   → 跳过 Step C，正常响应用户操作
+└── 若阶段状态为 paused（曾被强制跳过）→ 提示恢复
+```
+
+### B.2 不存在 `.state.yaml` 文件
+
+→ 继续 Step C
+
+### B.3：ACTIVE 双副本一致性校验（★ 强制）
+
+> 解决问题：`.claude/` 和 `.codebuddy/` 双目录下的 ACTIVE 可能因 sync 延迟或手动操作而不同步。
+> ★ **FIX-49（2026-10-15 实施）**：本步**不再"写向另一侧"** —— 单写本侧（R9 方案 B）下，
+> 跨侧一致性由 `scripts/sync-runtime.py` 显式收敛（"新者胜"双判 + 幂等可重跑）；
+> 旧口径"以 {IDE} 为准 + 手工同步另一侧"已废止（那正是 09-28 确定性翻转的触发器）。
+
+**校验逻辑**（不阻塞流程，仅输出警告）：
+
+> ★ **SYNC-PASSIVE-1（2026-10-30）**：本步**只报告不自愈** —— Agent **不代跑** `sync-runtime.py`，
+> 是否同步由用户决定。标题「★ 强制」指**必须做这次比对**，不指必须让两侧一致。
+
+```
+1. 读取本侧（{IDE}）/skills/iteration-workflow/runtime/ACTIVE      ← 判定源 = 本宿主侧
+2. 读取另一侧 /skills/iteration-workflow/runtime/ACTIVE
+3. 双文件都存在：
+   ├── 内容一致 → 静默通过
+   └── 内容不一致 → 输出警告；对齐动作 = **由用户决定**是否跑 sync-runtime.py（Agent 不代跑；禁止手工 copy 覆盖）
+4. 仅另一侧存在（本侧 runtime 未初始化 = α 态）：
+   └── **提示用户**：本侧 runtime 未初始化；如确认接入，请**由用户**执行
+       sync-runtime.py --from <有数据的侧>（Agent 不代跑；★ 禁止新建重复迭代）
+5. 仅本侧存在：
+   └── 无需动作（接力方接入时由其**在自己那侧**跑 sync 收敛）
+6. 双文件都不存在（首次使用）：
+   └── 静默通过，等 01 阶段启动时创建
+7. 对侧 ACTIVE 指向的迭代在本侧已是 `*.state.archived.yaml`（已结案）：
+   └── **显性提示**「该迭代已结案，请以 ACTIVE=none 一侧为准，勿在该侧继续」
+       （仍不代跑 sync；★ 防 B.1 按字典序把对侧旧 state 当活跃迭代恢复）
+```
+
+**不一致警告格式**：
+```
+⚠️ ACTIVE 指针双副本不一致：
+  {IDE}/runtime/ACTIVE       → {内容}      ← 本侧（判定源）
+  另一侧/runtime/ACTIVE      → {内容}
+  对齐动作：**由用户**执行 python {IDE}/skills/iteration-workflow/scripts/sync-runtime.py（Agent 不代跑；按"新者胜"收敛）
+```
+
+> **变更记录（2026-07-23 S4.1）**：新增 Step B.3 ACTIVE 双副本一致性校验，不阻塞流程。
+> **变更记录（2026-10-15 FIX-49）**：判定源改本宿主侧；"手工同步另一侧"改走 `sync-runtime.py`（③-7/③-3b）。
+> **变更记录（2026-10-30 SYNC-PASSIVE-1）**：本步降为**纯报告** —— Agent **不代跑** `sync-runtime.py`
+> （含 α 态与不一致两分支与警告格式文案）；新增分支 7「对侧 ACTIVE 指向本侧已结案迭代 ⇒ 显性提示以 `none` 侧为准」。
+> 依据 `runtime/SYNC-PASSIVE-1-四件套.md` v2（用户 2026-10-30 拍板：不主动同步，仅提示）。
+
+---
+
+## Step C：复杂度评估（新迭代时执行）
+
+读取 `engine/flow/complexity-scoring.md`，按 9 因素评分算法评估当前需求（因素可在 `project/project.manifest.yaml` 的 `complexity_factors` 段覆盖），输出：
+- 评分详情（每个因素得分）
+- 最终等级（🟢/🟡/🔴）
+- 对应执行深度说明
+
+等待用户确认等级后继续。
+★ 等待方式（A/B/D + 时限/退化）见 `engine/collab/waiting-protocol.md`。
+
+---
+
+## Step D：进入对应阶段
+
+按照 `engine/flow/workflow-engine.md` 执行用户指令对应的阶段。
+
+---
+
+---
+
+## 模板解析优先级（★ 强制）
+
+> 本规则是模板路径的**唯一权威来源**——各 phase 文件只引用模板文件名（如 `phase-01-需求记录.md`），不指定目录前缀。实际路径由本规则按下面的优先级 + 映射表解析。新增/重命名模板时，必须同步更新下方映射表和 `engine/templates/` 目录。
+
+### "同名"定义
+
+文件名完整一致，**不区分大小写**。例如 `phase-01-需求记录.md` 与 `Phase-01-需求记录.md` 视为同一文件。
+
+> **跨平台兼容**：Agent 在检查 `project/templates/` 下是否存在模板时，**必须先用 `list_files` 列出目录内容**，然后做不区分大小写的文件名比对——不能仅依赖 `read_file` 的报错来判断。Windows（NTFS）大小写不敏感，Linux/macOS 大小写敏感，直接 `read_file` 在不同 OS 下行为不一致。
+
+### 模板文件名映射表（★ 唯一来源，集中维护）
+
+| 阶段 | 标准模板 | Lite 版 | Bug 专用 | phase 文件引用 |
+|:--:|---------|:--:|:--:|:--:|
+| 01 | `phase-01-需求记录.md` | `phase-01-需求文档-lite.md` | `bug-requirement-template.md` | ../flow/phase-01.md |
+| 02 | `phase-02-需求评审.md` | — | — | ../flow/phase-02.md |
+| 03 | `phase-03-技术方案.md` | — | — | ../flow/phase-03.md |
+| 04 | `phase-04-开发任务清单.md` | — | — | ../flow/phase-04.md |
+| 05 | `phase-05-测试验证报告.md` | `phase-05-测试报告-lite.md` | — | ../flow/phase-05.md |
+| 06 | `phase-06-发布上线记录.md` | `phase-06-上线记录-lite.md` | — | ../flow/phase-06.md |
+| 07 | `phase-07-迭代回顾报告.md` | `phase-07-迭代回顾-lite.md` | — | ../flow/phase-07.md |
+
+> **注意**：`bug-requirement-template.md` 不以 `phase-0X-` 开头，但同样适用以下所有优先级规则。映射表是模板文件名的唯一权威来源——新增/重命名模板必须同步更新此表。
+
+### 解析优先级
+
+```
+1. project/templates/{模板文件名}  ← 项目自定义（最高优先级）
+2. engine/templates/{模板文件名}   ← 引擎默认（兜底）
+```
+
+### Few-Shot 执行示例（★ Agent 模板加载时强制遵循）
+
+以下是 Agent 加载阶段模板时的**标准工具调用序列**。**所有场景均先 `list_files` 获取目录清单，再做不区分大小写匹配——不直接 `read_file` 拼接路径**。模板文件名（如 `phase-01-需求记录.md`）从映射表获取，**禁止自行拼接 `engine/templates/` 或 `project/templates/` 前缀**。
+
+**场景 A：正常覆盖（project 模板存在且有效）**
+
+```
+Step 1：列出 project/templates/ 目录，获取文件清单
+  list_files("project/templates/")
+
+Step 2：在文件清单中不区分大小写匹配目标模板文件名（如 "phase-01-需求记录.md"）
+  → 匹配到 → 从清单中取实际文件名，读取 project 模板
+  read_file("project/templates/" + 实际文件名)
+
+Step 3：验证模板有效性（★ 强制）
+  IF content 为 null / 空字符串 / 仅含空白字符:
+    → 视为无效，跳转到 Step 4（fallback 到 engine）
+  IF content 不含任何二级标题（##）:
+    → 视为可能损坏，输出警告但继续使用（不阻塞）
+  ELSE:
+    → 模板有效，使用 project 模板，跳过 Step 4
+```
+
+**场景 B：fallback（project 模板不存在或无效）**
+
+```
+Step 3（续）：project 模板无效
+  → 输出："project/templates/{文件名} 不存在或为空，回退到引擎默认模板"
+
+Step 4：fallback 到 engine 默认模板（同样先 list_files，不直接拼路径）
+  list_files("engine/templates/")
+  → 在文件清单中不区分大小写匹配目标模板文件名
+  → 从清单中取实际文件名，读取 engine 模板
+  read_file("engine/templates/" + 实际文件名)
+  → 使用 engine 默认模板
+```
+
+**场景 C：Bug 需求模板（特殊命名）**
+
+```
+目标模板：bug-requirement-template.md（从映射表获取）
+  Step 1：list_files("project/templates/") 做不区分大小写匹配
+    匹配到 → 验证有效性 → 有效则使用 project 版本
+    不存在/无效 → 进入 Step 2
+  Step 2：list_files("engine/templates/") 做不区分大小写匹配
+    → 使用 engine 版本（engine 模板必然存在，否则为配置错误）
+```
+
+**场景 D：Lite 模板（复杂度选择）**
+
+```
+Agent 根据复杂度选择了 Lite 模板（文件名从映射表获取，如 "phase-05-测试报告-lite.md"）：
+  Step 1：list_files("project/templates/") 做不区分大小写匹配
+    匹配到 → 验证有效性（同场景A Step 3） → 有效则使用 project 版本
+    不存在/无效 → 输出提示 → 进入 Step 2
+  Step 2：list_files("engine/templates/") 做不区分大小写匹配
+    → 使用 engine 版本（engine 模板必然存在，否则为配置错误）
+```
+
+### 模板有效性规则（★ 防止空模板静默失败）
+
+| 检查项 | 判定 | 动作 |
+|--------|:--:|------|
+| 文件不在 list 清单中（含大小写差异完全不匹配） | 不存在 | → fallback 到 engine |
+| 文件存在但内容为空（read_file 返回空字符串） | 无效 | → fallback 到 engine |
+| 文件存在但仅含空白字符 | 无效 | → fallback 到 engine |
+| 文件存在、内容非空但不含任何 `## ` 标题 | 可能损坏 | → ⚠️ 输出警告，继续使用（不阻塞） |
+| 文件存在、内容非空且含至少一个 `## ` 标题 | 有效 | → ✅ 使用 |
+
+### 禁止事项
+
+- **禁止**在任何 phase 文件（phase-01~07.md）中直接使用 `engine/templates/` 或 `project/templates/` 前缀——只能引用模板文件名本身
+- **禁止**仅用 `read_file` 判断模板是否存在（跨平台大小写风险）——无论 project 还是 engine，都必须先 `list_files` 做不区分大小写比对，再从清单中取实际文件名拼接路径
+- **禁止**在 project 模板不存在或无效时跳过 fallback——必须加载 engine 默认模板
+
+> **变更记录**：
+> - 2026-07-23 S3.2：新增模板覆盖优先级规则
+> - 2026-07-24 S6（方案 D'）：增强 Few-Shot 示例 + 映射表 + "同名"定义 + 不区分大小写匹配 + 空模板健壮性 + SKILL.md/phase 文件解耦
+> - 2026-07-24 S6.1（方案 D''）：修复 D' 双审发现的 3 个 🔴——Few-Shot 全部场景统一先 list_files 后 read_file + 禁止事项对称覆盖 project/engine + phase-03/04 补全模板引用行
+
+---
+
+## 引擎与配置文件索引
+
+> 以下为 Skill 全部资源文件清单。启动加载遵循"最小核心"原则：
+> 核心必读仅 4 个文件，其余全部惰性加载（按需读取）。
+
+### 核心必读（启动时加载，4 个）
+
+| 文件 | 用途 | 读取时机 |
+|------|------|---------|
+| `project/project.manifest.yaml` | 项目路径和技术栈 | Step A（变量注入基础） |
+| `runtime/ACTIVE` | 活跃迭代指针 | Step B（状态恢复） |
+| `SKILL.md` | Skill 入口：路由表 + 门禁摘要 + 命令分级 | 每次 Skill 加载 |
+| `engine/startup/startup-protocol.md` | 启动流程框架（Step A→D） | 每次 Skill 加载（含本索引） |
+
+### 惰性加载（按触发条件读取）
+
+| 文件 | 用途 | 触发条件 |
+|------|------|---------|
+| `engine/context/template-injection.md` | 变量注入协议 | 创建文档时（需注入 `{{占位符}}`） |
+| `engine/templates/project-lessons-learned.example.md` | 项目级模式库模板 | Step A.5（文件不存在时） |
+| `engine/templates/review-models.example.json` | 外部审查模型配置模板 | Step A.5（文件不存在时） |
+| `engine/state/state-protocol.md` | 状态读写规则 | 写入/校验 `runtime/*.state.yaml` 时 |
+| `engine/flow/complexity-scoring.md` | 复杂度评估算法（9 因素评分） | Step C（新迭代创建时） |
+| `engine/flow/workflow-engine.md` | 七阶段流程入口 + 横向规则 | Step D（进入具体阶段时） |
+| `engine/flow/phase-01.md` ~ `../flow/phase-07.md` | 各阶段详细定义 | 进入对应阶段时读取 |
+| `project/context-conventions.md` | 项目上下文约定（spec 清单 + 后端类型约定） | 01 阶段读取 specs 或 04 阶段编码时 |
+| `project/deploy-config.yaml` | 部署配置 | 06 阶段 |
+| `project/build-verify.yaml` | 构建验证命令 | 04 阶段 Step 4.6 或 05 阶段 Step 0 |
+| `project/agent-prompt-examples.md` | Agent prompt 示例 | 04 阶段 Team Agent 派发前 |
+| `engine/startup/startup-protocol-step-e.md` | 每日工作日志写入 | 对话结束前 |
+| `engine/startup/startup-protocol-step-a5.md` | Step A.5 本地文件自检详情 | 检测到缺失文件或微核版本过旧时 |
+| `engine/gate/gate-protocol.md` | 修改门禁协议 + 影响等级 + 回滚方案模板 | SKILL.md 门禁摘要（已摘要，按需深入） |
+| `engine/domain/naming-conflict-check.md` | 命名冲突预检规则 | 03 方案输出前（自主审查 L1） |
+| `engine/domain/delta-marking.md` | 代码改动 Delta 标记体系 | 03 阶段（标注 ADDED/MODIFIED） |
+| `engine/collab/team-agent-strategy.md` | Team Agent 四维并行决策算法 | 04 阶段 Team 编码时 |
+| `engine/collab/self-heal-protocol.md` | 脚本失败限次自愈裁决（3 类白名单 / 上限 / 记账 / 禁止清单） | 04 Step 4.6 或 05 Step 3 脚本失败时 |
+| `engine/governance/lessons-learned.md` | 事故案例库 + 自动复盘机制 | 07 阶段回顾 或 发生事故时 |
+| `project/lessons-learned.md` | 项目级模式库（活跃区 + 候选区） | 01 阶段启动注入（活跃区全量，见 `engine/flow/phase-01.md` 前置步骤）/ 07 阶段回顾 |
+| `project/coding-conventions.md` | 项目编码规范（L5 层级） | 04 阶段编码 + 代码审查时 |
+| `project/code-review-rules.md` | 代码审查规则矩阵 | 04 阶段 Step 5（代码审查时） |
+| `engine/governance/capability-map.md` | skill 能力地图（11 域 · 状态标记） | 了解 skill 能力全貌 / 机制演进后更新 |
+| 阶段文档模板（`engine/templates/` 或 `project/templates/`） | 模板文件，优先级见 §模板解析优先级 | 各阶段产出文档时 |
+
+### ★ 引擎大文件定点读映射
+
+> 本节 = SKILL.md 上下文纪律 #4 的节级细化；『读多少』总纲仍以 `engine/context/context-discipline.md` 为准。
+
+1. **以下 6 文件（穷举：state-protocol 920 / gate-protocol 610 / cross-review-protocol 474 / phase-03 343 / phase-04 336 / complexity-scoring 330）非冷启动场景禁全文整读**；SKILL.md 与本文件（startup-protocol）因每次会话冷启动必读**不适用**本规则；本规则对象=引擎文件，与 SKILL.md 纪律 #5「大产物」同名不同义不串用。
+2. 按下表场景只读对应节（**锚 = 目标文件内真实标题字符串逐字 grep**，如「一、修改门禁协议」「三-A. 锚点包」，不用 §N 转写、不用行号；执行时**显式 UTF-8 读取**防 GBK 误判缺失）。
+3. 未列场景：先 grep 该文件标题定位相关大节定点读，确需全文才走例外并注明理由。
+
+**场景映射表（6 文件全覆盖）**：
+
+- **gate-protocol**：写入类工具调用前→「一、修改门禁协议」+「自修改影响声明」（本场景即 context-discipline §五-1「决策树读全」的边界：**读全 = 该整节 ~198 行，非 610 行全文**，为禁整读规则的显式豁免）；04 阶段删除类→「04 阶段的删除类操作校验」；阶段推进/步骤结清→「三、步骤门禁协议」（三-A/B/C）；迭代新建/废弃/暂停/删除→「二、迭代门禁协议」；门禁豁免→「四、门禁豁免」；逃生口→「一、修改门禁协议」内相关小节；🟡🔴 迭代→「五、影响等级分类」+「六、回滚方案模板」；改引擎自身→「五、影响等级分类」+「自修改影响声明」；多会话互斥→「七、多会话写者互斥」
+- **state-protocol**：写 state 字段→「三、文件格式」对应字段段+「3.3 Schema 强制校验规则」；phase_steps 操作→「八、phase_steps 字段协议」（含 8.3 门禁检查逻辑）；恢复迭代→「四、读取规则」；阶段完成/推进→「二、写入时机」+「3.1 阶段完成历史」；ACTIVE 读写→「六、ACTIVE 指针协议」
+- **cross-review-protocol**：派发 02/03/04 审查→「二、触发时机」+「三-A. 锚点包」+「四、各阶段审查指令模板」对应小节+「五、主 Agent 合并规则」；外部模型路由→「八、外部审查模型路由」对应 8.x
+- **phase-03**：进入阶段→全文读一次；执行漏斗时→当前子步骤段（step-1.x）
+- **phase-04**：进入阶段→全文读一次；缺陷修复→step-fix-* 节
+- **complexity-scoring**：新迭代 Step C→「一、复杂度评估算法」（含 1.2 评分映射、1.3 复杂度升降级机制）
+
+> ★ 映射节锚机械核验：`python {IDE}/skills/iteration-workflow/scripts/check-s1-anchors.py`（逐锚 UTF-8 grep，MISS=exit 1，WARN=跨文件引用不阻断；SLIM-5 ST-4 新增，本行为其 A1 引用豁免依据）。

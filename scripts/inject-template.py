@@ -27,7 +27,7 @@ import json
 # `audit-engine.py` A10-b（engine 内占位符是否全在 schema 内）三处消费同一份定义。
 # 各写一份必然漂移成「文档一套、正则一套、判据一套」—— 正是本迭代要治的根因之一。
 #
-# 分类口径（协议见 engine/template-injection.md）：
+# 分类口径（协议见 engine/context/template-injection.md）：
 #   ① a 短名别名 ALIAS          —— 历史短名，须映射到 manifest 展平键（应解析；未解析 = ERR）
 #   ① b 路径式   PATH_STYLE     —— 含 '.' 的 manifest 路径（`.`→`_` + upper 查展平键；未解析 = ERR）
 #   ② 运行时     RUNTIME_VARS   —— Agent 在 Step B/C 动态确定（允许保留原样）

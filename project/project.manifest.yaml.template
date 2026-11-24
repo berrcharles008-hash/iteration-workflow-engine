@@ -2,7 +2,7 @@
 # project.manifest.yaml — 项目元信息清单（模板）
 # ============================================================
 # 这是本 Skill 所有运行时变量的唯一数据源。
-# 变量注入协议详见 engine/template-injection.md
+# 变量注入协议详见 engine/context/template-injection.md
 #
 # 【用法】把本文件复制为 project.manifest.yaml，填写全部标 ★ 的项。
 #    install.ps1 / install.sh 会在首次安装时自动完成复制；
@@ -204,7 +204,7 @@ build:
     build_command: ""
 
 # ── 复杂度评估因素（可选）──
-# 省略本段 → 使用 engine/complexity-scoring.md §1.1 的「技术栈中立默认因素」
+# 省略本段 → 使用 engine/flow/complexity-scoring.md §1.1 的「技术栈中立默认因素」
 # （new_db_table / new_api / affected_files / new_module / new_layer_file /
 #   layer_modification / database_logic_change / ddl_change / cross_module_impact）。
 # 定义本段 → 覆盖默认值，可增删因素或调整权重。典型场景：

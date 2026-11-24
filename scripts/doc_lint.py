@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """迭代文档版式自检（Doc Lint）
 
-规则 SSOT: engine/doc-style-guide.md（十五条硬规则 D1~D15；D9~D13 早于 D14/D15 实现，
+规则 SSOT: engine/domain/doc-style-guide.md（十五条硬规则 D1~D15；D9~D13 早于 D14/D15 实现，
           2026-11-16 一并补登记 —— 此前 RULES 只到 D8，新规则同等"游离在元组外"）
 
 用法:
@@ -481,7 +481,7 @@ def to_rel(path):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='迭代文档版式自检（SSOT: engine/doc-style-guide.md）')
+    ap = argparse.ArgumentParser(description='迭代文档版式自检（SSOT: engine/domain/doc-style-guide.md）')
     ap.add_argument('paths', nargs='+', help='待检查的文件或目录（目录递归 *.md）')
     ap.add_argument('-q', '--quiet', action='store_true', help='只输出汇总')
     ap.add_argument('--json', action='store_true', help='机器可读输出')
@@ -533,7 +533,7 @@ def main():
         print('\n' + '=' * 58)
         print('扫描 %d 个文件 ｜ ERROR %d ｜ WARN %d' % (len(files), total_err, total_warn))
         if total_err:
-            print('ERROR 必须修复（版式 SSOT: engine/doc-style-guide.md）')
+            print('ERROR 必须修复（版式 SSOT: engine/domain/doc-style-guide.md）')
         print('=' * 58)
 
     return 1 if total_err else 0

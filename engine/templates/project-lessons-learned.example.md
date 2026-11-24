@@ -1,6 +1,6 @@
 # 项目级模式库
 
-> 引用 `engine/lessons-learned.md` 的通用复盘机制（§一~四）和蒸馏规则（§七）。
+> 引用 `engine/governance/lessons-learned.md` 的通用复盘机制（§一~四）和蒸馏规则（§七）。
 > 此文件为项目特有模式记录，不纳入 Git 跟踪，每位开发者独立维护。
 
 ## 项目特有模式

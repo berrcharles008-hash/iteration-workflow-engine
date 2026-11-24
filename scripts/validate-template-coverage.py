@@ -94,7 +94,7 @@ def parse_mapping_table(content):
 # ─── R1 ──────────────────────────────────────────────────
 def r1_phase_no_hardcoded(skill_dir, r):
     """Phase files must NOT contain engine/templates/ hardcoded prefix"""
-    eng = os.path.join(skill_dir, 'engine')
+    eng = os.path.join(skill_dir, 'engine', 'flow')
     for i in range(1, 8):
         fn = f'phase-{i:02d}.md'
         fp = os.path.join(eng, fn)
@@ -116,7 +116,7 @@ def r2_mapping_files_exist(skill_dir, r):
     tmpl_dir = os.path.join(skill_dir, 'engine', 'templates')
     actual = set(os.listdir(tmpl_dir)) if os.path.isdir(tmpl_dir) else set()
     mapping = parse_mapping_table(
-        open(os.path.join(skill_dir, 'engine', 'startup-protocol.md'), encoding='utf-8').read())
+        open(os.path.join(skill_dir, 'engine', 'startup', 'startup-protocol.md'), encoding='utf-8').read())
     if not mapping:
         r.err('R2: cannot parse mapping table')
         return
@@ -132,7 +132,7 @@ def r2_mapping_files_exist(skill_dir, r):
 # ─── R3 ──────────────────────────────────────────────────
 def r3_mapping_phase_ref(skill_dir, r):
     """Mapping table col 5 must not be empty or 'reserved'"""
-    content = open(os.path.join(skill_dir, 'engine', 'startup-protocol.md'), encoding='utf-8').read()
+    content = open(os.path.join(skill_dir, 'engine', 'startup', 'startup-protocol.md'), encoding='utf-8').read()
     pat = re.search(r'### .*?模板文件名映射表.*?\n\n((?:\|.*\n)+)', content, re.DOTALL)
     if not pat: return
     for line in pat.group(1).strip().split('\n'):
@@ -151,7 +151,7 @@ def r3_mapping_phase_ref(skill_dir, r):
 # ─── R4 ──────────────────────────────────────────────────
 def r4_prohibition_symmetric(skill_dir, r):
     """Prohibition rules must symmetrically cover project AND engine"""
-    content = open(os.path.join(skill_dir, 'engine', 'startup-protocol.md'), encoding='utf-8').read()
+    content = open(os.path.join(skill_dir, 'engine', 'startup', 'startup-protocol.md'), encoding='utf-8').read()
     m = re.search(r'### 禁止事项\n(.*?)(?=\n(?:>|#|---|\Z))', content, re.DOTALL)
     if not m:
         r.err('R4: prohibition section not found')
@@ -172,7 +172,7 @@ def r4_prohibition_symmetric(skill_dir, r):
 # ─── R5 ──────────────────────────────────────────────────
 def r5_fewshot_no_hardcoded(skill_dir, r):
     """Few-Shot must not have read_file(engine/templates/...) without list_files first"""
-    content = open(os.path.join(skill_dir, 'engine', 'startup-protocol.md'), encoding='utf-8').read()
+    content = open(os.path.join(skill_dir, 'engine', 'startup', 'startup-protocol.md'), encoding='utf-8').read()
     m = re.search(r'### Few-Shot 执行示例.*?(?=\n### )', content, re.DOTALL)
     if not m:
         r.err('R5: Few-Shot section not found')
@@ -199,7 +199,7 @@ def r5_fewshot_no_hardcoded(skill_dir, r):
 # ─── W1 ──────────────────────────────────────────────────
 def w1_phase_template_refs(skill_dir, r):
     """Each phase file should have template reference line"""
-    eng = os.path.join(skill_dir, 'engine')
+    eng = os.path.join(skill_dir, 'engine', 'flow')
     for i in range(1, 8):
         fn = f'phase-{i:02d}.md'
         fp = os.path.join(eng, fn)
@@ -221,7 +221,7 @@ def w2_unreferenced_files(skill_dir, r):
     tmpl_dir = os.path.join(skill_dir, 'engine', 'templates')
     actual = set(os.listdir(tmpl_dir)) if os.path.isdir(tmpl_dir) else set()
     mapping = parse_mapping_table(
-        open(os.path.join(skill_dir, 'engine', 'startup-protocol.md'), encoding='utf-8').read())
+        open(os.path.join(skill_dir, 'engine', 'startup', 'startup-protocol.md'), encoding='utf-8').read())
     referenced = set(mapping.keys())
     unreferenced = actual - referenced
     known = {
@@ -266,7 +266,7 @@ def w3_skill_md(skill_dir, r):
 # ─── W4 ──────────────────────────────────────────────────
 def w4_fallback_chain(skill_dir, r):
     """Few-Shot section must cover project -> engine fallback for all scenes"""
-    content = open(os.path.join(skill_dir, 'engine', 'startup-protocol.md'), encoding='utf-8').read()
+    content = open(os.path.join(skill_dir, 'engine', 'startup', 'startup-protocol.md'), encoding='utf-8').read()
     m = re.search(r'### Few-Shot 执行示例.*?(?=\n### )', content, re.DOTALL)
     if not m:
         r.err('W4: Few-Shot section not found')
@@ -293,7 +293,7 @@ def w4_fallback_chain(skill_dir, r):
 # ─── W5 ──────────────────────────────────────────────────
 def w5_unified_pattern(skill_dir, r):
     """Verify unified list_files-first pattern"""
-    content = open(os.path.join(skill_dir, 'engine', 'startup-protocol.md'), encoding='utf-8').read()
+    content = open(os.path.join(skill_dir, 'engine', 'startup', 'startup-protocol.md'), encoding='utf-8').read()
     if '所有场景均先' in content and 'list_files' in content:
         r.ok('W5: unified list_files-first guidance present')
     else:

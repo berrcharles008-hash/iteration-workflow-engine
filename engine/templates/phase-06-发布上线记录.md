@@ -1,6 +1,6 @@
 # 上线记录
 
-<!-- 填写纪律（SSOT：engine/doc-style-guide.md）
+<!-- 填写纪律（SSOT：engine/domain/doc-style-guide.md）
      ① 部署步骤用编号列表 + 命令代码块，不塞表格单元格；每步行尾记状态与时间
      ② 结构增强：>200 行加 `## 目录`；引用写相对链接（SSOT §7）
      ③ 生成后自检：python scripts/doc_lint.py <本文件> -->

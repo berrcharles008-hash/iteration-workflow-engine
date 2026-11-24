@@ -38,7 +38,8 @@ MAX_DEPTH = 6
 def git_info(root: Path) -> dict:
     try:
         r = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"],
-                           text=True, capture_output=True, check=False, timeout=10)
+                           text=True, encoding="utf-8", errors="replace",
+                           capture_output=True, check=False, timeout=10)
     except Exception:
         return {"is_repository": False, "root": None}
     if r.returncode != 0:

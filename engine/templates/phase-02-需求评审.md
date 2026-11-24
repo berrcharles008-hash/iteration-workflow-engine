@@ -1,6 +1,6 @@
 # 02-需求评审 · {迭代名称}
 
-<!-- 填写纪律（版式 SSOT：engine/doc-style-guide.md）
+<!-- 填写纪律（版式 SSOT：engine/domain/doc-style-guide.md）
      ① 正文只留"问题 → 处置结论"一行一条；逐项展开的处置细节进附录 A
      ② 评审流水（第几轮、谁提出、已修订标记）不进正文
      ③ 生成后自检：python scripts/doc_lint.py <本文件> -->
@@ -12,10 +12,10 @@
 | 状态 | ⏳ 进行中 |
 | 评审对象 | [01-需求记录](../01-需求分析与设计/01-需求记录.md) |
 | 评审方式 | 主 Agent 自审 / 独立 Agent 交叉审查 / 外部模型 |
-| 澄清轮次 | 首轮 + 复审 N 轮（上限 3；触发判据见 engine/phase-02.md §澄清复审轮） |
+| 澄清轮次 | 首轮 + 复审 N 轮（上限 3；触发判据见 engine/flow/phase-02.md §澄清复审轮） |
 | 更新时间 | YYYY-MM-DD |
 
-> ★ 等待方式（A/B/D + 时限/退化）见 engine/waiting-protocol.md。
+> ★ 等待方式（A/B/D + 时限/退化）见 engine/collab/waiting-protocol.md。
 
 ---
 

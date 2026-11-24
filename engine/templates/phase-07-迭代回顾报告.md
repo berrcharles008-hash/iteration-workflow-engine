@@ -1,6 +1,6 @@
 # 迭代回顾报告
 
-<!-- 填写纪律（SSOT：engine/doc-style-guide.md）
+<!-- 填写纪律（SSOT：engine/domain/doc-style-guide.md）
      ① 模式沉淀用条目块（现象 / 原因 / 做法 / 证据），不塞表格单元格
      ② 结构增强：>200 行加 `## 目录`；引用写相对链接（SSOT §7）
      ③ 生成后自检：python scripts/doc_lint.py <本文件> -->
@@ -117,7 +117,7 @@
 
 | # | 类型 | 文件 | sha16（基线 → 此刻） | 说明 |
 |:--:|:--:|:--|:--|:--|
-| 1 | changed | `engine/phase-07.md` | `1a2b3c4d5e6f7a8b` → `9f8e7d6c5b4a3021` | {改了什么、为何改} |
+| 1 | changed | `engine/flow/phase-07.md` | `1a2b3c4d5e6f7a8b` → `9f8e7d6c5b4a3021` | {改了什么、为何改} |
 | 2 | added | `engine/xxx.md` | `-` → `5c4b3a29187f6e5d` | {新增文件与用途} |
 | 3 | missing | `scripts/old.py` | `7a8b9c0d1e2f3a4b` → `-` | {删除原因} |
 

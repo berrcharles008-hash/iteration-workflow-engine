@@ -19,16 +19,16 @@
     A8 等待点指针    含"等待用户"类确认表述的 engine md 须挂 `waiting-protocol.md` 指针（★ E4，RESUME-3 批次 1）
     A10 通用性自检   a 项目 token / c 派生表对账 / d 落点存在性（★ 2026-10-24 批次 0；b/e 依赖批次 2 ⇒ 显式 SKIP）
     A11 页面两表    委托 scripts/check-03-page-tables.py（★ 2026-11-01 批 2）：有前端页面改动的 03 是否写了
-                    §2.3.1 列定义表 / §2.3.2 检索条件表；并断言 engine/phase-03.md 的挂载点未被删
+                    §2.3.1 列定义表 / §2.3.2 检索条件表；并断言 engine/flow/phase-03.md 的挂载点未被删
     A12 模式库义务  （★ 2026-11-05 BATCH-B）a 活跃表「落点」前缀合法（ERR）；b1 落点无路径（WARN，机器无法判定）
                     b2 落点路径双基准均不存在（ERR）；c 活跃条目越阈值（WARN，红灯在 check-distill 退出码 3）；
                     d 当前迭代 04/05 的 `[模式: P-xxx]` 合计 <3（WARN）且编号须存在于模式库全集；
                     e 落点时效：载体 mtime < 首次发现日期（WARN，2026-11-17 起升 ERR，纯时间常量）
     A13 05 渲染清单  委托 scripts/check-05-render-list.py（★ 2026-11-16）：页面型迭代的 05 是否含
                     「平台渲染验收清单」且 8 项逐项有结论（全 ⬜ 判 ERR）；触发面 = §2.3 两表 **或**
-                    U3/U6 布局包（UI 重排类迭代旧口径整条绕过）；并断言 engine/phase-05.md 挂载点未删
+                    U3/U6 布局包（UI 重排类迭代旧口径整条绕过）；并断言 engine/flow/phase-05.md 挂载点未删
 
-规范页：engine/consistency-checklist.md
+规范页：engine/governance/consistency-checklist.md
 """
 
 import argparse
@@ -52,15 +52,20 @@ SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 TEXT_EXTS = ('.md', '.py', '.mjs', '.json', '.yaml', '.yml', '.ps1', '.sh')
 
-# ★ 核心文件（`engine/evolution-safety.md` §一 的清单**以本常量为准**，避免双源漂移）
+# ★ 核心文件（`engine/governance/evolution-safety.md` §一 的清单**以本常量为准**，避免双源漂移）
 # ★ E-3（2026-10-01-002）：实现已由 HOOK-SLIM-1 迁至 `engine/gate/gate-check.mjs`，
 #   `hooks/gate-check.mjs` 降为转发 shim（skill 内该文件已不存在）⇒ 改列真实实现。
 CORE_FILES = [
     'engine/gate/gate-check.mjs',
-    'engine/gate-protocol.md',
-    'engine/state-protocol.md',
+    'engine/gate/gate-protocol.md',
+    'engine/state/state-protocol.md',
     'SKILL.md',
 ]
+
+# C-1（2026-11-24 引擎目录重组）：`engine/` 顶层 30 个 md 已按 8 组分区。
+# ★ 剪枝**只含** templates/rules：`gate/` 必须保留为候选目录（gate-protocol.md /
+#   gate-decision-table.md 正迁入其中，误剪 ⇒ 候选 52→50、漏审 2 文件）。
+ENGINE_NON_CANDIDATE = ('templates', 'rules')
 
 # A1：允许「有意孤立」的文件（登记于此）
 ORPHAN_ALLOW = set()
@@ -101,8 +106,8 @@ PLACEHOLDER_RE = re.compile(r'(?:^|[^A-Za-z])(NN|NNN|0X|YYYY|MM|DD|XXX)(?:[^A-Za
 
 # A5：治理文档（元层规范 —— 低频更新正常，长期不动 = 脱节）
 GOV_DOCS = [
-    'engine/evolution-safety.md',
-    'engine/consistency-checklist.md',
+    'engine/governance/evolution-safety.md',
+    'engine/governance/consistency-checklist.md',
     'runtime/SESSION-HANDOFF.md',
 ]
 GOV_STALE_DAYS = 7          # A5-a：内容日期距今超过此值 ⇒ WARN
@@ -201,13 +206,24 @@ def collect_texts(skip_rel=None, scope='engine'):
 
 
 # ── A1 孤儿文件 ─────────────────────────────────────────────
-def a1_orphan():
-    cands = []
+def _engine_md_candidates():
+    """engine/** 下的 md 候选（相对 SKILL_ROOT，正斜杠）—— 目录重组后必须递归。
+
+    ★ C-1（2026-11-24）：原实现 `os.listdir(engine)` 只扫顶层，8 组分区后候选会掉到 0。
+      剪枝仅 `ENGINE_NON_CANDIDATE`；`gate/` 内 2 个 md 是正式候选。
+    """
     eng = os.path.join(SKILL_ROOT, 'engine')
-    for fn in sorted(os.listdir(eng)):
-        p = os.path.join(eng, fn)
-        if os.path.isfile(p) and fn.endswith('.md'):
-            cands.append('engine/' + fn)
+    out = []
+    for dirpath, dirnames, filenames in os.walk(eng):
+        dirnames[:] = [d for d in dirnames if d not in ENGINE_NON_CANDIDATE]
+        for fn in sorted(filenames):
+            if fn.endswith('.md'):
+                out.append(os.path.relpath(os.path.join(dirpath, fn), SKILL_ROOT).replace('\\', '/'))
+    return sorted(out)
+
+
+def a1_orphan():
+    cands = _engine_md_candidates()
     sc = os.path.join(SKILL_ROOT, 'scripts')
     for fn in sorted(os.listdir(sc)):
         if fn.endswith('.py') and fn not in ORPHAN_SKIP:
@@ -244,7 +260,7 @@ def _table_ids(text):
 
 
 def a2_step_ids():
-    ps = read(os.path.join(SKILL_ROOT, 'engine', 'phase-steps.md'))
+    ps = read(os.path.join(SKILL_ROOT, 'engine', 'flow', 'phase-steps.md'))
     if not ps:
         err('A2', 'phase-steps.md 不可读')
         return
@@ -253,9 +269,9 @@ def a2_step_ids():
         err('A2', 'phase-steps.md 未解析出步骤 ID（表格格式可能已变）')
         return
 
-    targets = ['engine/phase-%02d.md' % i for i in range(1, 8)] + [
-        'engine/complexity-scoring.md',
-        'engine/cross-review-protocol.md',
+    targets = ['engine/flow/phase-%02d.md' % i for i in range(1, 8)] + [
+        'engine/flow/complexity-scoring.md',
+        'engine/collab/cross-review-protocol.md',
         'SKILL.md',
     ]
     bad_total = 0
@@ -279,7 +295,7 @@ def a2_step_ids():
             bad_total += len(bad)
             err('A2', '%s 出现未登记步骤 ID: %s' % (t, ', '.join(sorted(bad))))
     for i in range(1, 8):
-        t = 'engine/phase-%02d.md' % i
+        t = 'engine/flow/phase-%02d.md' % i
         missing = sorted(x for x in _table_ids(strip_change_log(read(os.path.join(SKILL_ROOT, t))))
                          if x not in authoritative)
         if missing:
@@ -291,7 +307,7 @@ def a2_step_ids():
 
 # ── A3 产出物名 ─────────────────────────────────────────────
 def a3_doc_names():
-    we = read(os.path.join(SKILL_ROOT, 'engine', 'workflow-engine.md'))
+    we = read(os.path.join(SKILL_ROOT, 'engine', 'flow', 'workflow-engine.md'))
     if not we:
         err('A3', 'workflow-engine.md 不可读')
         return
@@ -305,7 +321,7 @@ def a3_doc_names():
         return
     bad = 0
     for stage, names in sorted(table.items()):
-        ph = read(os.path.join(SKILL_ROOT, 'engine', 'phase-%s.md' % stage.zfill(2)))
+        ph = read(os.path.join(SKILL_ROOT, 'engine', 'flow', 'phase-%s.md' % stage.zfill(2)))
         if not ph:
             continue
         for n in sorted(names):
@@ -434,7 +450,7 @@ def a8_wait_points():
 
 # ── A11 03 页面两表完整性（★ 2026-11-01 批 2）────────────────
 A11_SCRIPT = 'scripts/check-03-page-tables.py'
-A11_MOUNT_DOC = 'engine/phase-03.md'
+A11_MOUNT_DOC = 'engine/flow/phase-03.md'
 
 
 def a11_page_tables():
@@ -475,7 +491,7 @@ def a11_page_tables():
 
 # ── A13 05 渲染验收清单完整性（★ 2026-11-16）────────────────
 A13_SCRIPT = 'scripts/check-05-render-list.py'
-A13_MOUNT_DOC = 'engine/phase-05.md'
+A13_MOUNT_DOC = 'engine/flow/phase-05.md'
 
 
 def a13_render_list():
@@ -649,8 +665,8 @@ A10_BASELINE = {
 A10_ALLOW = {
     ('engine/gate/exempt-tables.mjs', 'T2'),            # LEGACY_HANDOFF_ENV（唯一代码字面量）
     ('engine/templates/cold-start-gate-nucleus.md', 'T2'),
-    ('engine/gate-protocol.md', 'T2'),
-    ('engine/state-protocol.md', 'T2'),
+    ('engine/gate/gate-protocol.md', 'T2'),
+    ('engine/state/state-protocol.md', 'T2'),
     ('scripts/run-gate-tests.mjs', 'T2'),               # 判据 #6「旧名仍放行」的回归用例本身
 }
 
@@ -975,7 +991,7 @@ def _a10d():
     """落点存在性：capability-map 落点 + README/CONTRIBUTING 相对链接。
     解析顺序 = skill 根 → engine/ → scripts/ → project/ → 文档同目录（契约目录集合，
     不做全库 basename 匹配 —— 那会与 A4 重复且假阴性，见 P-188）。"""
-    docs = [os.path.join(SKILL_ROOT, 'engine', 'capability-map.md'),
+    docs = [os.path.join(SKILL_ROOT, 'engine', 'governance', 'capability-map.md'),
             os.path.join(SKILL_ROOT, 'README.md'),
             os.path.join(SKILL_ROOT, 'CONTRIBUTING.md')]
     tok_re = re.compile(r'`([A-Za-z0-9_./-]+\.(?:md|py|mjs|json|yaml|yml|ps1|sh))`')
@@ -1127,7 +1143,7 @@ def _a10f():
 #      口径理解。历史痛点是「文档一套、正则一套、判据一套」，② 就是把这一刀机器化。
 #   ② 的比对方式是**解析 §2.4 表格的成员集合**，不靠人工维护第二份清单（否则又是两处真值源）。
 A10_INJECT = os.path.join(SKILL_ROOT, 'scripts', 'inject-template.py')
-A10_PROTOCOL_DOC = os.path.join(SKILL_ROOT, 'engine', 'template-injection.md')
+A10_PROTOCOL_DOC = os.path.join(SKILL_ROOT, 'engine', 'context', 'template-injection.md')
 # ★ 占位符正则**不在这里写**：从 `--schema-dump` 的 `placeholder_re` 取（SSOT = 注入器）。
 #   历史上这里是第三份拷贝且更窄（漏 `-`），含连字符的占位符在注入侧报错、在判据① 里看不见
 #   ⇒ 判据洞（2026-10-25 step-7 审查 V-4）。`scan-placeholders.py` 走 import 复用，这里走 JSON。
@@ -1267,7 +1283,7 @@ def _a10b():
     # 判据②：协议表成员 == schema 成员（双向 + 数量列 + ④ 写法）
     doc = _a10_parse_doc_schema(A10_PROTOCOL_DOC)
     if doc is None:
-        err('A10-b', '无法解析 engine/template-injection.md §2.4 五类 schema 表')
+        err('A10-b', '无法解析 engine/context/template-injection.md §2.4 五类 schema 表')
         A10_STAT['b'] = 'ERR'
         return
     bad = bool(unk) or bool(unread)
@@ -1373,7 +1389,7 @@ A12_PREFIXES = ('脚本:', '断言:', '规范:', '提示')
 A12_PATH_RE = re.compile(
     r'[A-Za-z0-9_.\-/]+\.(?:md|py|mjs|js|cs|json|yaml|yml|ps1|sh|sql|ts|vue)')
 A12_MARK_RE = re.compile(r'\[模式:\s*(P-\d+)\s*\]')
-A12_ACTIVE_MAX = 15          # 与 runtime/check-distill.mjs 的 ACTIVE_MAX 同源（SSOT = engine/lessons-learned.md §七）
+A12_ACTIVE_MAX = 15          # 与 runtime/check-distill.mjs 的 ACTIVE_MAX 同源（SSOT = engine/governance/lessons-learned.md §七）
 A12_MIN_MARKS = 3            # T2 判据：04 + 05 合计 ≥3
 # ★ A12-e 落点时效（2026-11-16 · VERIF2）：
 #   为什么用纯时间常量而不是台账文件：升级由时钟自动完成，任何人不需要做任何动作，

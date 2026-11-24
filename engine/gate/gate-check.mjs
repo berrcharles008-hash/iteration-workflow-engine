@@ -5,7 +5,7 @@
  * 在 write_to_file / replace_in_file / delete_file / execute_command 执行前进行阶段门禁检查。
  * 此脚本由 IDE PreToolUse hook 触发，Agent 无法绕过。
  *
- * 规则 SSOT：{TARGET}/skills/iteration-workflow/engine/gate-protocol.md
+ * 规则 SSOT：{TARGET}/skills/iteration-workflow/engine/gate/gate-protocol.md
  *
  * === 门禁逻辑 ===
  * 1. ALWAYS_ALLOW（本迭代 runtime/ 目录）→ 无条件放行（★ FIX-9：段前缀匹配，不再用子串 includes）
@@ -346,7 +346,7 @@ const EXEMPT_PATHS = EXEMPT_RESOLUTION.tables.exemptPaths;
 
 /**
  * ★ E-6（2026-10-02 迭代 2026-10-01-002 · 工单 R-14）：01-03 阶段「**仅 .md**」放行目录。
- * 依据：`phase-01.md` step-2-6 规定 CONTEXT.md 落点 = `{{SPECS_DIR}}/iteration-context/`，
+ * 依据：`../flow/phase-01.md` step-2-6 规定 CONTEXT.md 落点 = `{{SPECS_DIR}}/iteration-context/`，
  *   但该目录不在 EXEMPT_PATHS ⇒ 01 阶段写 CONTEXT.md 被拦（实测 2026-09-30-002 与本次迭代各 1 次）。
  * 口径：**仅 .md**（与 05/06/NONE 的 mdDirs 一致）⇒ 同目录 .cs/.sql 等仍拦（负向对照见回归）。
  */
@@ -1582,7 +1582,7 @@ function readDispatchWhitelist(stateContent) {
 /**
  * 白名单命中：条目为精确路径或目录前缀（条目以 `/` 结尾或作为目录前缀）。
  * ★ E-7（2026-10-02 迭代 2026-10-01-002）：**条目 + `.tmp` 后缀豁免**
- *   —— 原子写（先写 `<目标>.tmp` → 改名覆盖）是派发纪律的要求（`team-agent-strategy.md` §七），
+ *   —— 原子写（先写 `<目标>.tmp` → 改名覆盖）是派发纪律的要求（`../collab/team-agent-strategy.md` §七），
  *   否则成员按纪律落盘反而被 WHITELIST_BLOCK（实测 2026-10-01 试点）。
  *   边界：仅「同条目 + `.tmp`」，不放行其它后缀；Bash 通道本不参与本判定（`:1313` 仅文件工具）。
  */

@@ -1,7 +1,7 @@
 # Agent Prompt 示例（项目级）
 
 > **本文件为引擎模板**，由 `install.ps1` 复制为 `project/agent-prompt-examples.md`，再由项目填充特有内容。
-> **消费点**：04-开发实现 Step 2 派发 Team Agent 前必读（`engine/phase-04.md` §Step 2、`engine/startup-protocol.md` 配置索引）。
+> **消费点**：04-开发实现 Step 2 派发 Team Agent 前必读（`engine/flow/phase-04.md` §Step 2、`engine/startup/startup-protocol.md` 配置索引）。
 > **目的**：让每个 Team Agent 收到的 prompt 结构一致、约束齐全，避免"生成的代码能编译但不能合入"。
 
 ---
@@ -12,7 +12,7 @@
 > （平台提示：`extension host terminated unexpectedly ... any team members were stopped`；
 > 实测 09-23 / 09-24 共 5 次）。成员"只输出不写文件"⇒ 产出仅存在于回传消息中，必须落盘兜底。
 
-**每个成员 prompt 必须原样包含**【产出落盘】段（模板见 `engine/team-agent-strategy.md` §七）：
+**每个成员 prompt 必须原样包含**【产出落盘】段（模板见 `engine/collab/team-agent-strategy.md` §七）：
 
 - 每完成**一个**文件立即追加写 `{IDE}/temp/team-out/<成员名>.md`，**不得**最后一次性写
 - 原子写：先写 `<成员名>.md.tmp`，再 rename 覆盖（防崩溃产生半截文件）

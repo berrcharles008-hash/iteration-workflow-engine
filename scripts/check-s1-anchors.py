@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 check-s1-anchors.py — S-1 映射节锚常驻审计（SLIM-5 / ST-4）
-SSOT：engine/startup-protocol.md「### ★ 引擎大文件定点读映射」节（锚定义唯一源）；
+SSOT：engine/startup/startup-protocol.md「### ★ 引擎大文件定点读映射」节（锚定义唯一源）；
 本脚本为机械化兜底（SLIM-1 W-1：映射锚随后续件编辑失效的常驻审计）。
 A1 引用豁免依据：startup-protocol.md S-1 映射节末行（「check-s1-anchors.py」字样）。
 
@@ -25,7 +25,7 @@ import sys
 
 SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # .../iteration-workflow
 ENGINE_DIR = os.path.join(SKILL_ROOT, "engine")
-DEFAULT_MAP = os.path.join(SKILL_ROOT, "engine", "startup-protocol.md")
+DEFAULT_MAP = os.path.join(SKILL_ROOT, "engine", "startup", "startup-protocol.md")
 SECTION_HEADING = "### ★ 引擎大文件定点读映射"
 BULLET_RE = re.compile(r"^- \*\*([A-Za-z0-9_-]+)\*\*：(.*)$")
 ANCHOR_RE = re.compile(r"「([^」]+)」")
@@ -78,19 +78,30 @@ def main():
         sys.exit(2)
 
     # 预读 engine/ 全目录（锚回扫用）
-    engine_files = {}
-    for fn in sorted(os.listdir(ENGINE_DIR)):
-        if fn.endswith(".md"):
+    # ★ C-12（2026-11-24 目录重组）：原 os.listdir 只扫顶层，8 组分区后字典为空
+    #   ⇒ 全部 [MISS] ⇒ exit 1。改递归 + 相对路径键，并用 basename 反查（映射表按裸名书写）。
+    engine_files = {}       # 相对 engine/ 的路径（正斜杠）→ 文本
+    engine_by_base = {}     # basename → 相对路径（映射表 target 为裸名）
+    for dirpath, dirnames, filenames in os.walk(ENGINE_DIR):
+        dirnames[:] = [d for d in dirnames if d not in ("__pycache__", ".git")]
+        for fn in sorted(filenames):
+            if not fn.endswith(".md"):
+                continue
+            full = os.path.join(dirpath, fn)
+            rel = os.path.relpath(full, ENGINE_DIR).replace("\\", "/")
             try:
-                engine_files[fn] = read_text(os.path.join(ENGINE_DIR, fn))
+                engine_files[rel] = read_text(full)
             except Exception as e:
-                print("[WARN] 引擎文件读取失败: %s (%r)" % (fn, e))
+                print("[WARN] 引擎文件读取失败: %s (%r)" % (rel, e))
+                continue
+            engine_by_base.setdefault(fn, rel)
 
     total = warn_n = miss_n = 0
     map_base = os.path.basename(map_path)
     for target, anchors, raw_line in entries:
         target_file = target + ".md"
-        target_text = engine_files.get(target_file)
+        target_rel = engine_by_base.get(target_file)
+        target_text = engine_files.get(target_rel) if target_rel else None
         if target_text is None:
             print("[MISS] 目标文件缺失: engine/%s（映射行存在但文件不在）" % target_file)
             miss_n += len(anchors) or 1
@@ -107,7 +118,7 @@ def main():
                 print("[PASS] %s ← 「%s」" % (target_file, anchor))
             else:
                 hit = [fn for fn, txt in engine_files.items()
-                       if fn != map_base and anchor in txt]   # 排除映射文件自身（防自命中假阳性）
+                       if os.path.basename(fn) != map_base and anchor in txt]   # 排除映射文件自身（防自命中假阳性）
                 if hit:
                     warn_n += 1
                     print("[WARN] %s ← 「%s」未命中目标，他处命中: %s（跨文件引用？核对映射行）"

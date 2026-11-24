@@ -169,10 +169,10 @@ Agent：→ 进入 05 测试验证 → 生成用例 → 自动执行
 | 文件 | 干什么的 | 什么时候看 |
 |------|---------|-----------|
 | `SKILL.md` | Skill 入口，路由表 + 原则摘要 | 首次了解 |
-| `engine/gate-protocol.md` | 三道门禁完整规则 | 想知道"为什么改不了代码" |
-| `engine/workflow-engine.md` | 七阶段详细定义 | 想深入理解某个阶段 |
-| `engine/state-protocol.md` | 状态文件格式与读写规则 | 排查状态文件问题 |
-| `engine/phase-steps.md` | 各阶段步骤清单（唯一真源） | 确认某阶段的步骤是否完整 |
+| `engine/gate/gate-protocol.md` | 三道门禁完整规则 | 想知道"为什么改不了代码" |
+| `engine/flow/workflow-engine.md` | 七阶段详细定义 | 想深入理解某个阶段 |
+| `engine/state/state-protocol.md` | 状态文件格式与读写规则 | 排查状态文件问题 |
+| `engine/flow/phase-steps.md` | 各阶段步骤清单（唯一真源） | 确认某阶段的步骤是否完整 |
 | `project/project.manifest.yaml` | 项目配置（路径/技术栈/编译单元） | 新项目接入 |
 
 > 完整文件清单 48 个，日常使用只需这 6 个。
