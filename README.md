@@ -65,7 +65,6 @@ sj-iteration-workflow-engine/
 │   ├── gate-decision-table.md       ← 门禁决策表
 │   ├── startup-protocol-step-e.md   ← 每日工作日志协议
 │   ├── startup-protocol-step-a5.md  ← Step A.5 自检详情（惰性）
-│   ├── engine-version.template.txt  ← 版本号模板
 │   ├── gate/                        ← 门禁实现（gate-check.mjs；drift 修复：原未收录）
 │   └── templates/                   ← 阶段文档模板
 │       ├── phase-01-需求记录.md
@@ -252,7 +251,6 @@ sj-iteration-workflow-engine/
 │   ├── evolution-safety.md          ← Self-modification safety
 │   ├── gate-decision-table.md       ← Gate decision table
 │   ├── startup-protocol-step-e.md   ← Daily work log protocol
-│   ├── engine-version.template.txt  ← Version template
 │   ├── gate/                        ← Gate implementation (gate-check.mjs; drift fix: previously missing)
 │   └── templates/                   ← Phase document templates
 │       └── agent-prompt-examples.example.md ← Agent dispatch examples (drift fix: previously missing)

@@ -168,7 +168,7 @@
 | 门禁注入 | 微核/钩子安装 | `scripts/setup-gate.py` | ✅ |
 | 领域插件 | **未接线**（G02 · 2026-10-25）：规则迁至项目侧示例，不被任何代码加载 | 项目侧自建（样板见 domain-rules.example.md） | ⚠️ |
 | 回流同步 | 工作副本 → 源仓库 | `scripts/sync-back-to-engine-repo.ps1` | ✅ |
-| 引擎版本号 | 由 F1 `freeze-set` 落地（迭代 2026-11-20-002）；原 `engine-version.template.txt` 两处实例均未生成、从未生效 | `scripts/state-apply.py` `freeze-*` · `state-protocol.md` §9.8 | ✅ |
+| 引擎版本号 | 由 F1 `freeze-set` 落地（迭代 2026-11-20-002） | `scripts/state-apply.py` `freeze-*` · `state-protocol.md` §9.8 | ✅ |
 
 ## 缺口与边界（汇总）
 
