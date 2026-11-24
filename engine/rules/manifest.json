@@ -1,5 +1,5 @@
 {
-  "version": "1.1",
+  "version": "1.2",
   "note": "M4 规则注入声明（唯一事实源）。base_rules = 全阶段基础规则；stage_rules = 阶段主文件；profiles = 按 signals 命中才注入，未命中不注入。file 路径相对 engine/。判定脚本：scripts/inspect-context.py（证据）+ scripts/build-stage-prompt.py（清单）。SKILL.md 分级路由保留为降级路径。★ 勿用恒真信号表达\"always\"（如 path_parts:.codebuddy）——always 请写进本键，保持信号语义诚实。",
   "base_rules": {
     "files": [
@@ -57,7 +57,8 @@
     {
       "id": "sql",
       "title": "SQL / 数据变更专项",
-      "file": "consistency-checklist.md",
+      "file": null,
+      "note": "★ 2026-11-24：原指向 consistency-checklist.md（引擎一致性审计 A1~A13，与 SQL 变更无关）⇒ 改 null 不注入；engine 层无 SQL 专项规则，SQL 规范归属项目侧 .codebuddy/rules/，signals 保留待将来接入",
       "stages": ["01", "03", "04", "05"],
       "signals": {
         "evidence_extensions": [".sql"],
@@ -68,7 +69,8 @@
     {
       "id": "report",
       "title": "报表专项（FRX / 打印模板）",
-      "file": "template-injection.md",
+      "file": null,
+      "note": "★ 2026-11-24：原指向 template-injection.md（{{占位符}} 变量注入协议，与 FRX 报表无关）⇒ 改 null 不注入；FRX 规范归属项目侧 .codebuddy/rules/，signals 保留待将来接入",
       "stages": ["01", "03", "04", "05"],
       "signals": {
         "evidence_extensions": [".frx"],
