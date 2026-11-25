@@ -26,6 +26,12 @@
 #            自启注册/计划任务/启动服务 —— 那三项是单机单实例（快捷方式名 / 计划任务名 /
 #            端口 18765 全局唯一，第二个项目会静默顶掉第一个）。
 #          · Step 2b 承载拷贝（沿用既有 7b 的「b 步不进分母」约定）⇒ 8 步文案零改动。
+# v2.7.0 — ★ REQ-015（2026-11-24）：Step 4b「已注册」判定改**结构化**（修门禁静默失效）
+#          · 原判据 = 文件全文 `-match 'gate-check\.mjs'` ⇒ Stop 或任意 hook 提及该文件名即
+#            误判为「已注册」，装完 PreToolUse 里没有 gate 却打印 ✅（D-2，夹具实测复现）；
+#          · 现判据 = `Test-HookCommand`，只遍历 hooks.<HookName>[].hooks[].command（fail-open：
+#            解析失败 = 判未注册，走保守合并）；同批修 Step 4b-2 的 --dispatch / --stop-guard；
+#          · Step 8 新增装后自检：注册没生效即 exit 1（对齐 F3 / -WithQqbot 半装硬失败口径）。
 # ============================================================
 
 param(
@@ -493,6 +499,28 @@ if ($HookTarget) {
     Write-Host "  ⚠  Generic mode: no Hook available（prompt-level gate only）"
 }
 
+# ★ REQ-015：判「是否已注册」只看**结构化命令字段**，禁文件全文匹配。
+#   全文匹配会被 Stop / 其他 hook 里出现的同一文件名骗过 ⇒ 装完 PreToolUse 无门禁却打印 ✅。
+#   fail-open：JSON 解析失败 = 判「未注册」⇒ 上层走保守合并，绝不因此跳过注册。
+#   -HookName 支持 PreToolUse / Stop（Step 4b-2 的 Stop 段同样需要结构化判定）。
+#   判据用**子串**（如 gate-check\.mjs），不绑 .codebuddy/hooks/ 前缀 ⇒ 兼容老版本写法。
+function Test-HookCommand {
+    param([string]$SettingsPath, [string]$HookName, [string]$Pattern)
+    try {
+        $j = Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($null -eq $j -or $null -eq $j.hooks) { return $false }
+        $arr = $j.hooks.$HookName
+        if ($null -eq $arr) { return $false }
+        foreach ($entry in @($arr)) {
+            if ($null -eq $entry) { continue }
+            foreach ($h in @($entry.hooks)) {
+                if ($null -ne $h -and "$($h.command)" -match $Pattern) { return $true }
+            }
+        }
+    } catch { return $false }
+    return $false
+}
+
 # ── Step 4b: Hook 注册（CodeBuddy settings.json，幂等）────
 # 门禁 Hook 仅"文件存在"不会被 IDE 触发：CodeBuddy 还须在 .codebuddy/settings.json 的
 # hooks.PreToolUse 中注册命令。缺此注册 = Hook 静默失效（GAP-4 诊断三）。
@@ -500,9 +528,10 @@ if ($HookTarget) {
 if ($DetectedIde -eq "codebuddy" -and $HookTarget) {
     $settingsPath = ".codebuddy\settings.json"
     $hookCmd = "node .codebuddy/hooks/gate-check.mjs"
+    # ★ REQ-015：只看 PreToolUse 里的 command 字段（原为文件全文 -match ⇒ D-2 误判）
     $alreadyRegistered = $false
     if (Test-Path $settingsPath) {
-        if ((Get-Content $settingsPath -Raw -Encoding UTF8) -match 'gate-check\.mjs') {
+        if (Test-HookCommand -SettingsPath $settingsPath -HookName 'PreToolUse' -Pattern 'gate-check\.mjs') {
             $alreadyRegistered = $true
         }
     }
@@ -583,7 +612,8 @@ if ($DetectedIde -eq "codebuddy" -and $HookTarget -and (Test-Path $settingsPath)
         if ($null -eq $json.hooks.Stop) {
             $json.hooks | Add-Member -NotePropertyName Stop -NotePropertyValue @() -Force
         }
-        if ($raw -notmatch [regex]::Escape('team-wait-guard.mjs --dispatch')) {
+        # ★ REQ-015：同型缺陷加固 —— 原为文件全文 -notmatch，Stop 段提及 --dispatch 即误判
+        if (-not (Test-HookCommand -SettingsPath $settingsPath -HookName 'PreToolUse' -Pattern 'team-wait-guard\.mjs\s+--dispatch')) {
             $preEntry = [PSCustomObject]@{
                 matcher = ".*"
                 hooks   = @([PSCustomObject]@{ type = "command"; command = $wgPre; timeout = 10 })
@@ -594,7 +624,7 @@ if ($DetectedIde -eq "codebuddy" -and $HookTarget -and (Test-Path $settingsPath)
         } else {
             Write-Host "  ✅ team-wait-guard already registered (PreToolUse)"
         }
-        if ($raw -notmatch [regex]::Escape('team-wait-guard.mjs --stop-guard')) {
+        if (-not (Test-HookCommand -SettingsPath $settingsPath -HookName 'Stop' -Pattern 'team-wait-guard\.mjs\s+--stop-guard')) {
             $stopEntry = [PSCustomObject]@{ type = "command"; command = $wgStop; timeout = 10 }
             $stopArr = @($json.hooks.Stop)
             if ($stopArr.Count -eq 0) {
@@ -789,6 +819,18 @@ if (-not (Test-Path $gateTestScript)) {
 } else {
     node $gateTestScript
     if ($LASTEXITCODE -ne 0) { Write-Host "⚠ Self-test issues found. Review output above." }
+}
+
+# ★ REQ-015：装后自检 —— 注册是「文件 + settings 双条件」，只验文件不验注册 = F3 同型静默半装。
+#   不自回滚：保留已写文件 + 打印手工修法 + 硬失败，避免二次破坏。
+if ($DetectedIde -eq "codebuddy" -and $HookTarget -and (Test-Path '.codebuddy\settings.json')) {
+    if (-not (Test-HookCommand -SettingsPath '.codebuddy\settings.json' -HookName 'PreToolUse' -Pattern 'gate-check\.mjs')) {
+        Write-Host "  ❌ gate hook is NOT registered in .codebuddy\settings.json (hooks.PreToolUse)"
+        Write-Host '     Manual fix: {"matcher":".*","hooks":[{"type":"command","command":"node .codebuddy/hooks/gate-check.mjs","timeout":15}]}'
+        Write-Host "     Refusing to report success (silent gate failure)."
+        exit 1
+    }
+    Write-Host "  ✅ gate hook registration verified (PreToolUse)"
 }
 
 Write-Host ""
