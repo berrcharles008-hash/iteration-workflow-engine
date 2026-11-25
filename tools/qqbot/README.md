@@ -221,7 +221,9 @@ node qqbot-service.js --no-stall                     # 临时关闭本模块
 curl http://127.0.0.1:18765/health                   # 读数：.stall.{file,convs,active,pending,sent}
 ```
 
-配置：`daemon.config.json → stallWatcher`（`enabled` / `silenceSec` / `pendingStallSec` / `teamSilenceSec` / `escalateSec` / `longTermSec` / `workspaceHash`（钉死工作区）/ `logRoot`）。设计要点：增量 offset 读 + 单 tick 上限（不整读 188MB）、每 tick 续写心跳（循环假死 ⇒ watchdog 180s 告警）、平台信号不续热团队窗（否则主会话的 EMFILE 会把早已待命的成员误判成静默）。
+配置：`daemon.config.json → stallWatcher`（`enabled` / `silenceSec` / `pendingStallSec` / `teamSilenceSec` / `escalateSec` / `longTermSec` / `workspaceHash`（日志归属，见下）/ `restoreMaxAgeSec` / `maxAwaitSec` / `logRoot`）。
+
+**★ 日志归属隔离（2026-11-25 迭代 2026-11-25-001）**：`workspaceHash` 语义 = **日志文件名片段**，留空则自动取项目根目录名（`path.basename(PROJ)`，与 IDE 日志名 `<工作区目录名>__<hash32>.log` 天然对齐）。匹配不到本项目日志时 stall **待命**，绝不回落「全库 mtime 最新」—— 旧行为会让本实例读取**别的工作区**日志（实测 11-25 09:03 静配 bot 读专病中心日志，把 16 天前的僵尸会话判成"静默 2 万分钟"并连发 5 张假卡）。待命态可从 `GET /health` 的 `stall.workspaceMatch` / `stall.noLog` 观察。另两个新键：`restoreMaxAgeSec`（默认 1800s，重启恢复会话的 TTL，超期丢弃）、`maxAwaitSec`（默认 14400s，派发超期不再告警）。设计要点：增量 offset 读 + 单 tick 上限（不整读 188MB）、每 tick 续写心跳（循环假死 ⇒ watchdog 180s 告警）、平台信号不续热团队窗（否则主会话的 EMFILE 会把早已待命的成员误判成静默）。
 
 ### 档 3（2026-09-17）：通知「可回复」
 

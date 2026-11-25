@@ -59,7 +59,13 @@ const DEF = {
   enabled: true,
   tickMs: 5000,             // 与既有 watch 同频
   logRoot: '',              // 空 = %LOCALAPPDATA%/CodeBuddyExtension/Logs/CodeBuddyIDE
-  workspaceHash: '',        // 可选：钉死某个 <工作区名>__<hash>.log 的 hash 片段；空 = 全局 mtime 最新
+  // ★2026-11-25（迭代 2026-11-25-001 · F1 跨项目串读修复）：原语义「空 = 全局 mtime 最新」会在
+  //   本工作区当天无日志时附着到**其它工作区**的日志 —— 实测 11-25 09:03 静配实例读专病中心日志，
+  //   把 16 天前的僵尸会话判成「静默 2 万分钟」并连发 5 张假卡。
+  //   现语义 = 日志**文件名片段**；空 = 自动取 `path.basename(PROJ)`（日志名格式
+  //   `<工作区目录名>__<hash32>.log`，与项目根目录名天然一致）；
+  //   匹配不到 ⇒ stall 待命（**不回落全库**，见 resolveLog）。
+  workspaceHash: '',
   reattachSec: 60,          // 重新定位最新日志的周期（按天滚动 / 换文件）
   attachTailBytes: 8 * 1024 * 1024,  // 首次附着时回读的尾部窗口（拿团队映射等上下文，防漏且不整读）
   readChunkBytes: 4 * 1024 * 1024,   // 单 tick 读上限（评审③ D6）
@@ -86,6 +92,14 @@ const DEF = {
   //   ECHO_RE 与 RECORD_RE 都拦不住。⇒ 只有 `读取时刻 - 信号时间戳 ≤ freshReadSec` 才告警。
   freshReadSec: 60,
   skipWhenOpenAsk: true,    // 有未决 ask/decision ⇒ 抑制沉默卡（RESUME-1·D）
+  // ★F2（2026-11-25）：restore 会话 TTL —— 超过即丢弃。取值依据 = teamActiveSec(600) /
+  //   teamKeepSec(1800) / turnKeepSec(1800)：会话最后活动超 1800s 后，任何一档门控都不可能
+  //   再触发告警（团队窗早已过期），留着只会被别的团队的新事件「续热」成误报。
+  //   0 = 不限制（回归旧行为，仅排障用）。
+  restoreMaxAgeSec: 1800,
+  // ★F2b（2026-11-25）：派发超期不再追（默认 4h）—— 阶梯 3 卡 + 长期档 4 次已在 2.5h 内报满，
+  //   之后继续报只是噪声；且能独立拦住「awaiting 被历史 mailbox 标记后长期驻留」这一类误报。
+  maxAwaitSec: 14400,
   stateFile: '',            // 空 = .codebuddy/temp/stall-watch-state.json
   teamOutDir: '',           // 空 = .codebuddy/temp/team-out（成员完成 oracle）
   doneCacheSec: 30,         // 完成态缓存周期
@@ -294,6 +308,10 @@ function createStallWatcher(o) {
   const hbWrite = typeof opt.hbWrite === 'function' ? opt.hbWrite : null;
   const nowFn = typeof opt.now === 'function' ? opt.now : function () { return Date.now(); };
 
+  // ★F1（2026-11-25）：日志归属匹配串 —— 显式配置优先，否则自动取项目根目录名。
+  //   与 IDE 日志文件名 `<工作区目录名>__<hash32>.log` 天然对齐，两项目零配置即隔离。
+  const wsMatch = String(cfg.workspaceHash || path.basename(PROJ)).trim();
+
   // 环境变量逃生口（隔离实例验证用，见 memory: qqbot 隔离实例端到端验证方法）
   const stateFile = cfg.stateFile || process.env.STALL_STATE_FILE || path.join(PROJ, '.codebuddy', 'temp', 'stall-watch-state.json');
   const S = {
@@ -309,7 +327,7 @@ function createStallWatcher(o) {
     sentCount: 0,
     startedAt: nowFn(),
   };
-  const R = { file: '', offset: 0, dec: new StringDecoder('utf8'), partial: '', size: 0, nextResolveAt: 0, scanned: 0 };
+  const R = { file: '', offset: 0, dec: new StringDecoder('utf8'), partial: '', size: 0, nextResolveAt: 0, scanned: 0, noLogWarnAt: 0 };
   let lastTs = 0;   // 最近一条**带时间戳**记录的时间（供续行继承）
   /** 回填窗口内的历史行（只建映射，不产告警）；replay 模式 startedAt=0 ⇒ 恒 false */
   const isHistorical = (at) => S.startedAt > 0 && at < S.startedAt - Math.max(0, Number(cfg.backfillQuietSec) || 90) * 1000;
@@ -371,10 +389,20 @@ function createStallWatcher(o) {
       const raw = fs.readFileSync(stateFile, 'utf8').replace(/^\uFEFF/, '');
       const body = JSON.parse(raw);
       if (!body || body.v !== 1) return;
-      for (const [k, v] of body.convs || []) S.convs.set(k, { member: v.member, team: v.team, lastSeenAt: v.lastSeenAt, state: v.state });
+      // ★F2（2026-11-25）：会话 TTL。此前无限制 ⇒ 4 周前的 124 个会话重启即复活，被别的团队
+      //   事件续热后统一判「静默 N 分钟」（11-25 09:03 五张假卡的直接来源）。
+      const ttl = Math.max(0, Number(cfg.restoreMaxAgeSec) || 0) * 1000;
+      const nowMs = nowFn();
+      let dropped = 0;
+      for (const [k, v] of body.convs || []) {
+        if (ttl && (!v.lastSeenAt || nowMs - v.lastSeenAt > ttl)) { dropped++; continue; }
+        S.convs.set(k, { member: v.member, team: v.team, lastSeenAt: v.lastSeenAt, state: v.state });
+      }
       for (const [k, v] of body.alerts || []) S.alerts.set(k, v);
-      S.teamLastActiveAt = Number(body.teamLastActiveAt) || 0;
-      log('[STALL] 状态恢复：会话 ' + S.convs.size + ' / 告警 ' + S.alerts.size);
+      // 团队窗同样过 TTL：陈旧值留着只会让门控「看起来有状态」，与清空的会话不一致。
+      const tla = Number(body.teamLastActiveAt) || 0;
+      S.teamLastActiveAt = (ttl && tla && nowMs - tla > ttl) ? 0 : tla;
+      log('[STALL] 状态恢复：会话 ' + S.convs.size + (dropped ? '（TTL 丢弃 ' + dropped + '）' : '') + ' / 告警 ' + S.alerts.size);
     } catch (e) { /* 首次运行或损坏 ⇒ 忽略 */ }
   }
 
@@ -399,14 +427,23 @@ function createStallWatcher(o) {
       try { files = fs.readdirSync(path.join(logRoot(), d.name)); } catch (e) { continue; }
       for (const f of files) {
         if (!/\.log$/i.test(f)) continue;
-        if (cfg.workspaceHash && f.indexOf(cfg.workspaceHash) < 0) continue;
+        if (wsMatch && f.indexOf(wsMatch) < 0) continue;      // ★F1：只认本项目工作区日志
         const fp = path.join(logRoot(), d.name, f);
         let st;
         try { st = fs.statSync(fp); } catch (e) { continue; }
         if (!best || st.mtimeMs > best.mtimeMs) best = { file: fp, mtimeMs: st.mtimeMs, size: st.size };
       }
     }
-    return best ? best.file : (R.file || null);
+    if (!best) {
+      // ★F1：匹配不到本项目日志 ⇒ stall 待命。**绝不回落「全库 mtime 最新」** —— 那正是
+      //   2026-11-25 跨项目误报的根因（静配实例读专病中心日志）。留痕节流 10min，避免刷日志。
+      if (!R.noLogWarnAt || now - R.noLogWarnAt > 600000) {
+        R.noLogWarnAt = now;
+        log('[STALL] 未找到本项目日志（匹配串 ' + wsMatch + '）⇒ stall 待命，不判定任何卡');
+      }
+      return R.file || null;                     // 手上有旧文件则继续读（防抖），没有则空转
+    }
+    return best.file;
   }
   /** 附着到文件：从尾部窗口开始（拿团队映射，不整读） */
   function attach(file, now) {
@@ -521,8 +558,10 @@ function createStallWatcher(o) {
           S.teamLastActiveAt = at;
           for (const [, c] of S.convs) {
             if (c.isLead) continue;                       // ★ lead 既不是「被派发方」也不是成员（否则含 lead 会自锁）
-            if (c.member && c.member === ev.to) { c.awaiting = true; c.awaitingSince = at; }
-            else if (c.member && c.member === ev.from) { c.awaiting = false; c.awaitingSince = 0; }
+            // ★F3（2026-11-25）：必须同团队才算归因。此前只比成员名 ⇒ 别的团队发给 `team-lead`
+            //   的邮件会把本项目所有同名成员一起标成「已派发未回音」（11-25 五张卡的 awaiting 来源）。
+            if (c.member && c.member === ev.to && c.team === ev.team) { c.awaiting = true; c.awaitingSince = at; }
+            else if (c.member && c.member === ev.from && c.team === ev.team) { c.awaiting = false; c.awaitingSince = 0; }
           }
           break;
         case 'member-active':
@@ -684,6 +723,9 @@ function createStallWatcher(o) {
       for (const [conv, c] of S.convs) {
         if (c.state !== 'active' || !c.lastSeenAt || c.isLead) continue;   // lead 归 ③b 整队静默档，不按成员判
         if (!c.awaiting) continue;                      // ★ 正常待命（无 outstanding 派发）⇒ 不判卡死
+        // ★F2b（2026-11-25）：派发超期不再追（默 4h）。阶梯 3 卡 + 长期档已在 2.5h 内报满；
+        //   同时兜住「awaiting 被历史 mailbox 标记后长期驻留」⇒ 不会把陈年会话当新卡发。
+        if (cfg.maxAwaitSec && c.awaitingSince && now - c.awaitingSince > ms(cfg.maxAwaitSec)) continue;
         if (memberDone(c.member, now)) continue;        // 已交付（team-out 有 COMPLETE）⇒ 不判卡死
         const sil = now - c.lastSeenAt;
         if (sil >= ms(cfg.silenceSec)) {
@@ -875,6 +917,10 @@ function createStallWatcher(o) {
   function status() {
     return {
       file: R.file ? path.basename(R.file) : '',
+      // ★F1（2026-11-25）：日志归属可见性 —— noLog=true 表示「本项目自己的 IDE 日志没找到，
+      //   stall 检测处于待命态」（漏报的唯一可见通道，排障先看这两个字段）。
+      workspaceMatch: wsMatch,
+      noLog: !R.file,
       offsetKB: Math.round(R.offset / 1024),
       convs: S.convs.size,
       active: Array.from(S.convs.values()).filter((c) => c.state === 'active').length,
@@ -1231,6 +1277,76 @@ function runSelftest() {
     w5.ingestLine(mkPauseAt(T), T);
     const a5 = w5.decide(w5.evaluate(T), T).filter((a) => a.kind === 'steplimit');
     ok(a5.length === 1 && !a5[0].member, '17i: 陈旧心跳不回填归因（不做错误成员归属）');
+  }
+
+  // ── 场景 18/19：F1 日志归属隔离（2026-11-25 迭代 2026-11-25-001）──
+  //   背景：11-25 09:03 静配实例附着到**专病中心**日志（全库 mtime 最新）⇒ 读别人的团队事件
+  //   续热自己的僵尸会话 ⇒ 5 张假卡。判据：只接受文件名含本项目目录名的日志；无匹配 ⇒ 待命。
+  {
+    T = T0;
+    const lr = path.join(os.tmpdir(), 'stall-watcher-logroot-' + process.pid);
+    try { fs.rmSync(lr, { recursive: true, force: true }); } catch (e) { /* 忽略 */ }
+    const dayDir = path.join(lr, '2026-10-14');
+    fs.mkdirSync(dayDir, { recursive: true });
+    const ownName = path.basename(PROJ) + '__aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.log';
+    const otherName = 'other-workspace__bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.log';
+    const sf = path.join(os.tmpdir(), 'stall-nowrite-' + process.pid + '.json');
+    fs.writeFileSync(path.join(dayDir, ownName), '[2026/10/14 08:00:00.000] [Info] [keepalive] tick\n', 'utf8');
+    fs.writeFileSync(path.join(dayDir, otherName), '[2026/10/14 08:00:00.000] [Info] [keepalive] tick\n', 'utf8');
+    fs.utimesSync(path.join(dayDir, ownName), new Date(T0), new Date(T0));
+    fs.utimesSync(path.join(dayDir, otherName), new Date(T0 + 60000), new Date(T0 + 60000));   // 外部日志更新
+    const w1 = createStallWatcher({ now: () => T, log: () => {}, hasOpenAsk: () => false, cfg: { logRoot: lr, stateFile: sf } });
+    w1.tick();
+    ok(w1.status().file === ownName, '18: 只附着本项目日志（实际 ' + w1.status().file + '）');
+    ok(w1.status().workspaceMatch === path.basename(PROJ), '18b: workspaceMatch 默认取项目目录名');
+    ok(w1.status().noLog === false, '18c: 命中 ⇒ noLog=false');
+    try { fs.unlinkSync(path.join(dayDir, ownName)); } catch (e) { /* 忽略 */ }
+    const w2 = createStallWatcher({ now: () => T, log: () => {}, hasOpenAsk: () => false, cfg: { logRoot: lr, stateFile: sf } });
+    w2.tick();
+    ok(w2.status().noLog === true && w2.evaluate(T).length === 0, '19: 无本项目日志 ⇒ 待命（不串读、不告警）');
+    try { fs.rmSync(lr, { recursive: true, force: true }); fs.unlinkSync(sf); } catch (e) { /* 忽略 */ }
+  }
+
+  // ── 场景 20：F2 restore TTL（会话/团队窗超期丢弃）──
+  //   背景：0010 state 里 124 个 10-30~11-09 的会话，重启原样复活 ⇒ 静默 2 万分钟。
+  {
+    T = T0;
+    const sf = path.join(os.tmpdir(), 'stall-state-' + process.pid + '.json');
+    const FRESH = '11111111111111111111111111111111';
+    const ZOMBIE = '22222222222222222222222222222222';
+    const body = {
+      v: 1, savedAt: T,
+      convs: [
+        [FRESH, { member: 'fresh', team: 'tf', lastSeenAt: T - 5 * 60000, state: 'active' }],
+        [ZOMBIE, { member: 'zombie', team: 'tz', lastSeenAt: T - 40 * 60000, state: 'active' }],
+      ],
+      alerts: [], teamLastActiveAt: T - 40 * 60000,
+    };
+    fs.writeFileSync(sf, JSON.stringify(body), 'utf8');
+    const w1 = createStallWatcher({ now: () => T, log: () => {}, hasOpenAsk: () => false, cfg: { stateFile: sf } });
+    w1.restore();
+    ok(w1._state.convs.size === 1 && w1._state.convs.has(FRESH), '20: restore TTL 丢弃 40min 前会话（实际 ' + w1._state.convs.size + '）');
+    ok(w1._state.teamLastActiveAt === 0, '20b: 陈旧 teamLastActiveAt 归零');
+    const w2 = createStallWatcher({ now: () => T, log: () => {}, hasOpenAsk: () => false, cfg: { stateFile: sf, restoreMaxAgeSec: 0 } });
+    w2.restore();
+    ok(w2._state.convs.size === 2, '20c: restoreMaxAgeSec=0 ⇒ 回旧行为（可回滚）');
+    try { fs.unlinkSync(sf); } catch (e) { /* 忽略 */ }
+  }
+
+  // ── 场景 21：F3 mailbox 团队校验（同名成员跨团队不得串扰）──
+  //   背景：两项目主会话成员都叫 team-lead ⇒ 别的团队派发把本项目同名成员全标 awaiting。
+  {
+    T = T0;
+    const CA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const CB = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    const w = createStallWatcher({ now: () => T, log: () => {}, hasOpenAsk: () => false, cfg: { stateFile: '' } });
+    w.ingestLine('[AgentSessionManager] startTeamMemberAgent START: memberId=team-lead@team-a, parentConversationId=' + CA + ', conversationId=' + CA + ', teamName=team-a', T);
+    w.ingestLine('[AgentSessionManager] startTeamMemberAgent START: memberId=team-lead@team-b, parentConversationId=' + CB + ', conversationId=' + CB + ', teamName=team-b', T);
+    w.ingestLine('[TeamMailbox]  Message sent from "boss" to "team-lead" in team "team-a"', T);
+    ok(w._state.convs.get(CA).awaiting === true, '21: 同团队派发 ⇒ 标 awaiting');
+    ok(w._state.convs.get(CB).awaiting === false, '21b: 跨团队同名成员不误标');
+    w.ingestLine('[TeamMailbox]  Message sent from "team-lead" to "boss" in team "team-b"', T);
+    ok(w._state.convs.get(CB).awaiting === false && w._state.convs.get(CA).awaiting === true, '21c: 别的团队回信不影响本团队状态');
   }
 
   console.log('SELFTEST ' + pass + '/' + (pass + fails.length) + (fails.length ? ' FAIL: ' + fails.join(' | ') : ' OK'));
